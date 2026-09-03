@@ -167,6 +167,39 @@ Accuracy verlangt zusätzlich die exakte Übereinstimmung der Argumente und verg
 keinen Argument-Punkt für ein falsches Tool. Die Baseline bewertet weder Tool Results,
 Qualität der finalen Antwort, Latenz, Kosten noch LLM-as-a-Judge-Qualität.
 
+## Quality Strategy
+
+[ADR-005](../decisions/ADR-005-testing-and-evaluation-strategy.de.md) trennt
+Qualitätsmechanismen nach der Art der Aussage, die sie stützen. Deterministische
+Garantien gehören in automatisierte Tests. Modellabhängige Urteile werden mit
+versionierten Datasets, strukturierter Ground Truth und expliziten Metriken gemessen.
+Smoke Tests prüfen grundlegende Live-Integration, während Traces und operative Metriken
+der Observability dienen und weder Tests noch Evals ersetzen.
+
+```mermaid
+flowchart TB
+    Behavior["Verhalten oder Qualitätsaussage"] --> Deterministic{"Deterministisch<br/>garantierbar?"}
+    Deterministic -->|"ja"| Tests["Unit Tests<br/>schnelles Basis-Gate, Fakes/Stubs"]
+    Tests --> Integration["Explizite Integration Tests<br/>konkrete Adapter"]
+    Integration --> Smoke["Explizite Smoke Tests<br/>echte Services bei Bedarf"]
+    Deterministic -->|"nein: Modellurteil"| Evals["Versionierte AI-/Agent-Evals<br/>strukturierte Fälle + Metriken"]
+    Evals --> Current["Aktuelle Baseline<br/>Tool Selection Accuracy<br/>Tool Argument Accuracy"]
+    Evals -.-> Future["Dimensionen erst mit realen Capabilities ergänzen<br/>Judge oder Human Review nur bei Bedarf"]
+
+    classDef test fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef eval fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef live fill:#fff7ed,stroke:#ea580c,color:#431407
+    class Behavior,Deterministic,Tests test
+    class Evals,Current,Future eval
+    class Integration,Smoke live
+```
+
+Das aktuelle Repository implementiert deterministische Unit-Test-Abdeckung, explizit
+dokumentierte lokale Ollama-Smoke-Pfade und den fokussierten Tool-Selection-Eval für die
+erste Entscheidung. Es implementiert weder ein externes Eval-Framework noch
+LLM-as-a-Judge, eine Observability-Plattform oder neue CI/CD-Infrastruktur. Generierte
+Eval-Reports bleiben standardmäßig unversioniert.
+
 ## Verantwortlichkeiten der Packages
 
 ### `domain`
@@ -206,7 +239,8 @@ Die aktuelle Implementierung definiert `LLMClient`, die Auswahl über semantisch
 `ModelProfile`, kleine Request- und Response-Modelle sowie `TroubleshootingAgent`. Der
 Agent enthält die begrenzte Orchestrierung und den festen Zwei-Tool-Dispatch. Er
 importiert weder das OpenAI-SDK noch benennt er einen konkreten Provider oder ein
-konkretes Modell.
+konkretes Modell. ADR-004 akzeptiert einen begrenzten sequenziellen Tool Loop als
+nächste Orchestrierungsstufe; dieser Loop ist jedoch noch nicht implementiert.
 
 Spätere Verantwortlichkeiten können Folgendes umfassen:
 
@@ -253,6 +287,46 @@ Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert werden.
 ## Weiterentwicklung
 
 Die Architektur sollte nur dann weiterentwickelt werden, wenn implementierte Fähigkeiten dies erfordern.
+
+### Akzeptierter nächster Schritt: Begrenzter Tool Loop
+
+[ADR-004](../decisions/ADR-004-agent-orchestration-strategy.de.md) akzeptiert einen
+expliziten, begrenzten und sequenziellen Single-Agent Tool Loop als nächste
+Orchestrierungsstrategie. Dies ist eine akzeptierte Richtung und nicht die aktuelle
+Implementierung: Das Produktionsverhalten erlaubt weiterhin höchstens einen Tool Call
+pro Run.
+
+```mermaid
+flowchart TD
+    Context["Benutzeranfrage + Observations dieses Runs"] --> LLM["LLM-Entscheidung<br/>LLMClient + semantisches Model Profile"]
+    LLM --> Choice{"Finale Antwort oder ein Tool Call?"}
+    Choice -->|"finale Antwort"| Done["Erfolgreich terminieren"]
+    Choice -->|"ein Tool Call"| Validate["Deterministische Namens- und Argumentvalidierung"]
+    Choice -->|"ungültige oder mehrere Calls"| Invalid["Mit deterministischem Fehler beenden"]
+    Validate -->|"ungültig"| Invalid
+    Validate -->|"gültig"| Budget{"Tool-Call-Budget verbleibt?"}
+    Budget -->|"nein"| Limit["Nicht ausführen<br/>mit Limitfehler beenden"]
+    Budget -->|"ja"| Execute["Deterministischer Dispatch und sequenzielle Ausführung"]
+    Execute --> Observe["Strukturiertes Result als Observation anhängen"]
+    Observe --> Context
+
+    classDef llm fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef deterministic fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef terminal fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class LLM,Choice llm
+    class Context,Validate,Budget,Execute,Observe deterministic
+    class Done terminal
+    class Invalid,Limit failure
+```
+
+Das Modell entscheidet, ob weitere Informationen benötigt werden. Python-Code bleibt
+für Validierung, Dispatch, Ausführung, das endliche positive Tool-Call-Limit und alle
+Abbruchbedingungen verantwortlich. Calls werden sequenziell mit höchstens einem Call
+pro Iteration ausgeführt. Die erste Version besitzt weder parallele Ausführung,
+Planner/Executor, ein Multi-Agent-System, LangGraph noch MCP als Voraussetzung. Die
+bestehende Eval-Baseline für die erste Entscheidung bleibt als Regression-Vergleich
+erhalten.
 
 Mögliche spätere Stufen sind:
 

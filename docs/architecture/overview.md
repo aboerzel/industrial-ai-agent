@@ -165,6 +165,38 @@ Accuracy additionally requires exact argument equality and therefore gives no ar
 credit to a wrong tool. The baseline does not evaluate tool results, final-answer
 quality, latency, cost, or LLM-as-a-Judge quality.
 
+## Quality Strategy
+
+[ADR-005](../decisions/ADR-005-testing-and-evaluation-strategy.md) separates quality
+mechanisms by the kind of claim they support. Deterministic guarantees belong in
+automated tests. Model-dependent judgment is measured with versioned datasets,
+structured ground truth, and explicit metrics. Smoke tests verify basic live
+integration, while traces and operational metrics serve observability rather than
+replacing tests or evals.
+
+```mermaid
+flowchart TB
+    Behavior["Behavior or quality claim"] --> Deterministic{"Deterministically<br/>guaranteeable?"}
+    Deterministic -->|"yes"| Tests["Unit tests<br/>fast base gate, fakes/stubs"]
+    Tests --> Integration["Explicit integration tests<br/>concrete adapters"]
+    Integration --> Smoke["Explicit smoke tests<br/>real services when needed"]
+    Deterministic -->|"no: model judgment"| Evals["Versioned AI / Agent evals<br/>structured cases + metrics"]
+    Evals --> Current["Current baseline<br/>Tool Selection Accuracy<br/>Tool Argument Accuracy"]
+    Evals -.-> Future["Add dimensions only with real capabilities<br/>Judge or human review only when needed"]
+
+    classDef test fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef eval fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef live fill:#fff7ed,stroke:#ea580c,color:#431407
+    class Behavior,Deterministic,Tests test
+    class Evals,Current,Future eval
+    class Integration,Smoke live
+```
+
+The current repository implements deterministic unit coverage, explicitly documented
+local Ollama smoke paths, and the focused first-decision tool-selection eval. It does
+not implement an external eval framework, LLM-as-a-Judge, an observability platform, or
+new CI/CD infrastructure. Generated eval reports remain unversioned by default.
+
 ## Package Responsibilities
 
 ### `domain`
@@ -202,7 +234,8 @@ Contains provider-independent LLM contracts and, later, agent orchestration logi
 The current implementation defines `LLMClient`, semantic `ModelProfile` selection,
 small request and response models, and `TroubleshootingAgent`. The agent contains the
 bounded orchestration and fixed two-tool dispatch. It does not import the OpenAI SDK or
-name a concrete provider or model.
+name a concrete provider or model. ADR-004 accepts a bounded sequential tool loop as the
+next orchestration stage, but that loop is not implemented yet.
 
 Later responsibilities may include:
 
@@ -248,6 +281,44 @@ directory unless deliberately curated.
 ## Evolution
 
 The architecture should evolve only when required by implemented capabilities.
+
+### Accepted Next Step: Bounded Tool Loop
+
+[ADR-004](../decisions/ADR-004-agent-orchestration-strategy.md) accepts an explicit,
+bounded, sequential single-agent tool loop as the next orchestration strategy. This is
+an accepted direction, not the current implementation: production behavior still
+permits at most one tool call per run.
+
+```mermaid
+flowchart TD
+    Context["User request + observations from this run"] --> LLM["LLM decision<br/>LLMClient + semantic Model Profile"]
+    LLM --> Choice{"Final answer or one tool call?"}
+    Choice -->|"final answer"| Done["Terminate successfully"]
+    Choice -->|"one tool call"| Validate["Deterministic name and argument validation"]
+    Choice -->|"invalid or multiple calls"| Invalid["Terminate with deterministic error"]
+    Validate -->|"invalid"| Invalid
+    Validate -->|"valid"| Budget{"Tool-call budget remains?"}
+    Budget -->|"no"| Limit["Do not execute<br/>terminate with limit failure"]
+    Budget -->|"yes"| Execute["Deterministic dispatch and sequential execution"]
+    Execute --> Observe["Append structured result as observation"]
+    Observe --> Context
+
+    classDef llm fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef deterministic fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef terminal fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class LLM,Choice llm
+    class Context,Validate,Budget,Execute,Observe deterministic
+    class Done terminal
+    class Invalid,Limit failure
+```
+
+The model decides whether more information is needed. Python code continues to own
+validation, dispatch, execution, the finite positive tool-call limit, and every
+termination condition. Calls are sequential, with at most one call per iteration. The
+first version has no parallel execution, Planner/Executor, multi-agent system,
+LangGraph, or MCP prerequisite. The existing first-decision eval baseline remains a
+regression comparison point.
 
 Possible later stages include:
 

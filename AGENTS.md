@@ -145,6 +145,28 @@ The LLM must never be treated as a trusted enforcement mechanism.
 
 ---
 
+## Troubleshooting Agent Orchestration
+
+The accepted next orchestration strategy is an explicit, bounded, sequential
+single-agent tool loop implemented in Python. Until that loop is implemented, keep the
+current single-tool-call behavior documented as the actual runtime state.
+
+For the bounded loop:
+
+* the LLM decides between one next tool call and a final answer using prior observations
+* deterministic code owns validation, dispatch, execution, limits, and termination
+* every run has a finite positive tool-call limit; a call requested after exhaustion is
+  not executed and terminates with an explicit deterministic limit failure
+* execute at most one tool call per iteration and do not add parallel execution,
+  Planner/Executor, multi-agent orchestration, or an agent framework without a new or
+  superseding architecture decision
+* preserve the provider-independent `LLMClient`, semantic Model Profiles, and the
+  existing first-decision eval baseline
+
+See `docs/decisions/ADR-004-agent-orchestration-strategy.md`.
+
+---
+
 ## LLM Provider and Model Independence
 
 Agents and use cases must depend on the provider-independent `LLMClient` port and
@@ -246,9 +268,26 @@ Evaluate retrieval separately from final answer quality.
 
 ## Evaluation
 
-Every meaningful agent capability should eventually have automated evaluation.
+Keep deterministic tests and AI / Agent evaluations as separate quality mechanisms.
 
-Prefer deterministic evaluation whenever possible.
+* Use deterministic automated tests for guarantees such as Domain invariants,
+  validation, dispatch, mappings, limits, termination, configuration, error handling,
+  and eval scoring. Unit tests must not require real LLM, network, database, or MCP
+  calls; substitute ports with fakes or stubs.
+* Use versioned datasets with stable case IDs, structured ground truth, and explicit
+  metrics for behavior that inherently depends on model judgment.
+* Do not replace normal software tests with LLM-based evaluation. Do not use
+  LLM-as-a-Judge when an objective deterministic check is possible.
+* Keep live integration and smoke tests explicitly identifiable and outside the normal
+  unit-test gate.
+* Before material changes to prompts, models, Model Profiles, tool schemas,
+  orchestration, retrieval, reranking, or context building, rerun the relevant existing
+  evals and compare them with the baseline.
+* Keep generated eval reports unversioned by default and record enough provenance to
+  interpret deliberately retained results without exposing secrets.
+
+Every meaningful model-dependent agent capability should eventually have automated
+evaluation when the corresponding behavior and metric exist.
 
 Possible metrics include:
 
@@ -266,6 +305,8 @@ Possible metrics include:
 * safety violations
 
 Do not judge quality only through manual chat testing.
+
+See `docs/decisions/ADR-005-testing-and-evaluation-strategy.md`.
 
 ---
 
@@ -603,6 +644,8 @@ The currently accepted architecture decisions include:
 ADR-001  Project foundation
 ADR-002  Provider- and model-independent LLM architecture
 ADR-003  Hexagonal Architecture
+ADR-004  Agent orchestration strategy
+ADR-005  Testing and evaluation strategy
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision
