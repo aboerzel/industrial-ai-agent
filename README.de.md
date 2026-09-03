@@ -15,16 +15,17 @@ Das Projekt beginnt mit einfachen, expliziten Python-Bausteinen und entwickelt s
 
 ## Aktueller Stand
 
-Der erste deterministische vertikale Slice ist implementiert: das Abrufen der
-Produktionshistorie über die agent-facing Capability
-`ProductHistoryCapability.get_product_history(product_id)`, gestützt durch ein
-In-Memory-Repository. Zusätzlich stehen ein provider-unabhängiger `LLMClient`-Port und
-ein OpenAI-compatible Infrastructure Adapter bereit. Die Modellwahl verwendet das
-konfigurierte semantische Profil `troubleshooting`. `ProductHistoryAgent` implementiert
-jetzt einen begrenzten Tool-Calling-Slice: Das Modell darf `get_product_history`
-auswählen, deterministischer Code validiert und führt genau einen Aufruf aus und das
-Modell formuliert die finale Antwort. Ein allgemeiner Agent- oder ReAct-Loop existiert
-nicht.
+Zwei deterministische Domain Capabilities sind implementiert: das Abrufen der
+Produktionshistorie über `ProductHistoryCapability.get_product_history(product_id)` und
+des aktuellen Maschinenstatus über
+`MachineStatusCapability.get_machine_status(station_id)`. Beide verwenden innere
+Repository-Ports mit deterministischen In-Memory-Adaptern. Zusätzlich stehen ein
+provider-unabhängiger `LLMClient`-Port und ein OpenAI-compatible Infrastructure Adapter
+bereit. Die Modellwahl verwendet das konfigurierte semantische Profil
+`troubleshooting`. `TroubleshootingAgent` bietet dem Modell genau die zwei bekannten
+Tools an, validiert und dispatcht höchstens einen ausgewählten Aufruf in
+deterministischem Code und lässt das Modell die finale Antwort formulieren. Ein
+allgemeiner Agent- oder ReAct-Loop existiert nicht.
 
 Es wurden noch kein LLM framework, MCP server, keine vector database und kein multi-agent framework eingeführt.
 
@@ -37,11 +38,12 @@ konfigurierte lokale Modell auf. Installiere und starte Ollama, stelle sicher, d
 ```powershell
 ollama pull qwen3.5:9b
 python scripts/smoke_test_ollama.py
-python scripts/smoke_test_product_history_agent.py
+python scripts/smoke_test_troubleshooting_agent.py
 ```
 
 Das erste Skript prüft die grundlegende LLM-Verbindung. Das zweite führt den
-vollständigen `get_product_history`-Tool-Calling-Slice für Produkt `P4711` aus.
+vollständigen Tool-Selection-Slice aus und prüft sowohl `get_product_history` für das
+Produkt `P4711` als auch `get_machine_status` für die Station `S12`.
 
 Die committed Modellkonfiguration liegt in `config/model_profiles.toml`. Das lokale
 Ollama-Profil benötigt keinen API Key. Authentifizierte Profile müssen Credential-Werte

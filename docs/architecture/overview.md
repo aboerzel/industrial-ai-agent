@@ -2,28 +2,26 @@
 
 ## Current Architecture
 
-The project currently implements product-history retrieval, a provider-independent LLM
-integration boundary, and one bounded tool-calling slice. There is no general agent or
-ReAct loop.
+The project currently implements product-history retrieval, current machine-status
+retrieval, a provider-independent LLM integration boundary, and one bounded
+two-tool-selection slice. There is no general agent or ReAct loop.
 
 The implemented request flow is:
 
 ```text
-User Request
-    |
-    v
-ProductHistoryCapability.get_product_history(product_id)
-    |
-    v
-ProductHistoryRepository
-    |
-    v
-InMemoryProductHistoryRepository
+ProductHistoryCapability                 MachineStatusCapability
+        |                                         |
+        v                                         v
+ProductHistoryRepository                 MachineStatusRepository
+        |                                         |
+        v                                         v
+InMemoryProductHistoryRepository         InMemoryMachineStatusRepository
 ```
 
-The capability converts the string input into a `ProductId`, loads a `ProductHistory`
-through the domain-owned repository abstraction, and returns a structured
-`ProductHistoryResult`. The deterministic demo data includes product `P4711`.
+Each capability converts its string identifier into the appropriate Domain Value
+Object, loads through a domain-owned repository abstraction, and returns a structured
+result. The deterministic demo data includes product `P4711` and stations `S04` and
+`S12`.
 
 Distributed services and AI frameworks are deliberately not part of this slice.
 
@@ -55,9 +53,9 @@ The implemented tool-calling flow is:
 Natural-language request
     |
     v
-ProductHistoryAgent
+TroubleshootingAgent
     |
-    | LLMRequest + get_product_history definition
+    | LLMRequest + exactly two tool definitions
     v
 LLMClient (troubleshooting profile)
     |
@@ -66,7 +64,8 @@ LLMClient (troubleshooting profile)
     +-- one validated tool call                           |
             |                                             |
             v                                             |
-    ProductHistoryCapability                             |
+    fixed dispatch to ProductHistoryCapability           |
+    or MachineStatusCapability                           |
             |                                             |
             | structured tool result                      |
             v                                             |
@@ -78,9 +77,11 @@ LLMClient (troubleshooting profile)
                             Final answer
 ```
 
-The LLM chooses whether to request the tool and formulates the answer. Deterministic
-Python code enforces the single known tool name, validates `product_id`, rejects more
-than one tool call, dispatches to `ProductHistoryCapability`, and serializes its
+The LLM chooses whether to request `get_product_history`, request
+`get_machine_status`, or answer directly, and it formulates the final answer.
+Deterministic Python code validates the selected name against those two known tools,
+validates the tool-specific `product_id` or `station_id`, rejects more than one tool
+call, uses a fixed dispatch to the corresponding capability, and serializes its
 structured result. After one tool call, no tools are offered to the final LLM request;
 a further returned tool call is rejected rather than starting a loop.
 
@@ -90,8 +91,9 @@ a further returned tool call is rejected rather than starting a loop.
 
 Contains industrial domain models and rules.
 
-The current slice defines `ProductId`, `StationId`, `ProductionStep`,
-`ProductionStepStatus`, `ProductHistory`, and the `ProductHistoryRepository` protocol.
+The current slices define `ProductId`, the shared `StationId`, `ProductionStep`,
+`ProductionStepStatus`, `ProductHistory`, `MachineState`, and `MachineStatus`. The
+domain-owned ports are `ProductHistoryRepository` and `MachineStatusRepository`.
 
 Must remain independent from:
 
@@ -107,16 +109,19 @@ Contains agent-facing capabilities.
 
 Tools should expose meaningful domain operations rather than low-level implementation details.
 
-The current capability is `ProductHistoryCapability.get_product_history(product_id)`.
-It returns a Pydantic `ProductHistoryResult`, including a structured not-found result.
+The current capabilities are
+`ProductHistoryCapability.get_product_history(product_id)` and
+`MachineStatusCapability.get_machine_status(station_id)`. They return Pydantic
+`ProductHistoryResult` and `MachineStatusResult` models, including structured not-found
+results.
 
 ### `agent`
 
 Contains provider-independent LLM contracts and, later, agent orchestration logic.
 
 The current implementation defines `LLMClient`, semantic `ModelProfile` selection,
-small request and response models, and `ProductHistoryAgent`. The agent contains the
-bounded orchestration and fixed one-tool dispatch. It does not import the OpenAI SDK or
+small request and response models, and `TroubleshootingAgent`. The agent contains the
+bounded orchestration and fixed two-tool dispatch. It does not import the OpenAI SDK or
 name a concrete provider or model.
 
 Later responsibilities may include:
@@ -132,9 +137,10 @@ Later responsibilities may include:
 
 Contains technical integrations and external implementations.
 
-The current implementations are `InMemoryProductHistoryRepository`, which provides a
-small deterministic demo data set, and `OpenAICompatibleLLMClient`, which translates
-the provider-independent LLM contract to an OpenAI-compatible Chat Completions API.
+The current implementations are `InMemoryProductHistoryRepository` and
+`InMemoryMachineStatusRepository`, which provide small deterministic demo data sets,
+and `OpenAICompatibleLLMClient`, which translates the provider-independent LLM contract
+to an OpenAI-compatible Chat Completions API.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores

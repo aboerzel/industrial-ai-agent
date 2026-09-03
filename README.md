@@ -15,14 +15,15 @@ The project starts with simple, explicit Python building blocks and evolves incr
 
 ## Current Stage
 
-The first deterministic vertical slice is implemented: product history lookup through
-the agent-facing `ProductHistoryCapability.get_product_history(product_id)` capability,
-backed by an in-memory repository. A provider-independent `LLMClient` port and one
-OpenAI-compatible infrastructure adapter are also available. Model selection uses the
-configured semantic profile `troubleshooting`. `ProductHistoryAgent` now implements a
-bounded tool-calling slice: the model may select `get_product_history`, deterministic
-code validates and executes one call, and the model formulates the final answer. There
-is no general agent or ReAct loop.
+Two deterministic domain capabilities are implemented: product history lookup through
+`ProductHistoryCapability.get_product_history(product_id)` and current machine status
+through `MachineStatusCapability.get_machine_status(station_id)`. Both use inner
+repository ports with deterministic in-memory adapters. A provider-independent
+`LLMClient` port and one OpenAI-compatible infrastructure adapter are also available.
+Model selection uses the configured semantic profile `troubleshooting`.
+`TroubleshootingAgent` offers exactly the two known tools to the model, validates and
+dispatches at most one selected call in deterministic code, and asks the model to
+formulate the final answer. There is no general agent or ReAct loop.
 
 No LLM framework, MCP server, vector database, or multi-agent framework is introduced yet.
 
@@ -34,11 +35,12 @@ local model. Install and start Ollama, make sure `qwen3.5:9b` is available, and 
 ```powershell
 ollama pull qwen3.5:9b
 python scripts/smoke_test_ollama.py
-python scripts/smoke_test_product_history_agent.py
+python scripts/smoke_test_troubleshooting_agent.py
 ```
 
 The first script verifies basic LLM connectivity. The second runs the complete
-`get_product_history` tool-calling slice for product `P4711`.
+tool-selection slice and verifies both `get_product_history` for product `P4711` and
+`get_machine_status` for station `S12`.
 
 The committed model configuration is in `config/model_profiles.toml`. The local Ollama
 profile requires no API key. Authenticated profiles must read credential values from

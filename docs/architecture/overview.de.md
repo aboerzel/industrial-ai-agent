@@ -2,29 +2,27 @@
 
 ## Aktuelle Architektur
 
-Das Projekt implementiert derzeit das Abrufen der Produktionshistorie, eine
-provider-unabhängige LLM-Integrationsgrenze und einen begrenzten Tool-Calling-Slice. Ein
-allgemeiner Agent- oder ReAct-Loop existiert nicht.
+Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des aktuellen
+Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen begrenzten
+Slice zur Auswahl zwischen zwei Tools. Ein allgemeiner Agent- oder ReAct-Loop existiert
+nicht.
 
 Der implementierte Request Flow ist:
 
 ```text
-User Request
-    |
-    v
-ProductHistoryCapability.get_product_history(product_id)
-    |
-    v
-ProductHistoryRepository
-    |
-    v
-InMemoryProductHistoryRepository
+ProductHistoryCapability                 MachineStatusCapability
+        |                                         |
+        v                                         v
+ProductHistoryRepository                 MachineStatusRepository
+        |                                         |
+        v                                         v
+InMemoryProductHistoryRepository         InMemoryMachineStatusRepository
 ```
 
-Die Capability wandelt die String-Eingabe in eine `ProductId` um, lädt über die
-domäneneigene Repository-Abstraktion eine `ProductHistory` und gibt ein strukturiertes
-`ProductHistoryResult` zurück. Die deterministischen Demo-Daten enthalten das Produkt
-`P4711`.
+Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
+lädt über eine domäneneigene Repository-Abstraktion und gibt ein strukturiertes Ergebnis
+zurück. Die deterministischen Demo-Daten enthalten das Produkt `P4711` und die Stationen
+`S04` und `S12`.
 
 Verteilte Services und AI frameworks sind bewusst nicht Teil dieses Slice.
 
@@ -56,9 +54,9 @@ Der implementierte Tool-Calling-Ablauf ist:
 Natural-language request
     |
     v
-ProductHistoryAgent
+TroubleshootingAgent
     |
-    | LLMRequest + get_product_history definition
+    | LLMRequest + exactly two tool definitions
     v
 LLMClient (troubleshooting profile)
     |
@@ -67,7 +65,8 @@ LLMClient (troubleshooting profile)
     +-- one validated tool call                           |
             |                                             |
             v                                             |
-    ProductHistoryCapability                             |
+    fixed dispatch to ProductHistoryCapability           |
+    or MachineStatusCapability                           |
             |                                             |
             | structured tool result                      |
             v                                             |
@@ -79,12 +78,13 @@ LLMClient (troubleshooting profile)
                             Final answer
 ```
 
-Das LLM entscheidet, ob es das Tool anfordert, und formuliert die Antwort.
-Deterministischer Python-Code erzwingt den einen bekannten Tool-Namen, validiert
-`product_id`, lehnt mehr als einen Tool Call ab, dispatcht an
-`ProductHistoryCapability` und serialisiert dessen strukturiertes Ergebnis. Nach einem
-Tool Call werden dem finalen LLM Request keine Tools angeboten; ein weiterer
-zurückgegebener Tool Call wird abgelehnt, statt einen Loop zu starten.
+Das LLM entscheidet, ob es `get_product_history` oder `get_machine_status` anfordert
+oder direkt antwortet, und formuliert die finale Antwort. Deterministischer Python-Code
+validiert den ausgewählten Namen gegen diese zwei bekannten Tools, validiert die
+toolspezifische `product_id` oder `station_id`, lehnt mehr als einen Tool Call ab,
+dispatcht fest an die entsprechende Capability und serialisiert deren strukturiertes
+Ergebnis. Nach einem Tool Call werden dem finalen LLM Request keine Tools angeboten;
+ein weiterer zurückgegebener Tool Call wird abgelehnt, statt einen Loop zu starten.
 
 ## Verantwortlichkeiten der Packages
 
@@ -92,8 +92,10 @@ zurückgegebener Tool Call wird abgelehnt, statt einen Loop zu starten.
 
 Enthält industrielle Domänenmodelle und Regeln.
 
-Der aktuelle Slice definiert `ProductId`, `StationId`, `ProductionStep`,
-`ProductionStepStatus`, `ProductHistory` und das `ProductHistoryRepository` protocol.
+Die aktuellen Slices definieren `ProductId`, die gemeinsam verwendete `StationId`,
+`ProductionStep`, `ProductionStepStatus`, `ProductHistory`, `MachineState` und
+`MachineStatus`. Die domäneneigenen Ports sind `ProductHistoryRepository` und
+`MachineStatusRepository`.
 
 Muss unabhängig bleiben von:
 
@@ -109,17 +111,19 @@ Enthält agent-facing capabilities.
 
 Tools sollten aussagekräftige Domänenoperationen statt kleinteiliger Implementierungsdetails bereitstellen.
 
-Die aktuelle Capability ist `ProductHistoryCapability.get_product_history(product_id)`.
-Sie gibt ein Pydantic-`ProductHistoryResult` zurück, einschließlich eines strukturierten
-Not-found-Ergebnisses.
+Die aktuellen Capabilities sind
+`ProductHistoryCapability.get_product_history(product_id)` und
+`MachineStatusCapability.get_machine_status(station_id)`. Sie geben die
+Pydantic-Modelle `ProductHistoryResult` und `MachineStatusResult` zurück, jeweils
+einschließlich strukturierter Not-found-Ergebnisse.
 
 ### `agent`
 
 Enthält provider-unabhängige LLM-Verträge und später Agenten-Orchestrierungslogik.
 
 Die aktuelle Implementierung definiert `LLMClient`, die Auswahl über semantische
-`ModelProfile`, kleine Request- und Response-Modelle sowie `ProductHistoryAgent`. Der
-Agent enthält die begrenzte Orchestrierung und den festen Ein-Tool-Dispatch. Er
+`ModelProfile`, kleine Request- und Response-Modelle sowie `TroubleshootingAgent`. Der
+Agent enthält die begrenzte Orchestrierung und den festen Zwei-Tool-Dispatch. Er
 importiert weder das OpenAI-SDK noch benennt er einen konkreten Provider oder ein
 konkretes Modell.
 
@@ -136,10 +140,10 @@ Spätere Verantwortlichkeiten können Folgendes umfassen:
 
 Enthält technische Integrationen und externe Implementierungen.
 
-Die aktuellen Implementierungen sind `InMemoryProductHistoryRepository`, das einen
-kleinen deterministischen Demo-Datensatz bereitstellt, und
-`OpenAICompatibleLLMClient`, das den provider-unabhängigen LLM-Vertrag in eine
-OpenAI-compatible Chat Completions API übersetzt.
+Die aktuellen Implementierungen sind `InMemoryProductHistoryRepository` und
+`InMemoryMachineStatusRepository`, die kleine deterministische Demo-Datensätze
+bereitstellen, sowie `OpenAICompatibleLLMClient`, das den provider-unabhängigen
+LLM-Vertrag in eine OpenAI-compatible Chat Completions API übersetzt.
 
 Normale Modelleinstellungen und Secret-Werte sind getrennt. Die Konfiguration markiert
 ein Profil explizit als nicht authentifiziert oder API-Key-authentifiziert. Ein

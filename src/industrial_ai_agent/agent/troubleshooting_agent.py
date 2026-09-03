@@ -10,6 +10,7 @@ from industrial_ai_agent.agent.llm import (
     MessageRole,
     ModelProfile,
 )
+from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 TROUBLESHOOTING_PROFILE = ModelProfile("troubleshooting")
@@ -31,12 +32,31 @@ GET_PRODUCT_HISTORY_TOOL = LLMToolDefinition(
         "required": ["product_id"],
     },
 )
+GET_MACHINE_STATUS_TOOL = LLMToolDefinition(
+    name="get_machine_status",
+    description=(
+        "Retrieve the current operational status of a machine station by its unique "
+        "station ID."
+    ),
+    parameters={
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "station_id": {
+                "type": "string",
+                "description": "The unique station ID, for example S04.",
+            }
+        },
+        "required": ["station_id"],
+    },
+)
 _SYSTEM_MESSAGE = LLMMessage(
     role=MessageRole.SYSTEM,
     content=(
-        "You are an industrial troubleshooting assistant. Use the provided tool when "
-        "production history is needed. Base the final answer on the tool result and "
-        "do not invent production data."
+        "You are an industrial troubleshooting assistant. Use get_product_history "
+        "for questions about a product's production history and get_machine_status "
+        "for questions about a station's current operational status. Base the final "
+        "answer on the tool result and do not invent industrial data."
     ),
 )
 
@@ -71,14 +91,30 @@ class ProductHistoryToolArguments(BaseModel):
         return normalized_product_id
 
 
-class ProductHistoryAgent:
+class MachineStatusToolArguments(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    station_id: str
+
+    @field_validator("station_id")
+    @classmethod
+    def validate_station_id(cls, station_id: str) -> str:
+        normalized_station_id = station_id.strip()
+        if not normalized_station_id:
+            raise ValueError("station_id must not be empty")
+        return normalized_station_id
+
+
+class TroubleshootingAgent:
     def __init__(
         self,
         llm_client: LLMClient,
         product_history: ProductHistoryCapability,
+        machine_status: MachineStatusCapability,
     ) -> None:
         self._llm_client = llm_client
         self._product_history = product_history
+        self._machine_status = machine_status
 
     def answer(self, user_request: str) -> str:
         normalized_request = user_request.strip()
@@ -93,7 +129,7 @@ class ProductHistoryAgent:
             TROUBLESHOOTING_PROFILE,
             LLMRequest(
                 messages=(_SYSTEM_MESSAGE, user_message),
-                tools=(GET_PRODUCT_HISTORY_TOOL,),
+                tools=(GET_PRODUCT_HISTORY_TOOL, GET_MACHINE_STATUS_TOOL),
             ),
         )
 
@@ -130,18 +166,33 @@ class ProductHistoryAgent:
         return _require_response_text(final_response)
 
     def _dispatch_tool_call(self, tool_call: LLMToolCall) -> str:
-        if tool_call.name != GET_PRODUCT_HISTORY_TOOL.name:
-            raise UnknownToolError(f"Unknown tool: {tool_call.name}")
+        if tool_call.name == GET_PRODUCT_HISTORY_TOOL.name:
+            try:
+                arguments = ProductHistoryToolArguments.model_validate(
+                    tool_call.arguments
+                )
+            except ValidationError as error:
+                raise InvalidToolArgumentsError(
+                    f"Invalid arguments for {GET_PRODUCT_HISTORY_TOOL.name}"
+                ) from error
 
-        try:
-            arguments = ProductHistoryToolArguments.model_validate(tool_call.arguments)
-        except ValidationError as error:
-            raise InvalidToolArgumentsError(
-                f"Invalid arguments for {GET_PRODUCT_HISTORY_TOOL.name}"
-            ) from error
+            result = self._product_history.get_product_history(arguments.product_id)
+            return result.model_dump_json()
 
-        result = self._product_history.get_product_history(arguments.product_id)
-        return result.model_dump_json()
+        if tool_call.name == GET_MACHINE_STATUS_TOOL.name:
+            try:
+                arguments = MachineStatusToolArguments.model_validate(
+                    tool_call.arguments
+                )
+            except ValidationError as error:
+                raise InvalidToolArgumentsError(
+                    f"Invalid arguments for {GET_MACHINE_STATUS_TOOL.name}"
+                ) from error
+
+            result = self._machine_status.get_machine_status(arguments.station_id)
+            return result.model_dump_json()
+
+        raise UnknownToolError(f"Unknown tool: {tool_call.name}")
 
 
 def _require_response_text(response: LLMResponse) -> str:
