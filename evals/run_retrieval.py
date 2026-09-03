@@ -2,12 +2,13 @@ import argparse
 import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
+    InMemoryIdfKnowledgeRetriever,
     InMemoryLexicalKnowledgeRetriever,
     load_markdown_chunks,
 )
@@ -18,6 +19,7 @@ DEFAULT_DATASET_PATH = (
 )
 DEFAULT_KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
 DEFAULT_K = 3
+RetrievalStrategy = Literal["simple", "idf"]
 
 
 class RetrievalEvalCase(BaseModel):
@@ -50,6 +52,13 @@ class RetrievalEvalCase(BaseModel):
         return normalized_chunk_ids
 
 
+class RankedRetrievalResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    chunk_id: str
+    relevance_score: float | None
+
+
 class RetrievalEvalResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -57,6 +66,7 @@ class RetrievalEvalResult(BaseModel):
     query: str
     expected_relevant_chunk_ids: tuple[str, ...]
     actual_chunk_ids: tuple[str, ...]
+    actual_ranking: tuple[RankedRetrievalResult, ...]
     hit_at_1: bool
     hit_at_k: bool
     recall_at_k: float
@@ -67,6 +77,7 @@ class RetrievalEvalReport(BaseModel):
 
     dataset: str
     knowledge_base: str
+    strategy: RetrievalStrategy
     k: int
     total_cases: int
     hits_at_1: int
@@ -129,6 +140,13 @@ def score_retrieval(
         query=case.query,
         expected_relevant_chunk_ids=case.expected_relevant_chunk_ids,
         actual_chunk_ids=actual_chunk_ids,
+        actual_ranking=tuple(
+            RankedRetrievalResult(
+                chunk_id=result.chunk_id,
+                relevance_score=result.relevance_score,
+            )
+            for result in results[:k]
+        ),
         hit_at_1=bool(actual_chunk_ids and actual_chunk_ids[0] in expected_chunk_ids),
         hit_at_k=bool(relevant_retrieved),
         recall_at_k=len(relevant_retrieved) / len(expected_chunk_ids),
@@ -139,6 +157,7 @@ def aggregate_results(
     *,
     dataset: str,
     knowledge_base: str,
+    strategy: RetrievalStrategy,
     k: int,
     results: Sequence[RetrievalEvalResult],
 ) -> RetrievalEvalReport:
@@ -151,6 +170,7 @@ def aggregate_results(
     return RetrievalEvalReport(
         dataset=dataset,
         knowledge_base=knowledge_base,
+        strategy=strategy,
         k=k,
         total_cases=total_cases,
         hits_at_1=hits_at_1,
@@ -182,12 +202,14 @@ def run_retrieval_eval(
     search: Callable[[str, int], tuple[KnowledgeRetrievalResult, ...]],
     dataset: str,
     knowledge_base: str,
+    strategy: RetrievalStrategy,
     k: int = DEFAULT_K,
 ) -> RetrievalEvalReport:
     results = tuple(score_retrieval(case, search(case.query, k), k=k) for case in cases)
     return aggregate_results(
         dataset=dataset,
         knowledge_base=knowledge_base,
+        strategy=strategy,
         k=k,
         results=results,
     )
@@ -205,6 +227,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--k", type=int, default=DEFAULT_K)
     parser.add_argument(
+        "--strategy",
+        choices=("simple", "idf"),
+        default="simple",
+        help="Retrieval implementation to evaluate.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Optional JSON output path; evals/results is ignored by Git.",
@@ -218,12 +246,13 @@ def main() -> None:
     knowledge_base_path = _resolve_path(args.knowledge_base)
     cases = load_eval_cases(dataset_path)
     chunks = load_markdown_chunks(knowledge_base_path)
-    retriever = InMemoryLexicalKnowledgeRetriever(chunks)
+    retriever = _create_retriever(args.strategy, chunks)
     report = run_retrieval_eval(
         cases=cases,
         search=retriever.search,
         dataset=dataset_path.name,
         knowledge_base=knowledge_base_path.name,
+        strategy=args.strategy,
         k=args.k,
     )
 
@@ -237,6 +266,15 @@ def main() -> None:
 
 def _resolve_path(path: Path) -> Path:
     return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _create_retriever(
+    strategy: RetrievalStrategy,
+    chunks: tuple[KnowledgeRetrievalResult, ...],
+) -> InMemoryLexicalKnowledgeRetriever | InMemoryIdfKnowledgeRetriever:
+    if strategy == "simple":
+        return InMemoryLexicalKnowledgeRetriever(chunks)
+    return InMemoryIdfKnowledgeRetriever(chunks)
 
 
 if __name__ == "__main__":

@@ -6,10 +6,10 @@ Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des ak
 Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen expliziten
 begrenzten Single-Agent Tool Loop über zwei Tools. Fokussierte deterministische
 Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige begrenzte
-Trajectories. Eine isolierte lokale lexical Knowledge-Retrieval-Baseline ist
-implementiert, aber noch nicht in den Agenten integriert. Es existieren weder
-Agent-Framework, dynamische Tool Registry, persistentes Agent Memory noch allgemeines
-Eval-Framework.
+Trajectories. Zwei isolierte lokale lexical Knowledge-Retrieval-Strategien sind hinter
+einem inneren Port implementiert, aber noch nicht in den Agenten integriert. Es
+existieren weder Agent-Framework, dynamische Tool Registry, persistentes Agent Memory
+noch allgemeines Eval-Framework.
 
 Der implementierte Request Flow ist:
 
@@ -31,6 +31,7 @@ flowchart LR
         PHM["InMemoryProductHistoryRepository"]
         MSM["InMemoryMachineStatusRepository"]
         LKR["InMemoryLexicalKnowledgeRetriever"]
+        IDF["InMemoryIdfKnowledgeRetriever"]
         KB["Versionierte lokale Markdown Knowledge Base"]
     end
 
@@ -40,14 +41,16 @@ flowchart LR
     PHM -.->|"implementiert"| PHR
     MSM -.->|"implementiert"| MSR
     LKR -.->|"implementiert"| KR
+    IDF -.->|"implementiert"| KR
     KB -->|"expliziter Index Build"| LKR
+    KB -->|"expliziter Index Build"| IDF
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR port
-    class PHM,MSM,LKR,KB adapter
+    class PHM,MSM,LKR,IDF,KB adapter
 ```
 
 Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
@@ -73,11 +76,14 @@ einen Chunk pro Markdown-Überschriftsabschnitt. Unveränderte Dokumentnamen und
 flowchart LR
     Docs["3 versionierte Markdown-Dokumente"] --> Load["Explizites Laden und Normalisieren"]
     Load --> Chunk["Überschriftsabschnitt-Chunks<br/>stabile Positions-IDs"]
-    Chunk --> Index["In-Memory-Token-Index"]
+    Chunk --> Index["In-Memory-Token-Indizes"]
     Query["search_documentation(query)"] --> Port["KnowledgeRetriever-Port"]
-    Port --> Search["Deterministisches lexical Ranking<br/>Top 3"]
-    Index --> Search
-    Search --> Results["Strukturierte Results<br/>Content + Provenance + Score"]
+    Port --> Simple["Einfaches Term-Overlap-Ranking<br/>Top 3"]
+    Port --> IDFSearch["Rarity-aware IDF-Ranking<br/>Top 3"]
+    Index --> Simple
+    Index --> IDFSearch
+    Simple --> Results["Strukturierte Results<br/>Content + Provenance + Score"]
+    IDFSearch --> Results
     Results --> Query
 
     classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
@@ -85,20 +91,22 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class Docs,Load,Chunk data
     class Query,Port,Results core
-    class Index,Search adapter
+    class Index,Simple,IDFSearch adapter
 ```
 
 Der Tokenizer führt Case Folding für alphanumerische Terme und Identifier mit
 Bindestrichen durch, sodass exakte industrielle Identifier erhalten bleiben. Der
-Chunk-Score ist der Anteil unterschiedlicher Query-Terme, die im Chunk vorkommen;
-Chunks mit Score null werden ausgelassen und Ties durch `chunk_id` aufgelöst. Dies ist
-eine einfache Term-Overlap-Baseline und kein BM25. Source Path, Document ID, Chunk ID,
-Abschnitts-Metadata und Score bleiben an jedem Result erhalten.
+einfache Adapter bewertet den Anteil unterschiedlicher Query-Terme im Chunk. Der zweite
+Adapter gewichtet übereinstimmende Terme mit geglätteter inverser Chunk Frequency und
+normalisiert anschließend mit dem gesamten Query-Gewicht. Beide lassen Chunks mit Score
+null aus und lösen Ties durch `chunk_id`; keiner ist BM25. Source Path, Document ID,
+Chunk ID, Abschnitts-Metadata und Score bleiben an jedem Result erhalten.
 
 Der fokussierte Retrieval-Eval ist von den Agent-Evals getrennt. Seine zehn
 versionierten Fälle messen Hit@1, Hit@3 und Mean Recall@3 mit strukturierter
-Relevant-Chunk-Ground-Truth. Agent-Query-Formulierung und Grounding der finalen Antwort
-liegen außerhalb dieses Slice.
+Relevant-Chunk-Ground-Truth. Dasselbe unveränderte Dataset vergleicht beide Strategien.
+Agent-Query-Formulierung und Grounding der finalen Antwort liegen außerhalb dieses
+Slice.
 
 Die implementierte LLM-Grenze ist:
 
@@ -354,8 +362,9 @@ Enthält technische Integrationen und externe Implementierungen.
 
 Die aktuellen Implementierungen sind `InMemoryProductHistoryRepository` und
 `InMemoryMachineStatusRepository`, die kleine deterministische Demo-Datensätze
-bereitstellen, `InMemoryLexicalKnowledgeRetriever`, der einen vorbereiteten lokalen
-Token-Index durchsucht, sowie `OpenAICompatibleLLMClient`, das den
+bereitstellen, `InMemoryLexicalKnowledgeRetriever` und
+`InMemoryIdfKnowledgeRetriever`, die vorbereitete lokale Token-Indizes mit
+unterschiedlichen Scoring-Formeln durchsuchen, sowie `OpenAICompatibleLLMClient`, das den
 provider-unabhängigen LLM-Vertrag in eine OpenAI-compatible Chat Completions API
 übersetzt.
 
@@ -390,7 +399,7 @@ Die Architektur sollte nur dann weiterentwickelt werden, wenn implementierte Fä
 
 ### Retrieval-Weiterentwicklung
 
-Die lexical Baseline kann später mit BM25-artigem, Embedding-, Hybrid- oder reranktem
+Die lexical Baselines können später mit BM25-artigem, Embedding-, Hybrid- oder reranktem
 Retrieval verglichen werden. Neue Ports, Storage Adapter, Modellrollen und Dependencies
 werden nur eingeführt, wenn Retrieval-Evals einen konkreten Bedarf zeigen. Der
 Retrieval Core bleibt gemäß

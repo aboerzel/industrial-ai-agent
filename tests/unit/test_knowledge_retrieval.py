@@ -1,11 +1,16 @@
+from math import log
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
+from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
 from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
+    InMemoryIdfKnowledgeRetriever,
     InMemoryLexicalKnowledgeRetriever,
     load_markdown_chunks,
+    smoothed_inverse_document_frequency,
 )
 from industrial_ai_agent.tools.documentation_search import (
     DEFAULT_DOCUMENTATION_RESULT_LIMIT,
@@ -18,6 +23,24 @@ KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
 
 def create_retriever() -> InMemoryLexicalKnowledgeRetriever:
     return InMemoryLexicalKnowledgeRetriever(load_markdown_chunks(KNOWLEDGE_BASE_PATH))
+
+
+class RetrieverFactory(Protocol):
+    def __call__(
+        self,
+        chunks: tuple[KnowledgeRetrievalResult, ...],
+    ) -> KnowledgeRetriever: ...
+
+
+def knowledge_chunk(chunk_id: str, content: str) -> KnowledgeRetrievalResult:
+    document_id = chunk_id.split("::", maxsplit=1)[0]
+    return KnowledgeRetrievalResult(
+        content=content,
+        document_id=document_id,
+        source=f"{document_id}.md",
+        chunk_id=chunk_id,
+        metadata={"title": chunk_id},
+    )
 
 
 class RecordingKnowledgeRetriever:
@@ -166,3 +189,112 @@ def test_capability_rejects_empty_query_without_calling_port() -> None:
         capability.search_documentation("   ")
 
     assert retriever.requests == []
+
+
+def test_idf_retriever_calculates_chunk_document_frequency() -> None:
+    retriever = InMemoryIdfKnowledgeRetriever(
+        (
+            knowledge_chunk("a::chunk-001", "common rare"),
+            knowledge_chunk("b::chunk-001", "common"),
+            knowledge_chunk("c::chunk-001", "common"),
+        )
+    )
+
+    assert retriever.document_frequency("common") == 3
+    assert retriever.document_frequency("RARE!!!") == 1
+    assert retriever.document_frequency("missing") == 0
+
+
+def test_smoothed_idf_uses_explicit_formula() -> None:
+    actual = smoothed_inverse_document_frequency(
+        total_chunks=3,
+        document_frequency=1,
+    )
+
+    assert actual == pytest.approx(log((3 + 1) / (1 + 1)) + 1)
+
+
+def test_rare_terms_receive_more_weight_than_common_terms() -> None:
+    retriever = InMemoryIdfKnowledgeRetriever(
+        (
+            knowledge_chunk("a::chunk-001", "common rare"),
+            knowledge_chunk("b::chunk-001", "common"),
+            knowledge_chunk("c::chunk-001", "common"),
+        )
+    )
+
+    assert retriever.inverse_document_frequency(
+        "rare"
+    ) > retriever.inverse_document_frequency("common")
+    assert retriever.search("common rare", limit=3)[0].chunk_id == "a::chunk-001"
+
+
+def test_idf_ranking_is_deterministic_and_breaks_ties_by_chunk_id() -> None:
+    retriever = InMemoryIdfKnowledgeRetriever(
+        (
+            knowledge_chunk("b::chunk-001", "shared"),
+            knowledge_chunk("a::chunk-001", "shared"),
+        )
+    )
+
+    first_results = retriever.search("shared", limit=2)
+    second_results = retriever.search("shared", limit=2)
+
+    assert first_results == second_results
+    assert [result.chunk_id for result in first_results] == [
+        "a::chunk-001",
+        "b::chunk-001",
+    ]
+
+
+def test_idf_retriever_preserves_technical_identifiers() -> None:
+    retriever = InMemoryIdfKnowledgeRetriever(
+        (
+            knowledge_chunk("error::chunk-001", "Error code E-STOP-17"),
+            knowledge_chunk("station::chunk-001", "Station identifier S04"),
+        )
+    )
+
+    error_results = retriever.search("e-stop-17", limit=1)
+    station_results = retriever.search("s04", limit=1)
+
+    assert error_results[0].chunk_id == "error::chunk-001"
+    assert station_results[0].chunk_id == "station::chunk-001"
+
+
+def test_idf_retriever_enforces_top_k_and_preserves_provenance() -> None:
+    chunks = load_markdown_chunks(KNOWLEDGE_BASE_PATH)
+    original_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    results = InMemoryIdfKnowledgeRetriever(chunks).search(
+        "station S04 E-STOP-17",
+        limit=2,
+    )
+
+    assert len(results) == 2
+    for result in results:
+        original = original_by_id[result.chunk_id]
+        assert result.content == original.content
+        assert result.document_id == original.document_id
+        assert result.source == original.source
+        assert result.metadata == original.metadata
+        assert result.relevance_score is not None
+
+
+@pytest.mark.parametrize(
+    "retriever_factory",
+    [InMemoryLexicalKnowledgeRetriever, InMemoryIdfKnowledgeRetriever],
+)
+def test_retrieval_implementations_fulfill_same_port_contract(
+    retriever_factory: RetrieverFactory,
+) -> None:
+    chunks = (
+        knowledge_chunk("a::chunk-001", "E-STOP-17 safety circuit"),
+        knowledge_chunk("b::chunk-001", "quality inspection"),
+    )
+    retriever: KnowledgeRetriever = retriever_factory(chunks)
+
+    results = retriever.search("E-STOP-17", limit=1)
+
+    assert len(results) == 1
+    assert results[0].chunk_id == "a::chunk-001"
+    assert results[0].relevance_score == 1.0

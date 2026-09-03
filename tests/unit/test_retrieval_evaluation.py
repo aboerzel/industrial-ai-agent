@@ -104,6 +104,11 @@ def test_hit_at_one_requires_relevant_first_result() -> None:
 
     assert result.hit_at_1 is False
     assert result.hit_at_k is True
+    assert [item.chunk_id for item in result.actual_ranking] == [
+        "irrelevant::chunk-001",
+        "relevant::chunk-001",
+    ]
+    assert all(item.relevance_score == 1.0 for item in result.actual_ranking)
 
 
 def test_recall_at_k_counts_all_expected_relevant_chunks() -> None:
@@ -167,11 +172,13 @@ def test_aggregate_results_calculates_hit_rates_and_macro_recall() -> None:
     report = aggregate_results(
         dataset="test.jsonl",
         knowledge_base="knowledge_base",
+        strategy="simple",
         k=3,
         results=results,
     )
 
     assert report.hit_rate_at_1 == 0.5
+    assert report.strategy == "simple"
     assert report.hit_rate_at_k == 1.0
     assert report.mean_recall_at_k == 0.75
     assert report.missed_at_1_case_ids == ("second",)
@@ -193,9 +200,11 @@ def test_run_retrieval_eval_uses_requested_k_for_each_case() -> None:
         search=search,
         dataset="test.jsonl",
         knowledge_base="knowledge_base",
+        strategy="idf",
         k=3,
     )
 
     assert requests == [(case.query, 3) for case in cases]
     assert report.total_cases == 2
+    assert report.strategy == "idf"
     assert report.hit_rate_at_1 == 1.0

@@ -40,9 +40,10 @@ finalen Antwort.
 
 Eine isolierte `DocumentationSearchCapability.search_documentation(query)` durchsucht
 jetzt eine kleine versionierte lokale technische Knowledge Base über einen inneren
-`KnowledgeRetriever`-Port und einen deterministischen lexical In-Memory-Adapter. Die
-Results erhalten Document-, Source-, Chunk-, Score- und Metadata-Provenance. Retrieval
-ist bewusst noch nicht als Tool des `TroubleshootingAgent` exponiert.
+`KnowledgeRetriever`-Port. Zwei deterministische lexical In-Memory-Adapter bieten
+einfaches Term-Overlap- und rarity-aware IDF-Ranking. Die Results erhalten Document-,
+Source-, Chunk-, Score- und Metadata-Provenance. Retrieval ist bewusst noch nicht als
+Tool des `TroubleshootingAgent` exponiert.
 
 Es wurden noch kein LLM framework, MCP server, keine vector database und kein multi-agent framework eingeführt.
 
@@ -93,10 +94,12 @@ die [Troubleshooting-Trajectory-Evaluation](docs/learning/trajectory-evaluation.
 
 ## Manueller Retrieval-Eval
 
-Führe das versionierte Retrieval-Dataset gegen die lokale Knowledge Base aus:
+Führe das unveränderte versionierte Retrieval-Dataset gegen beide lokalen Strategien
+aus:
 
 ```powershell
-python -m evals.run_retrieval
+python -m evals.run_retrieval --strategy simple
+python -m evals.run_retrieval --strategy idf
 ```
 
 Der JSON Report enthält Hit@1, Hit@3, Mean Recall@3, erwartete und tatsächliche

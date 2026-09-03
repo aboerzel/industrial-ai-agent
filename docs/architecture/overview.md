@@ -5,8 +5,9 @@
 The project currently implements product-history retrieval, current machine-status
 retrieval, a provider-independent LLM integration boundary, and an explicit bounded
 single-agent loop over two tools. Focused deterministic baselines evaluate the first
-LLM tool decision and complete bounded trajectories. An isolated local lexical
-knowledge-retrieval baseline is implemented but is not yet integrated into the agent.
+LLM tool decision and complete bounded trajectories. Two isolated local lexical
+knowledge-retrieval strategies are implemented behind one inner port but are not yet
+integrated into the agent.
 There is no agent framework, dynamic tool registry, persistent agent memory, or general
 evaluation framework.
 
@@ -30,6 +31,7 @@ flowchart LR
         PHM["InMemoryProductHistoryRepository"]
         MSM["InMemoryMachineStatusRepository"]
         LKR["InMemoryLexicalKnowledgeRetriever"]
+        IDF["InMemoryIdfKnowledgeRetriever"]
         KB["Versioned local Markdown knowledge base"]
     end
 
@@ -39,14 +41,16 @@ flowchart LR
     PHM -.->|"implements"| PHR
     MSM -.->|"implements"| MSR
     LKR -.->|"implements"| KR
+    IDF -.->|"implements"| KR
     KB -->|"explicit index build"| LKR
+    KB -->|"explicit index build"| IDF
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR port
-    class PHM,MSM,LKR,KB adapter
+    class PHM,MSM,LKR,IDF,KB adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -72,11 +76,14 @@ stable IDs such as `error_codes::chunk-002`.
 flowchart LR
     Docs["3 versioned Markdown documents"] --> Load["Explicit load and normalization"]
     Load --> Chunk["Heading-section chunks<br/>stable positional IDs"]
-    Chunk --> Index["In-memory token index"]
+    Chunk --> Index["In-memory token indexes"]
     Query["search_documentation(query)"] --> Port["KnowledgeRetriever port"]
-    Port --> Search["Deterministic lexical ranking<br/>top 3"]
-    Index --> Search
-    Search --> Results["Structured results<br/>content + provenance + score"]
+    Port --> Simple["Simple term-overlap ranking<br/>top 3"]
+    Port --> IDFSearch["Rarity-aware IDF ranking<br/>top 3"]
+    Index --> Simple
+    Index --> IDFSearch
+    Simple --> Results["Structured results<br/>content + provenance + score"]
+    IDFSearch --> Results
     Results --> Query
 
     classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
@@ -84,18 +91,20 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class Docs,Load,Chunk data
     class Query,Port,Results core
-    class Index,Search adapter
+    class Index,Simple,IDFSearch adapter
 ```
 
 The tokenizer case-folds alphanumeric and hyphenated terms so exact industrial
-identifiers remain intact. A chunk score is the fraction of distinct query terms found
-in the chunk; zero-score chunks are omitted and ties are resolved by `chunk_id`. This
-is a simple term-overlap baseline, not BM25. Source path, document ID, chunk ID, section
-metadata, and score remain attached to every result.
+identifiers remain intact. The simple adapter scores the fraction of distinct query
+terms found in each chunk. The second adapter weights matching terms with a smoothed
+inverse chunk frequency before normalizing by total query weight. Both omit zero-score
+chunks and resolve ties by `chunk_id`; neither is BM25. Source path, document ID, chunk
+ID, section metadata, and score remain attached to every result.
 
 The focused retrieval eval is separate from the agent evals. Its ten versioned cases
 measure Hit@1, Hit@3, and Mean Recall@3 using structured relevant-chunk ground truth.
-Agent query formulation and final-answer grounding are outside this slice.
+The same unchanged dataset compares both strategies. Agent query formulation and
+final-answer grounding are outside this slice.
 
 The implemented LLM boundary is:
 
@@ -347,7 +356,8 @@ Contains technical integrations and external implementations.
 
 The current implementations are `InMemoryProductHistoryRepository` and
 `InMemoryMachineStatusRepository`, which provide small deterministic demo data sets,
-`InMemoryLexicalKnowledgeRetriever`, which searches a prebuilt local token index, and
+`InMemoryLexicalKnowledgeRetriever` and `InMemoryIdfKnowledgeRetriever`, which search
+prebuilt local token indexes with different scoring formulas, and
 `OpenAICompatibleLLMClient`, which translates the provider-independent LLM contract to
 an OpenAI-compatible Chat Completions API.
 
@@ -381,7 +391,7 @@ The architecture should evolve only when required by implemented capabilities.
 
 ### Retrieval Evolution
 
-The lexical baseline may later be compared with BM25-like, embedding, hybrid, or
+The lexical baselines may later be compared with BM25-like, embedding, hybrid, or
 reranked retrieval. New ports, storage adapters, model roles, and dependencies are
 introduced only when retrieval evaluations demonstrate a concrete need. The retrieval
 core remains independent from a later Knowledge MCP transport boundary as specified by
