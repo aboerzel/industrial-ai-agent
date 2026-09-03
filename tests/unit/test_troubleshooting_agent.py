@@ -147,6 +147,29 @@ def test_request_tool_selection_uses_profile_without_executing_tool() -> None:
     assert machine_repository.requested_station_ids == []
 
 
+def test_llm_request_contains_minimum_tool_and_task_completion_policy() -> None:
+    llm_client = FakeLLMClient(final_response("No lookup requested."))
+    agent, _, _ = create_agent(llm_client)
+
+    agent.answer("What can you help me with?")
+
+    system_message = llm_client.requests[0][1].messages[0]
+    assert system_message.role is MessageRole.SYSTEM
+    assert system_message.content is not None
+    assert (
+        "Use the minimum set of tools required to fully answer the explicit user request."
+        in system_message.content
+    )
+    assert (
+        "For direct lookup requests, stop once the requested information is available."
+        in system_message.content
+    )
+    assert (
+        "For investigation or diagnosis requests, continue gathering evidence when "
+        "required." in system_message.content
+    )
+
+
 def test_product_question_executes_product_history_and_returns_final_answer() -> None:
     requested_tool_call = tool_call(arguments={"product_id": "P4711"})
     llm_client = FakeLLMClient(
