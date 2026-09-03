@@ -5,8 +5,10 @@
 The project currently implements product-history retrieval, current machine-status
 retrieval, a provider-independent LLM integration boundary, and an explicit bounded
 single-agent loop over two tools. Focused deterministic baselines evaluate the first
-LLM tool decision and complete bounded trajectories. There is no agent framework,
-dynamic tool registry, persistent agent memory, or general evaluation framework.
+LLM tool decision and complete bounded trajectories. An isolated local lexical
+knowledge-retrieval baseline is implemented but is not yet integrated into the agent.
+There is no agent framework, dynamic tool registry, persistent agent memory, or general
+evaluation framework.
 
 The implemented request flow is:
 
@@ -15,29 +17,36 @@ flowchart LR
     subgraph Core["Application Core"]
         PHC["ProductHistoryCapability"]
         MSC["MachineStatusCapability"]
+        DSC["DocumentationSearchCapability"]
     end
 
     subgraph Ports["Domain-owned ports"]
         PHR["ProductHistoryRepository"]
         MSR["MachineStatusRepository"]
+        KR["KnowledgeRetriever"]
     end
 
     subgraph Infrastructure["Infrastructure adapters"]
         PHM["InMemoryProductHistoryRepository"]
         MSM["InMemoryMachineStatusRepository"]
+        LKR["InMemoryLexicalKnowledgeRetriever"]
+        KB["Versioned local Markdown knowledge base"]
     end
 
     PHC -->|"ProductId"| PHR
     MSC -->|"StationId"| MSR
+    DSC -->|"query + limit"| KR
     PHM -.->|"implements"| PHR
     MSM -.->|"implements"| MSR
+    LKR -.->|"implements"| KR
+    KB -->|"explicit index build"| LKR
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
-    class PHC,MSC core
-    class PHR,MSR port
-    class PHM,MSM adapter
+    class PHC,MSC,DSC core
+    class PHR,MSR,KR port
+    class PHM,MSM,LKR,KB adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -45,7 +54,48 @@ Object, loads through a domain-owned repository abstraction, and returns a struc
 result. The deterministic demo data includes product `P4711` and stations `S04` and
 `S12`.
 
+`DocumentationSearchCapability` receives `KnowledgeRetriever` through dependency
+injection and returns structured passages. The current adapter loads the local Markdown
+knowledge base once during explicit construction; request-time searches use its
+prepared in-memory index.
+
 Distributed services and AI frameworks are deliberately not part of this slice.
+
+## Knowledge Retrieval Baseline
+
+The versioned knowledge base contains `station_s04.md`, `error_codes.md`, and
+`maintenance.md`. The explicit ingestion step normalizes each file and creates one
+chunk per Markdown heading section. Unchanged document names and heading order produce
+stable IDs such as `error_codes::chunk-002`.
+
+```mermaid
+flowchart LR
+    Docs["3 versioned Markdown documents"] --> Load["Explicit load and normalization"]
+    Load --> Chunk["Heading-section chunks<br/>stable positional IDs"]
+    Chunk --> Index["In-memory token index"]
+    Query["search_documentation(query)"] --> Port["KnowledgeRetriever port"]
+    Port --> Search["Deterministic lexical ranking<br/>top 3"]
+    Index --> Search
+    Search --> Results["Structured results<br/>content + provenance + score"]
+    Results --> Query
+
+    classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    class Docs,Load,Chunk data
+    class Query,Port,Results core
+    class Index,Search adapter
+```
+
+The tokenizer case-folds alphanumeric and hyphenated terms so exact industrial
+identifiers remain intact. A chunk score is the fraction of distinct query terms found
+in the chunk; zero-score chunks are omitted and ties are resolved by `chunk_id`. This
+is a simple term-overlap baseline, not BM25. Source path, document ID, chunk ID, section
+metadata, and score remain attached to every result.
+
+The focused retrieval eval is separate from the agent evals. Its ten versioned cases
+measure Hit@1, Hit@3, and Mean Recall@3 using structured relevant-chunk ground truth.
+Agent query formulation and final-answer grounding are outside this slice.
 
 The implemented LLM boundary is:
 
@@ -247,8 +297,9 @@ reports remain unversioned by default.
 Contains industrial domain models and rules.
 
 The current slices define `ProductId`, the shared `StationId`, `ProductionStep`,
-`ProductionStepStatus`, `ProductHistory`, `MachineState`, and `MachineStatus`. The
-domain-owned ports are `ProductHistoryRepository` and `MachineStatusRepository`.
+`ProductionStepStatus`, `ProductHistory`, `MachineState`, `MachineStatus`, and
+`KnowledgeRetrievalResult`. The inner ports are `ProductHistoryRepository`,
+`MachineStatusRepository`, and `KnowledgeRetriever`.
 
 Must remain independent from:
 
@@ -268,7 +319,9 @@ The current capabilities are
 `ProductHistoryCapability.get_product_history(product_id)` and
 `MachineStatusCapability.get_machine_status(station_id)`. They return Pydantic
 `ProductHistoryResult` and `MachineStatusResult` models, including structured not-found
-results.
+results. The isolated
+`DocumentationSearchCapability.search_documentation(query)` returns structured
+`DocumentationSearchResult` data and is not yet offered as an agent tool.
 
 ### `agent`
 
@@ -294,8 +347,9 @@ Contains technical integrations and external implementations.
 
 The current implementations are `InMemoryProductHistoryRepository` and
 `InMemoryMachineStatusRepository`, which provide small deterministic demo data sets,
-and `OpenAICompatibleLLMClient`, which translates the provider-independent LLM contract
-to an OpenAI-compatible Chat Completions API.
+`InMemoryLexicalKnowledgeRetriever`, which searches a prebuilt local token index, and
+`OpenAICompatibleLLMClient`, which translates the provider-independent LLM contract to
+an OpenAI-compatible Chat Completions API.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores
@@ -316,13 +370,24 @@ Examples may later include:
 ### `evals`
 
 Contains separate versioned datasets and focused manual runners for first-decision tool
-selection and complete bounded trajectories. Parsing, per-case scoring, and aggregation
-are deterministic and covered by unit tests without a live LLM. Generated JSON reports
-belong under the Git-ignored `evals/results/` directory unless deliberately curated.
+selection, complete bounded trajectories, and isolated retrieval quality. Parsing,
+per-case scoring, and aggregation are deterministic and covered by unit tests without a
+live LLM. Generated JSON reports belong under the Git-ignored `evals/results/`
+directory unless deliberately curated.
 
 ## Evolution
 
 The architecture should evolve only when required by implemented capabilities.
+
+### Retrieval Evolution
+
+The lexical baseline may later be compared with BM25-like, embedding, hybrid, or
+reranked retrieval. New ports, storage adapters, model roles, and dependencies are
+introduced only when retrieval evaluations demonstrate a concrete need. The retrieval
+core remains independent from a later Knowledge MCP transport boundary as specified by
+[ADR-006](../decisions/ADR-006-knowledge-retrieval-and-rag-architecture.md).
+
+### Broader Target Direction
 
 Possible later stages include:
 

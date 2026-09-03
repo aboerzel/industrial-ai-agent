@@ -6,8 +6,10 @@ Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des ak
 Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen expliziten
 begrenzten Single-Agent Tool Loop über zwei Tools. Fokussierte deterministische
 Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige begrenzte
-Trajectories. Es existieren weder Agent-Framework, dynamische Tool Registry,
-persistentes Agent Memory noch allgemeines Eval-Framework.
+Trajectories. Eine isolierte lokale lexical Knowledge-Retrieval-Baseline ist
+implementiert, aber noch nicht in den Agenten integriert. Es existieren weder
+Agent-Framework, dynamische Tool Registry, persistentes Agent Memory noch allgemeines
+Eval-Framework.
 
 Der implementierte Request Flow ist:
 
@@ -16,29 +18,36 @@ flowchart LR
     subgraph Core["Application Core"]
         PHC["ProductHistoryCapability"]
         MSC["MachineStatusCapability"]
+        DSC["DocumentationSearchCapability"]
     end
 
     subgraph Ports["Domain-eigene Ports"]
         PHR["ProductHistoryRepository"]
         MSR["MachineStatusRepository"]
+        KR["KnowledgeRetriever"]
     end
 
     subgraph Infrastructure["Infrastructure Adapter"]
         PHM["InMemoryProductHistoryRepository"]
         MSM["InMemoryMachineStatusRepository"]
+        LKR["InMemoryLexicalKnowledgeRetriever"]
+        KB["Versionierte lokale Markdown Knowledge Base"]
     end
 
     PHC -->|"ProductId"| PHR
     MSC -->|"StationId"| MSR
+    DSC -->|"Query + Limit"| KR
     PHM -.->|"implementiert"| PHR
     MSM -.->|"implementiert"| MSR
+    LKR -.->|"implementiert"| KR
+    KB -->|"expliziter Index Build"| LKR
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
-    class PHC,MSC core
-    class PHR,MSR port
-    class PHM,MSM adapter
+    class PHC,MSC,DSC core
+    class PHR,MSR,KR port
+    class PHM,MSM,LKR,KB adapter
 ```
 
 Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
@@ -46,7 +55,50 @@ lädt über eine domäneneigene Repository-Abstraktion und gibt ein strukturiert
 zurück. Die deterministischen Demo-Daten enthalten das Produkt `P4711` und die Stationen
 `S04` und `S12`.
 
+`DocumentationSearchCapability` erhält `KnowledgeRetriever` per Dependency Injection
+und gibt strukturierte Passagen zurück. Der aktuelle Adapter lädt die lokale Markdown
+Knowledge Base einmalig bei der expliziten Erstellung; Suchen zur Request-Zeit verwenden
+seinen vorbereiteten In-Memory-Index.
+
 Verteilte Services und AI frameworks sind bewusst nicht Teil dieses Slice.
+
+## Knowledge-Retrieval-Baseline
+
+Die versionierte Knowledge Base enthält `station_s04.md`, `error_codes.md` und
+`maintenance.md`. Der explizite Ingestion-Schritt normalisiert jede Datei und erzeugt
+einen Chunk pro Markdown-Überschriftsabschnitt. Unveränderte Dokumentnamen und
+Überschriftenreihenfolgen liefern stabile IDs wie `error_codes::chunk-002`.
+
+```mermaid
+flowchart LR
+    Docs["3 versionierte Markdown-Dokumente"] --> Load["Explizites Laden und Normalisieren"]
+    Load --> Chunk["Überschriftsabschnitt-Chunks<br/>stabile Positions-IDs"]
+    Chunk --> Index["In-Memory-Token-Index"]
+    Query["search_documentation(query)"] --> Port["KnowledgeRetriever-Port"]
+    Port --> Search["Deterministisches lexical Ranking<br/>Top 3"]
+    Index --> Search
+    Search --> Results["Strukturierte Results<br/>Content + Provenance + Score"]
+    Results --> Query
+
+    classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    class Docs,Load,Chunk data
+    class Query,Port,Results core
+    class Index,Search adapter
+```
+
+Der Tokenizer führt Case Folding für alphanumerische Terme und Identifier mit
+Bindestrichen durch, sodass exakte industrielle Identifier erhalten bleiben. Der
+Chunk-Score ist der Anteil unterschiedlicher Query-Terme, die im Chunk vorkommen;
+Chunks mit Score null werden ausgelassen und Ties durch `chunk_id` aufgelöst. Dies ist
+eine einfache Term-Overlap-Baseline und kein BM25. Source Path, Document ID, Chunk ID,
+Abschnitts-Metadata und Score bleiben an jedem Result erhalten.
+
+Der fokussierte Retrieval-Eval ist von den Agent-Evals getrennt. Seine zehn
+versionierten Fälle messen Hit@1, Hit@3 und Mean Recall@3 mit strukturierter
+Relevant-Chunk-Ground-Truth. Agent-Query-Formulierung und Grounding der finalen Antwort
+liegen außerhalb dieses Slice.
 
 Die implementierte LLM-Grenze ist:
 
@@ -251,9 +303,9 @@ standardmäßig unversioniert.
 Enthält industrielle Domänenmodelle und Regeln.
 
 Die aktuellen Slices definieren `ProductId`, die gemeinsam verwendete `StationId`,
-`ProductionStep`, `ProductionStepStatus`, `ProductHistory`, `MachineState` und
-`MachineStatus`. Die domäneneigenen Ports sind `ProductHistoryRepository` und
-`MachineStatusRepository`.
+`ProductionStep`, `ProductionStepStatus`, `ProductHistory`, `MachineState`,
+`MachineStatus` und `KnowledgeRetrievalResult`. Die inneren Ports sind
+`ProductHistoryRepository`, `MachineStatusRepository` und `KnowledgeRetriever`.
 
 Muss unabhängig bleiben von:
 
@@ -273,7 +325,9 @@ Die aktuellen Capabilities sind
 `ProductHistoryCapability.get_product_history(product_id)` und
 `MachineStatusCapability.get_machine_status(station_id)`. Sie geben die
 Pydantic-Modelle `ProductHistoryResult` und `MachineStatusResult` zurück, jeweils
-einschließlich strukturierter Not-found-Ergebnisse.
+einschließlich strukturierter Not-found-Ergebnisse. Die isolierte
+`DocumentationSearchCapability.search_documentation(query)` gibt strukturierte
+`DocumentationSearchResult`-Daten zurück und wird noch nicht als Agent Tool angeboten.
 
 ### `agent`
 
@@ -300,8 +354,10 @@ Enthält technische Integrationen und externe Implementierungen.
 
 Die aktuellen Implementierungen sind `InMemoryProductHistoryRepository` und
 `InMemoryMachineStatusRepository`, die kleine deterministische Demo-Datensätze
-bereitstellen, sowie `OpenAICompatibleLLMClient`, das den provider-unabhängigen
-LLM-Vertrag in eine OpenAI-compatible Chat Completions API übersetzt.
+bereitstellen, `InMemoryLexicalKnowledgeRetriever`, der einen vorbereiteten lokalen
+Token-Index durchsucht, sowie `OpenAICompatibleLLMClient`, das den
+provider-unabhängigen LLM-Vertrag in eine OpenAI-compatible Chat Completions API
+übersetzt.
 
 Normale Modelleinstellungen und Secret-Werte sind getrennt. Die Konfiguration markiert
 ein Profil explizit als nicht authentifiziert oder API-Key-authentifiziert. Ein
@@ -323,14 +379,25 @@ Spätere Beispiele können sein:
 ### `evals`
 
 Enthält separate versionierte Datasets und fokussierte manuelle Runner für die
-First-Decision-Tool-Selection und vollständige begrenzte Trajectories. Parsing, Scoring
-pro Fall und Aggregation sind deterministisch und durch Unit Tests ohne live LLM
-abgedeckt. Generierte JSON Reports gehören in das von Git ignorierte Verzeichnis
-`evals/results/`, sofern sie nicht bewusst kuratiert werden.
+First-Decision-Tool-Selection, vollständige begrenzte Trajectories und isolierte
+Retrieval-Qualität. Parsing, Scoring pro Fall und Aggregation sind deterministisch und
+durch Unit Tests ohne live LLM abgedeckt. Generierte JSON Reports gehören in das von
+Git ignorierte Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert werden.
 
 ## Weiterentwicklung
 
 Die Architektur sollte nur dann weiterentwickelt werden, wenn implementierte Fähigkeiten dies erfordern.
+
+### Retrieval-Weiterentwicklung
+
+Die lexical Baseline kann später mit BM25-artigem, Embedding-, Hybrid- oder reranktem
+Retrieval verglichen werden. Neue Ports, Storage Adapter, Modellrollen und Dependencies
+werden nur eingeführt, wenn Retrieval-Evals einen konkreten Bedarf zeigen. Der
+Retrieval Core bleibt gemäß
+[ADR-006](../decisions/ADR-006-knowledge-retrieval-and-rag-architecture.de.md)
+unabhängig von einer späteren Knowledge-MCP-Transportgrenze.
+
+### Breitere Zielrichtung
 
 Mögliche spätere Stufen sind:
 

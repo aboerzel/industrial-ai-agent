@@ -1,0 +1,10 @@
+{"case_id":"error_code_exact","query":"What does error code E-STOP-17 mean?","expected_relevant_chunk_ids":["error_codes::chunk-002"]}
+{"case_id":"station_current_fault","query":"What is the current fault state of station S04?","expected_relevant_chunk_ids":["station_s04::chunk-002"]}
+{"case_id":"station_quality_role","query":"Where is the final automated quality inspection performed?","expected_relevant_chunk_ids":["station_s04::chunk-001"]}
+{"case_id":"safety_circuit_meaning","query":"Which error means the emergency-stop safety circuit is open?","expected_relevant_chunk_ids":["error_codes::chunk-002"]}
+{"case_id":"operator_checks_multiple","query":"Which checks are required after E-STOP-17 at S04?","expected_relevant_chunk_ids":["station_s04::chunk-003","maintenance::chunk-002"]}
+{"case_id":"return_to_service","query":"How can station S04 return to service after an emergency stop?","expected_relevant_chunk_ids":["maintenance::chunk-003"]}
+{"case_id":"product_failure_context_multiple","query":"P4711 failed at S04 with E-STOP-17. Find the technical context.","expected_relevant_chunk_ids":["station_s04::chunk-002","error_codes::chunk-002"]}
+{"case_id":"quality_rejection_code","query":"Which code describes an automated quality inspection rejection threshold?","expected_relevant_chunk_ids":["error_codes::chunk-003"]}
+{"case_id":"protective_guard_multiple","query":"What documentation covers an open protective guard at S04?","expected_relevant_chunk_ids":["error_codes::chunk-002","station_s04::chunk-003"]}
+{"case_id":"maintenance_escalation","query":"When should an emergency-stop safety circuit problem be escalated to maintenance?","expected_relevant_chunk_ids":["maintenance::chunk-002"]}

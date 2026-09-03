@@ -35,6 +35,12 @@ without executing tools. The second executes ten complete agent runs and compare
 actual bounded trajectories and termination statuses with structured ground truth.
 Neither baseline evaluates natural-language final-answer quality.
 
+An isolated `DocumentationSearchCapability.search_documentation(query)` now searches a
+small versioned local technical knowledge base through an inner `KnowledgeRetriever`
+port and a deterministic in-memory lexical adapter. Results retain document, source,
+chunk, score, and metadata provenance. Retrieval is intentionally not yet exposed as a
+`TroubleshootingAgent` tool.
+
 No LLM framework, MCP server, vector database, or multi-agent framework is introduced yet.
 
 ## Manual Ollama Smoke Tests
@@ -80,6 +86,19 @@ Accuracy. See
 [Troubleshooting Trajectory Evaluation](docs/learning/trajectory-evaluation.md) for the
 exact scoring formulas and interpretation.
 
+## Manual Retrieval Eval
+
+Run the versioned retrieval dataset against the local knowledge base:
+
+```powershell
+python -m evals.run_retrieval
+```
+
+The JSON report contains Hit@1, Hit@3, Mean Recall@3, per-case expected and actual
+chunk IDs, and explicit failure lists. See
+[Local Knowledge Retrieval Baseline](docs/learning/knowledge-retrieval-baseline.md) for
+the chunking and scoring formulas, initial baseline, and known limitations.
+
 The committed model configuration is in `config/model_profiles.toml`. The local Ollama
 profile requires no API key. Authenticated profiles must read credential values from
 environment variables or the ignored local `.env` file; `.env.example` contains no
@@ -115,6 +134,8 @@ docs/
 evals/
 ├── datasets/
 └── results/
+
+knowledge_base/
 ```
 
 ## Python

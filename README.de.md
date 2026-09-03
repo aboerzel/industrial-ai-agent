@@ -38,6 +38,12 @@ die tatsächlichen begrenzten Trajectories und Termination Status mit strukturie
 Ground Truth. Keine der beiden Baselines bewertet die natürlichsprachliche Qualität der
 finalen Antwort.
 
+Eine isolierte `DocumentationSearchCapability.search_documentation(query)` durchsucht
+jetzt eine kleine versionierte lokale technische Knowledge Base über einen inneren
+`KnowledgeRetriever`-Port und einen deterministischen lexical In-Memory-Adapter. Die
+Results erhalten Document-, Source-, Chunk-, Score- und Metadata-Provenance. Retrieval
+ist bewusst noch nicht als Tool des `TroubleshootingAgent` exponiert.
+
 Es wurden noch kein LLM framework, MCP server, keine vector database und kein multi-agent framework eingeführt.
 
 ## Manuelle Ollama Smoke Tests
@@ -85,6 +91,19 @@ Tool-Call-Anzahlen, Task Success Rate, Exact Trajectory Accuracy, Tool Call Accu
 Termination Accuracy. Die exakten Scoring-Formeln und ihre Interpretation beschreibt
 die [Troubleshooting-Trajectory-Evaluation](docs/learning/trajectory-evaluation.de.md).
 
+## Manueller Retrieval-Eval
+
+Führe das versionierte Retrieval-Dataset gegen die lokale Knowledge Base aus:
+
+```powershell
+python -m evals.run_retrieval
+```
+
+Der JSON Report enthält Hit@1, Hit@3, Mean Recall@3, erwartete und tatsächliche
+Chunk-IDs pro Fall sowie explizite Fehlerlisten. Chunking- und Scoring-Formeln, initiale
+Baseline und bekannte Grenzen beschreibt die
+[lokale Knowledge-Retrieval-Baseline](docs/learning/knowledge-retrieval-baseline.de.md).
+
 Die committed Modellkonfiguration liegt in `config/model_profiles.toml`. Das lokale
 Ollama-Profil benötigt keinen API Key. Authentifizierte Profile müssen Credential-Werte
 aus Environment Variables oder der ignorierten lokalen `.env`-Datei lesen;
@@ -120,6 +139,8 @@ docs/
 evals/
 ├── datasets/
 └── results/
+
+knowledge_base/
 ```
 
 ## Python

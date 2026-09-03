@@ -243,15 +243,22 @@ Persistent raw observations should be retained independently from summarized LLM
 
 Retrieval should be treated as a separate subsystem.
 
-Preferred production direction:
+Agents must access documentation retrieval only through a semantic agent-facing
+capability backed by inner, provider- and storage-independent ports. Keep document
+parsing, chunking, indexes, retrieval libraries, embedding or reranking providers, and
+storage details out of Domain and agent orchestration. Preserve source and chunk
+provenance in structured retrieval results, and add embedding, reranking, or pipeline
+abstractions only when an implemented slice requires them.
+
+Conceptual responsibilities:
 
 ```text
 Parsing
 -> Structure-aware chunking
 -> Metadata
--> Embeddings
--> Hybrid retrieval
--> Reranking
+-> Indexing
+-> Lexical and/or semantic retrieval
+-> Optional reranking
 -> Context selection
 ```
 
@@ -260,6 +267,8 @@ For technical documentation, exact identifiers such as error codes, component ID
 Therefore, semantic search alone is generally insufficient.
 
 Evaluate retrieval separately from final answer quality.
+
+See `docs/decisions/ADR-006-knowledge-retrieval-and-rag-architecture.md`.
 
 ---
 
@@ -643,6 +652,7 @@ ADR-002  Provider- and model-independent LLM architecture
 ADR-003  Hexagonal Architecture
 ADR-004  Agent orchestration strategy
 ADR-005  Testing and evaluation strategy
+ADR-006  Knowledge retrieval and RAG architecture
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision
