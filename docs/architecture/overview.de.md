@@ -4,9 +4,10 @@
 
 Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des aktuellen
 Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen expliziten
-begrenzten Single-Agent Tool Loop über zwei Tools. Eine kleine deterministische Baseline
-evaluiert die erste LLM-Tool-Entscheidung. Es existieren weder Agent-Framework,
-dynamische Tool Registry, persistentes Agent Memory noch allgemeines Eval-Framework.
+begrenzten Single-Agent Tool Loop über zwei Tools. Fokussierte deterministische
+Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige begrenzte
+Trajectories. Es existieren weder Agent-Framework, dynamische Tool Registry,
+persistentes Agent Memory noch allgemeines Eval-Framework.
 
 Der implementierte Request Flow ist:
 
@@ -167,6 +168,48 @@ Accuracy verlangt zusätzlich die exakte Übereinstimmung der Argumente und verg
 keinen Argument-Punkt für ein falsches Tool. Die Baseline bewertet weder Tool Results,
 Qualität der finalen Antwort, Latenz, Kosten noch LLM-as-a-Judge-Qualität.
 
+## Baseline für die Trajectory-Evaluation
+
+Der ergänzende Trajectory-Eval führt für jeden unabhängigen versionierten Fall den
+vollständigen Agenten aus. `AgentRunResult` stellt normalisierte ausgeführte Calls ohne
+Provider-Typen oder Call-IDs bereit. Deterministisches Scoring vergleicht diese
+tatsächliche Trajectory und den finalen Run Status mit strukturierter Ground Truth. Die
+natürlichsprachliche finale Antwort wird aufgezeichnet, aber nicht bewertet.
+
+```mermaid
+flowchart LR
+    D["Versioniertes Trajectory-Dataset<br/>10 unabhängige Fälle"]
+    R["Trajectory-Eval-Runner"]
+    A["TroubleshootingAgent<br/>vollständiger begrenzter Run"]
+    L["LLMClient<br/>konfigurierbares Model Profile"]
+    AR["AgentRunResult<br/>Status + ausgeführte Calls + finale Antwort"]
+    S["Deterministisches Scoring<br/>Trajectory + Terminierung"]
+    O["Strukturierter JSON Report<br/>Falldetails + vier Metriken"]
+
+    D -->|"Fall"| R
+    R -->|"user_input"| A
+    A <-->|"Entscheidungen und Observations"| L
+    A --> AR
+    AR --> R
+    R --> S
+    D -->|"strukturierte Ground Truth"| S
+    S --> O
+
+    classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef metric fill:#ecfdf5,stroke:#059669,color:#022c22
+    class D data
+    class R,A,L,AR core
+    class S,O metric
+```
+
+Task Success erfordert sowohl exakte Trajectory-Gleichheit als auch den erwarteten
+Termination Status. Exact Trajectory Accuracy misst die Gleichheit der gesamten
+Sequenz, Tool Call Accuracy bewertet exakte positionsbezogene Call-Slots und bestraft
+fehlende sowie zusätzliche Calls, und Termination Accuracy misst die Statusgleichheit.
+Erwartete und tatsächliche Call-Anzahlen pro Fall machen Over- und Under-Calling
+sichtbar.
+
 ## Quality Strategy
 
 [ADR-005](../decisions/ADR-005-testing-and-evaluation-strategy.de.md) trennt
@@ -183,7 +226,7 @@ flowchart TB
     Tests --> Integration["Explizite Integration Tests<br/>konkrete Adapter"]
     Integration --> Smoke["Explizite Smoke Tests<br/>echte Services bei Bedarf"]
     Deterministic -->|"nein: Modellurteil"| Evals["Versionierte AI-/Agent-Evals<br/>strukturierte Fälle + Metriken"]
-    Evals --> Current["Aktuelle Baseline<br/>Tool Selection Accuracy<br/>Tool Argument Accuracy"]
+    Evals --> Current["Aktuelle Baselines<br/>erste Entscheidung + vollständige Trajectory"]
     Evals -.-> Future["Dimensionen erst mit realen Capabilities ergänzen<br/>Judge oder Human Review nur bei Bedarf"]
 
     classDef test fill:#e8f1ff,stroke:#2563eb,color:#172554
@@ -195,10 +238,11 @@ flowchart TB
 ```
 
 Das aktuelle Repository implementiert deterministische Unit-Test-Abdeckung, explizit
-dokumentierte lokale Ollama-Smoke-Pfade und den fokussierten Tool-Selection-Eval für die
-erste Entscheidung. Es implementiert weder ein externes Eval-Framework noch
-LLM-as-a-Judge, eine Observability-Plattform oder neue CI/CD-Infrastruktur. Generierte
-Eval-Reports bleiben standardmäßig unversioniert.
+dokumentierte lokale Ollama-Smoke-Pfade, den fokussierten Tool-Selection-Eval für die
+erste Entscheidung und den Eval der vollständigen begrenzten Trajectory. Es
+implementiert weder ein externes Eval-Framework noch LLM-as-a-Judge, eine
+Observability-Plattform oder neue CI/CD-Infrastruktur. Generierte Eval-Reports bleiben
+standardmäßig unversioniert.
 
 ## Verantwortlichkeiten der Packages
 
@@ -239,8 +283,9 @@ Die aktuelle Implementierung definiert `LLMClient`, die Auswahl über semantisch
 `ModelProfile`, kleine Request- und Response-Modelle sowie `TroubleshootingAgent`. Der
 Agent enthält den expliziten begrenzten sequenziellen Loop und den festen
 Zwei-Tool-Dispatch. `AgentRunResult` unterscheidet `SUCCESS` von `LIMIT_REACHED` und gibt
-die Anzahl ausgeführter Tools an. Der Agent importiert weder das OpenAI-SDK noch benennt
-er einen konkreten Provider oder ein konkretes Modell.
+die Anzahl ausgeführter Tools sowie die normalisierte ausgeführte Trajectory an. Der
+Agent importiert weder das OpenAI-SDK noch benennt er einen konkreten Provider oder ein
+konkretes Modell.
 
 Mögliche spätere Verantwortlichkeiten sind:
 
@@ -277,10 +322,11 @@ Spätere Beispiele können sein:
 
 ### `evals`
 
-Enthält das versionierte Tool-Selection-Dataset und einen fokussierten manuellen Runner.
-Parsing, Scoring pro Fall und Aggregation sind deterministisch und durch Unit Tests ohne
-live LLM abgedeckt. Generierte JSON Reports gehören in das von Git ignorierte
-Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert werden.
+Enthält separate versionierte Datasets und fokussierte manuelle Runner für die
+First-Decision-Tool-Selection und vollständige begrenzte Trajectories. Parsing, Scoring
+pro Fall und Aggregation sind deterministisch und durch Unit Tests ohne live LLM
+abgedeckt. Generierte JSON Reports gehören in das von Git ignorierte Verzeichnis
+`evals/results/`, sofern sie nicht bewusst kuratiert werden.
 
 ## Weiterentwicklung
 

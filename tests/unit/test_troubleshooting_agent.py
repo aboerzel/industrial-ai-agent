@@ -14,6 +14,7 @@ from industrial_ai_agent.agent.llm import (
 from industrial_ai_agent.agent.troubleshooting_agent import (
     MAX_TOOL_CALLS,
     AgentRunStatus,
+    ExecutedToolCall,
     InvalidToolArgumentsError,
     ToolCallLimitExceededError,
     TroubleshootingAgent,
@@ -353,6 +354,16 @@ def test_executes_two_sequential_tool_calls_and_preserves_observations() -> None
     assert result.status is AgentRunStatus.SUCCESS
     assert result.final_answer == "P4711 failed at S04, which is currently faulted."
     assert result.tool_call_count == 2
+    assert result.executed_tool_calls == (
+        ExecutedToolCall(
+            tool="get_product_history",
+            arguments={"product_id": "P4711"},
+        ),
+        ExecutedToolCall(
+            tool="get_machine_status",
+            arguments={"station_id": "S04"},
+        ),
+    )
     assert product_repository.requested_product_ids == [ProductId("P4711")]
     assert machine_repository.requested_station_ids == [StationId("S04")]
     assert len(llm_client.requests) == 3
@@ -404,6 +415,7 @@ def test_executes_three_tool_calls_before_success() -> None:
     assert result.status is AgentRunStatus.SUCCESS
     assert result.final_answer == "Investigation complete."
     assert result.tool_call_count == MAX_TOOL_CALLS
+    assert len(result.executed_tool_calls) == MAX_TOOL_CALLS
     assert product_repository.requested_product_ids == [
         ProductId("P4711"),
         ProductId("P4711"),
@@ -435,6 +447,16 @@ def test_returns_limit_reached_without_executing_fourth_call_or_calling_llm_agai
     assert result.status is AgentRunStatus.LIMIT_REACHED
     assert result.final_answer is None
     assert result.tool_call_count == MAX_TOOL_CALLS
+    assert (
+        result.executed_tool_calls
+        == (
+            ExecutedToolCall(
+                tool="get_product_history",
+                arguments={"product_id": "P4711"},
+            ),
+        )
+        * MAX_TOOL_CALLS
+    )
     assert product_repository.requested_product_ids == [ProductId("P4711")] * 3
     assert machine_repository.requested_station_ids == []
     assert len(llm_client.requests) == 4

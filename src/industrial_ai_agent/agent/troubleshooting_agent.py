@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Self
+from typing import Any, Self
 
 from pydantic import (
     BaseModel,
@@ -98,15 +98,35 @@ class AgentRunStatus(StrEnum):
     LIMIT_REACHED = "LIMIT_REACHED"
 
 
+class ExecutedToolCall(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tool: str
+    arguments: dict[str, Any]
+
+    @field_validator("tool")
+    @classmethod
+    def validate_tool(cls, tool: str) -> str:
+        normalized_tool = tool.strip()
+        if not normalized_tool:
+            raise ValueError("tool must not be empty")
+        return normalized_tool
+
+
 class AgentRunResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: AgentRunStatus
     final_answer: str | None = None
     tool_call_count: int = Field(ge=0, le=MAX_TOOL_CALLS)
+    executed_tool_calls: tuple[ExecutedToolCall, ...] = ()
 
     @model_validator(mode="after")
     def validate_status_fields(self) -> Self:
+        if self.tool_call_count != len(self.executed_tool_calls):
+            raise ValueError(
+                "tool_call_count must match the number of executed tool calls"
+            )
         if self.status is AgentRunStatus.SUCCESS and self.final_answer is None:
             raise ValueError("SUCCESS requires a final answer")
         if self.status is AgentRunStatus.LIMIT_REACHED:
@@ -167,7 +187,7 @@ class TroubleshootingAgent:
     def answer(self, user_request: str) -> AgentRunResult:
         user_message = _create_user_message(user_request)
         messages = [_SYSTEM_MESSAGE, user_message]
-        executed_tool_calls = 0
+        executed_tool_calls: list[ExecutedToolCall] = []
 
         while True:
             response = self._request_decision(tuple(messages))
@@ -175,20 +195,22 @@ class TroubleshootingAgent:
                 return AgentRunResult(
                     status=AgentRunStatus.SUCCESS,
                     final_answer=_require_response_text(response),
-                    tool_call_count=executed_tool_calls,
+                    tool_call_count=len(executed_tool_calls),
+                    executed_tool_calls=tuple(executed_tool_calls),
                 )
             if len(response.tool_calls) > 1:
                 raise ToolCallLimitExceededError(
                     "At most one tool call per LLM response is allowed"
                 )
-            if executed_tool_calls == MAX_TOOL_CALLS:
+            if len(executed_tool_calls) == MAX_TOOL_CALLS:
                 return AgentRunResult(
                     status=AgentRunStatus.LIMIT_REACHED,
-                    tool_call_count=executed_tool_calls,
+                    tool_call_count=len(executed_tool_calls),
+                    executed_tool_calls=tuple(executed_tool_calls),
                 )
 
             tool_call = response.tool_calls[0]
-            tool_result = self._dispatch_tool_call(tool_call)
+            tool_result, executed_tool_call = self._dispatch_tool_call(tool_call)
             messages.extend(
                 (
                     LLMMessage(
@@ -203,7 +225,7 @@ class TroubleshootingAgent:
                     ),
                 )
             )
-            executed_tool_calls += 1
+            executed_tool_calls.append(executed_tool_call)
 
     def _request_tool_selection(self, user_message: LLMMessage) -> LLMResponse:
         return self._request_decision((_SYSTEM_MESSAGE, user_message))
@@ -217,7 +239,9 @@ class TroubleshootingAgent:
             ),
         )
 
-    def _dispatch_tool_call(self, tool_call: LLMToolCall) -> str:
+    def _dispatch_tool_call(
+        self, tool_call: LLMToolCall
+    ) -> tuple[str, ExecutedToolCall]:
         if tool_call.name == GET_PRODUCT_HISTORY_TOOL.name:
             try:
                 arguments = ProductHistoryToolArguments.model_validate(
@@ -229,7 +253,10 @@ class TroubleshootingAgent:
                 ) from error
 
             result = self._product_history.get_product_history(arguments.product_id)
-            return result.model_dump_json()
+            return result.model_dump_json(), ExecutedToolCall(
+                tool=GET_PRODUCT_HISTORY_TOOL.name,
+                arguments={"product_id": arguments.product_id},
+            )
 
         if tool_call.name == GET_MACHINE_STATUS_TOOL.name:
             try:
@@ -242,7 +269,10 @@ class TroubleshootingAgent:
                 ) from error
 
             result = self._machine_status.get_machine_status(arguments.station_id)
-            return result.model_dump_json()
+            return result.model_dump_json(), ExecutedToolCall(
+                tool=GET_MACHINE_STATUS_TOOL.name,
+                arguments={"station_id": arguments.station_id},
+            )
 
         raise UnknownToolError(f"Unknown tool: {tool_call.name}")
 

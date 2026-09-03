@@ -31,9 +31,12 @@ nach dem dritten Result liefert `LIMIT_REACHED`, ohne diesen Call auszuführen o
 LLM erneut aufzurufen. Es existieren weder Agent-Framework, dynamische Tool Registry,
 persistentes Memory noch Context Compression.
 
-Eine erste deterministische Eval-Baseline misst die initiale LLM-Tool-Auswahl und
-Argumentextraktion des Agenten anhand von zwölf versionierten Fällen. Sie führt keine
-Tools aus und bewertet keine finalen Antworten.
+Es stehen zwei deterministische Eval-Baselines bereit. Die erste misst anhand von zwölf
+versionierten Fällen die initiale LLM-Tool-Auswahl und Argumentextraktion des Agenten,
+ohne Tools auszuführen. Die zweite führt zehn vollständige Agent Runs aus und vergleicht
+die tatsächlichen begrenzten Trajectories und Termination Status mit strukturierter
+Ground Truth. Keine der beiden Baselines bewertet die natürlichsprachliche Qualität der
+finalen Antwort.
 
 Es wurden noch kein LLM framework, MCP server, keine vector database und kein multi-agent framework eingeführt.
 
@@ -67,6 +70,20 @@ Der Befehl gibt einen strukturierten JSON Report mit Einzelergebnissen, Tool Sel
 Accuracy und Argument Accuracy aus. Definitionen und Interpretation der Metriken sowie
 die optionale lokale Ergebnisausgabe beschreibt die
 [Baseline für die Tool-Selection-Evaluation](docs/learning/tool-selection-evaluation.de.md).
+
+## Manueller Trajectory-Eval
+
+Führe das versionierte Multi-Step-Dataset durch den vollständigen begrenzten Agent Loop
+aus:
+
+```powershell
+python -m evals.run_trajectory --profile troubleshooting
+```
+
+Der JSON Report enthält pro Fall erwartete und tatsächliche Trajectories,
+Tool-Call-Anzahlen, Task Success Rate, Exact Trajectory Accuracy, Tool Call Accuracy und
+Termination Accuracy. Die exakten Scoring-Formeln und ihre Interpretation beschreibt
+die [Troubleshooting-Trajectory-Evaluation](docs/learning/trajectory-evaluation.de.md).
 
 Die committed Modellkonfiguration liegt in `config/model_profiles.toml`. Das lokale
 Ollama-Profil benötigt keinen API Key. Authentifizierte Profile müssen Credential-Werte

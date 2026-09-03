@@ -4,9 +4,9 @@
 
 The project currently implements product-history retrieval, current machine-status
 retrieval, a provider-independent LLM integration boundary, and an explicit bounded
-single-agent loop over two tools. A small deterministic baseline evaluates the first
-LLM tool decision. There is no agent framework, dynamic tool registry, persistent agent
-memory, or general evaluation framework.
+single-agent loop over two tools. Focused deterministic baselines evaluate the first
+LLM tool decision and complete bounded trajectories. There is no agent framework,
+dynamic tool registry, persistent agent memory, or general evaluation framework.
 
 The implemented request flow is:
 
@@ -166,6 +166,47 @@ Accuracy additionally requires exact argument equality and therefore gives no ar
 credit to a wrong tool. The baseline does not evaluate tool results, final-answer
 quality, latency, cost, or LLM-as-a-Judge quality.
 
+## Trajectory Evaluation Baseline
+
+The complementary trajectory eval executes the complete agent for every independent
+versioned case. `AgentRunResult` exposes normalized executed calls without provider
+types or call IDs. Deterministic scoring compares this actual trajectory and the final
+run status with structured ground truth. The natural-language final answer is recorded
+but excluded from scoring.
+
+```mermaid
+flowchart LR
+    D["Versioned trajectory dataset<br/>10 independent cases"]
+    R["Trajectory eval runner"]
+    A["TroubleshootingAgent<br/>complete bounded run"]
+    L["LLMClient<br/>configurable Model Profile"]
+    AR["AgentRunResult<br/>status + executed calls + final answer"]
+    S["Deterministic scoring<br/>trajectory + termination"]
+    O["Structured JSON report<br/>case details + four metrics"]
+
+    D -->|"case"| R
+    R -->|"user_input"| A
+    A <-->|"decisions and observations"| L
+    A --> AR
+    AR --> R
+    R --> S
+    D -->|"structured ground truth"| S
+    S --> O
+
+    classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef metric fill:#ecfdf5,stroke:#059669,color:#022c22
+    class D data
+    class R,A,L,AR core
+    class S,O metric
+```
+
+Task Success requires both exact trajectory equality and the expected termination
+status. Exact Trajectory Accuracy measures full-sequence equality, Tool Call Accuracy
+scores exact positional call slots while penalizing missing and additional calls, and
+Termination Accuracy measures status equality. Per-case expected and actual call counts
+make over-calling and under-calling visible.
+
 ## Quality Strategy
 
 [ADR-005](../decisions/ADR-005-testing-and-evaluation-strategy.md) separates quality
@@ -182,7 +223,7 @@ flowchart TB
     Tests --> Integration["Explicit integration tests<br/>concrete adapters"]
     Integration --> Smoke["Explicit smoke tests<br/>real services when needed"]
     Deterministic -->|"no: model judgment"| Evals["Versioned AI / Agent evals<br/>structured cases + metrics"]
-    Evals --> Current["Current baseline<br/>Tool Selection Accuracy<br/>Tool Argument Accuracy"]
+    Evals --> Current["Current baselines<br/>first decision + complete trajectory"]
     Evals -.-> Future["Add dimensions only with real capabilities<br/>Judge or human review only when needed"]
 
     classDef test fill:#e8f1ff,stroke:#2563eb,color:#172554
@@ -194,9 +235,10 @@ flowchart TB
 ```
 
 The current repository implements deterministic unit coverage, explicitly documented
-local Ollama smoke paths, and the focused first-decision tool-selection eval. It does
-not implement an external eval framework, LLM-as-a-Judge, an observability platform, or
-new CI/CD infrastructure. Generated eval reports remain unversioned by default.
+local Ollama smoke paths, the focused first-decision tool-selection eval, and the
+complete bounded-trajectory eval. It does not implement an external eval framework,
+LLM-as-a-Judge, an observability platform, or new CI/CD infrastructure. Generated eval
+reports remain unversioned by default.
 
 ## Package Responsibilities
 
@@ -235,8 +277,9 @@ Contains provider-independent LLM contracts and agent orchestration logic.
 The current implementation defines `LLMClient`, semantic `ModelProfile` selection,
 small request and response models, and `TroubleshootingAgent`. The agent contains the
 explicit bounded sequential loop and fixed two-tool dispatch. `AgentRunResult`
-distinguishes `SUCCESS` from `LIMIT_REACHED` and reports the executed-tool count. The
-agent does not import the OpenAI SDK or name a concrete provider or model.
+distinguishes `SUCCESS` from `LIMIT_REACHED` and reports both the executed-tool count
+and the normalized executed trajectory. The agent does not import the OpenAI SDK or
+name a concrete provider or model.
 
 Possible later responsibilities include:
 
@@ -272,10 +315,10 @@ Examples may later include:
 
 ### `evals`
 
-Contains the versioned tool-selection dataset and a focused manual runner. Parsing,
-per-case scoring, and aggregation are deterministic and covered by unit tests without a
-live LLM. Generated JSON reports belong under the Git-ignored `evals/results/`
-directory unless deliberately curated.
+Contains separate versioned datasets and focused manual runners for first-decision tool
+selection and complete bounded trajectories. Parsing, per-case scoring, and aggregation
+are deterministic and covered by unit tests without a live LLM. Generated JSON reports
+belong under the Git-ignored `evals/results/` directory unless deliberately curated.
 
 ## Evolution
 
