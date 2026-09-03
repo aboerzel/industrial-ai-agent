@@ -499,3 +499,97 @@ A development step is complete when:
 * architecture remains coherent
 * documentation is updated when needed
 * no secrets are committed
+
+## Language and Documentation Policy
+
+### Communication
+
+Communicate with the repository owner in **German**.
+
+Explanations of implementations, architecture decisions, reviews, and learning concepts should be written in German unless explicitly requested otherwise.
+
+### Code
+
+All source code must use English, including:
+
+* identifiers
+* class names
+* function names
+* variable names
+* comments
+* docstrings
+* log messages
+* exception messages
+* test names
+
+### Primary Documentation
+
+The canonical technical documentation is written in English.
+
+This includes:
+
+* `README.md`
+* architecture documentation
+* Architecture Decision Records
+* learning documentation
+* other repository Markdown documentation
+
+### German Documentation
+
+For every English Markdown documentation file other than `AGENTS.md`, maintain a corresponding German version for the repository owner's personal use.
+
+`AGENTS.md` is an explicit exception: it is maintained in English only, and `AGENTS.de.md` must not be created.
+
+Naming convention:
+
+```text id="i8g9qs"
+README.md
+README.de.md
+
+docs/architecture/overview.md
+docs/architecture/overview.de.md
+
+docs/decisions/ADR-001-project-foundation.md
+docs/decisions/ADR-001-project-foundation.de.md
+```
+
+The English version remains the canonical technical document.
+
+The German version should be a faithful technical translation, but may use natural German wording where this improves comprehension.
+
+Do not translate:
+
+* source code
+* identifiers
+* API names
+* class/function names
+* technology names
+* file paths
+* commands
+
+### Synchronization Requirement
+
+English and German documentation covered by this policy must remain synchronized.
+
+Whenever an English documentation file other than `AGENTS.md` is:
+
+* created
+* modified
+* renamed
+* moved
+* deleted
+
+the corresponding `.de.md` file must be handled in the same change.
+
+Likewise, if a German documentation file is changed in a way that affects technical content, ensure that the canonical English document reflects the same information.
+
+A documentation change is not complete until both language variants are consistent.
+
+### Definition of Done Addition
+
+Before completing a task that changes documentation, verify:
+
+1. the English documentation is correct,
+2. the corresponding German `.de.md` exists when required by this policy,
+3. both versions describe the same technical state when a language pair is required,
+4. links and file references remain valid in both versions where applicable.
