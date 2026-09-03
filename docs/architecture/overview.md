@@ -2,30 +2,38 @@
 
 ## Current Architecture
 
-The project currently contains only the structural foundation.
+The project currently implements its first deterministic vertical slice: retrieving
+the production history of a product.
 
-The intended initial architecture is:
+The implemented request flow is:
 
 ```text
 User Request
     |
     v
-Agent
+ProductHistoryCapability.get_product_history(product_id)
     |
     v
-Domain Tool
+ProductHistoryRepository
     |
     v
-Deterministic Domain / Infrastructure Code
+InMemoryProductHistoryRepository
 ```
 
-The first implementation steps will deliberately avoid distributed services and AI frameworks.
+The capability converts the string input into a `ProductId`, loads a `ProductHistory`
+through the domain-owned repository abstraction, and returns a structured
+`ProductHistoryResult`. The deterministic demo data includes product `P4711`.
+
+Distributed services and AI frameworks are deliberately not part of this slice.
 
 ## Package Responsibilities
 
 ### `domain`
 
 Contains industrial domain models and rules.
+
+The current slice defines `ProductId`, `StationId`, `ProductionStep`,
+`ProductionStepStatus`, `ProductHistory`, and the `ProductHistoryRepository` protocol.
 
 Must remain independent from:
 
@@ -41,9 +49,14 @@ Contains agent-facing capabilities.
 
 Tools should expose meaningful domain operations rather than low-level implementation details.
 
+The current capability is `ProductHistoryCapability.get_product_history(product_id)`.
+It returns a Pydantic `ProductHistoryResult`, including a structured not-found result.
+
 ### `agent`
 
 Contains agent orchestration logic.
+
+This package is not used by the current deterministic slice.
 
 Later responsibilities may include:
 
@@ -57,6 +70,9 @@ Later responsibilities may include:
 ### `infrastructure`
 
 Contains technical integrations and external implementations.
+
+The current implementation is `InMemoryProductHistoryRepository`, which provides a
+small deterministic demo data set.
 
 Examples may later include:
 

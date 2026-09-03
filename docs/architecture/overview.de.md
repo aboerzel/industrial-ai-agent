@@ -2,30 +2,39 @@
 
 ## Aktuelle Architektur
 
-Das Projekt enthält derzeit nur die strukturelle Grundlage.
+Das Projekt implementiert derzeit seinen ersten deterministischen vertikalen Slice:
+das Abrufen der Produktionshistorie eines Produkts.
 
-Die vorgesehene anfängliche Architektur ist:
+Der implementierte Request Flow ist:
 
 ```text
 User Request
     |
     v
-Agent
+ProductHistoryCapability.get_product_history(product_id)
     |
     v
-Domain Tool
+ProductHistoryRepository
     |
     v
-Deterministic Domain / Infrastructure Code
+InMemoryProductHistoryRepository
 ```
 
-Die ersten Implementierungsschritte werden bewusst auf verteilte Services und AI frameworks verzichten.
+Die Capability wandelt die String-Eingabe in eine `ProductId` um, lädt über die
+domäneneigene Repository-Abstraktion eine `ProductHistory` und gibt ein strukturiertes
+`ProductHistoryResult` zurück. Die deterministischen Demo-Daten enthalten das Produkt
+`P4711`.
+
+Verteilte Services und AI frameworks sind bewusst nicht Teil dieses Slice.
 
 ## Verantwortlichkeiten der Packages
 
 ### `domain`
 
 Enthält industrielle Domänenmodelle und Regeln.
+
+Der aktuelle Slice definiert `ProductId`, `StationId`, `ProductionStep`,
+`ProductionStepStatus`, `ProductHistory` und das `ProductHistoryRepository` protocol.
 
 Muss unabhängig bleiben von:
 
@@ -41,9 +50,15 @@ Enthält agent-facing capabilities.
 
 Tools sollten aussagekräftige Domänenoperationen statt kleinteiliger Implementierungsdetails bereitstellen.
 
+Die aktuelle Capability ist `ProductHistoryCapability.get_product_history(product_id)`.
+Sie gibt ein Pydantic-`ProductHistoryResult` zurück, einschließlich eines strukturierten
+Not-found-Ergebnisses.
+
 ### `agent`
 
 Enthält die Agentenorchestrierungslogik.
+
+Dieses Package wird vom aktuellen deterministischen Slice nicht verwendet.
 
 Spätere Verantwortlichkeiten können Folgendes umfassen:
 
@@ -57,6 +72,9 @@ Spätere Verantwortlichkeiten können Folgendes umfassen:
 ### `infrastructure`
 
 Enthält technische Integrationen und externe Implementierungen.
+
+Die aktuelle Implementierung ist `InMemoryProductHistoryRepository`, das einen kleinen
+deterministischen Demo-Datensatz bereitstellt.
 
 Spätere Beispiele können sein:
 

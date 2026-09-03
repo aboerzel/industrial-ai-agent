@@ -15,7 +15,9 @@ The project starts with simple, explicit Python building blocks and evolves incr
 
 ## Current Stage
 
-Project foundation only.
+The first deterministic vertical slice is implemented: product history lookup through
+the agent-facing `ProductHistoryCapability.get_product_history(product_id)` capability,
+backed by an in-memory repository.
 
 No LLM framework, MCP server, vector database, or multi-agent framework is introduced yet.
 

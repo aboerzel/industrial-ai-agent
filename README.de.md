@@ -15,7 +15,10 @@ Das Projekt beginnt mit einfachen, expliziten Python-Bausteinen und entwickelt s
 
 ## Aktueller Stand
 
-Nur die Projektgrundlage ist vorhanden.
+Der erste deterministische vertikale Slice ist implementiert: das Abrufen der
+Produktionshistorie über die agent-facing Capability
+`ProductHistoryCapability.get_product_history(product_id)`, gestützt durch ein
+In-Memory-Repository.
 
 Es wurden noch kein LLM framework, MCP server, keine vector database und kein multi-agent framework eingeführt.
 
