@@ -634,6 +634,21 @@ Short notes explaining important Agentic AI concepts implemented in the project.
 
 Documentation should reflect the actual implementation, not hypothetical future features.
 
+### Architecture Diagrams
+
+For every change, check whether any Mermaid diagram under `docs/` is affected by the
+changed behavior, component responsibilities, dependencies, runtime flow, or target
+architecture.
+
+When a diagram is affected:
+
+* update it in the same change as the implementation or documentation change
+* keep it consistent with the current code and accepted ADRs
+* preserve the distinction between implemented architecture and future target direction
+* update both the canonical English document and its German `.de.md` counterpart
+
+Do not leave architecture diagrams stale when the surrounding prose is updated.
+
 ---
 
 ## Git
@@ -759,4 +774,5 @@ Before completing a task that changes documentation, verify:
 1. the English documentation is correct,
 2. the corresponding German `.de.md` exists when required by this policy,
 3. both versions describe the same technical state when a language pair is required,
-4. links and file references remain valid in both versions where applicable.
+4. links and file references remain valid in both versions where applicable,
+5. affected Mermaid diagrams are updated and technically consistent in both versions.
