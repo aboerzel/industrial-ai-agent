@@ -2,8 +2,9 @@
 
 ## Current Architecture
 
-The project currently implements its first deterministic vertical slice: retrieving
-the production history of a product.
+The project currently implements its first deterministic vertical slice, retrieving
+the production history of a product, and its first provider-independent LLM integration
+boundary. There is no agent loop yet.
 
 The implemented request flow is:
 
@@ -25,6 +26,28 @@ through the domain-owned repository abstraction, and returns a structured
 `ProductHistoryResult`. The deterministic demo data includes product `P4711`.
 
 Distributed services and AI frameworks are deliberately not part of this slice.
+
+The implemented LLM boundary is:
+
+```text
+Agent / Use Case
+    |
+    | semantic profile + LLMRequest
+    v
+LLMClient port
+    |
+    v
+OpenAICompatibleLLMClient
+    |
+    | profile configuration + credentials when required
+    v
+Configured OpenAI-compatible endpoint
+```
+
+`config/model_profiles.toml` currently maps `troubleshooting` to Ollama,
+`qwen3.5:9b`, `http://localhost:11434/v1`, and temperature `0`. This is the first local
+configuration, not a commitment to that provider or model. The profile mapping can be
+changed without changing agent or use-case code.
 
 ## Package Responsibilities
 
@@ -54,9 +77,11 @@ It returns a Pydantic `ProductHistoryResult`, including a structured not-found r
 
 ### `agent`
 
-Contains agent orchestration logic.
+Contains provider-independent LLM contracts and, later, agent orchestration logic.
 
-This package is not used by the current deterministic slice.
+The current implementation defines `LLMClient`, semantic `ModelProfile` selection, and
+small request and response models. It does not import the OpenAI SDK or name a concrete
+provider or model.
 
 Later responsibilities may include:
 
@@ -71,12 +96,20 @@ Later responsibilities may include:
 
 Contains technical integrations and external implementations.
 
-The current implementation is `InMemoryProductHistoryRepository`, which provides a
-small deterministic demo data set.
+The current implementations are `InMemoryProductHistoryRepository`, which provides a
+small deterministic demo data set, and `OpenAICompatibleLLMClient`, which translates
+the provider-independent LLM contract to an OpenAI-compatible Chat Completions API.
+
+Normal model settings and secret values are separate. Configuration explicitly marks a
+profile as unauthenticated or API-key authenticated. An authenticated profile stores
+only the name of the required environment variable; its credential value remains in
+the environment. The initial local Ollama profile is unauthenticated and requires no
+user-configured API key. The adapter encapsulates the non-secret technical placeholder
+required by the OpenAI SDK.
 
 Examples may later include:
 
-* LLM providers
+* additional LLM provider adapters when concrete requirements justify them
 * repositories
 * databases
 * MCP clients
@@ -109,3 +142,10 @@ MCP Multiplexer
 ```
 
 This is a target direction, not the current implementation.
+
+Model profiles such as `vision`, `planning`, or `evaluation` can be added through
+configuration when their capabilities are implemented. A non-OpenAI-compatible
+provider will require another infrastructure adapter behind the same `LLMClient` port;
+no speculative multi-provider router exists today. See
+[ADR-002](../decisions/ADR-002-provider-and-model-independent-llm-architecture.md) for
+the decision and its tradeoffs.

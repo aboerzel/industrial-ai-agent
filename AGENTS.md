@@ -97,6 +97,32 @@ Introduce frameworks only when their value is understood and justified.
 
 ---
 
+## Hexagonal Architecture Dependency Rules
+
+The system follows Hexagonal Architecture / Ports and Adapters. Dependencies point
+inward.
+
+* `domain` must not depend on `agent`, `tools`, `infrastructure`, provider SDKs,
+  transport schemas, databases, MCP, or web frameworks.
+* Application behavior currently in `agent` or `tools` must depend on inner ports and
+  Domain types, never concrete `infrastructure` implementations.
+* Ports belong to the Core and must not expose provider-, transport-, or
+  persistence-specific types.
+* `infrastructure` may depend on the Core and implements its ports; the Core must not
+  depend on `infrastructure`.
+* Translate external DTOs to internal models at adapter boundaries.
+* Wire concrete adapters only at a Composition Root through explicit dependency
+  injection. Do not hide Infrastructure construction in Domain, Application, `agent`,
+  or `tools`.
+* Check import direction and object construction for boundary violations during every
+  change.
+* Do not add ceremonial layers or directories. Introduce an explicit `application`
+  layer or `application/ports` only when growing use cases and ports justify it.
+
+See `docs/decisions/ADR-003-hexagonal-architecture.md`.
+
+---
+
 ## Agent Architecture Principles
 
 Use the LLM for judgment and decision-making.
@@ -116,6 +142,27 @@ Examples of deterministic responsibilities:
 * state persistence
 
 The LLM must never be treated as a trusted enforcement mechanism.
+
+---
+
+## LLM Provider and Model Independence
+
+Agents and use cases must depend on the provider-independent `LLMClient` port and
+select models through semantic Model Profiles such as `troubleshooting`.
+
+Do not place concrete provider names, model identifiers, endpoints, API keys, or
+provider SDK types in agent or use-case code.
+
+The mapping from Model Profiles to providers, models, and endpoints belongs in normal
+configuration. API-key values must come exclusively from environment variables.
+Unauthenticated local profiles must not require user-configured API keys; an
+Infrastructure adapter may encapsulate a non-secret SDK placeholder when technically
+necessary.
+
+Provider adapters belong to `infrastructure`. Add abstractions for multiple or
+non-OpenAI-compatible providers only when an implemented capability requires them.
+
+See `docs/decisions/ADR-002-provider-and-model-independent-llm-architecture.md`.
 
 ---
 
@@ -418,28 +465,148 @@ Examples:
 
 ## Architecture Decisions
 
-Important architectural decisions should be documented under:
+Important architectural decisions must be documented as Architecture Decision Records
+under:
 
 ```text
 docs/decisions/
 ```
 
-Use short ADR-style documents.
+ADRs capture decisions that establish long-lived architectural constraints or influence
+multiple future capabilities. They document not only what was decided, but also why the
+decision was made and which alternatives were considered.
 
-Examples:
+### When an ADR is Required
+
+Before introducing a significant architectural concept or changing an existing
+architectural boundary, determine whether the decision should be captured as an ADR.
+
+Create or update an ADR before implementation when a decision:
+
+* establishes a long-lived architectural constraint
+* introduces or changes an architectural pattern
+* introduces a significant subsystem or integration strategy
+* changes dependency boundaries or dependency direction
+* affects multiple current or future capabilities
+* defines an important cross-cutting concern
+* represents a significant trade-off between viable alternatives
+* changes or supersedes an existing architectural decision
+
+Examples include:
+
+* architectural layering and dependency rules
+* LLM provider and model abstraction
+* agent orchestration strategies
+* state, context, and memory architecture
+* retrieval / RAG architecture
+* MCP integration and routing
+* persistence strategies
+* evaluation architecture
+* observability architecture
+* authorization and human-approval boundaries
+
+### When an ADR is Not Required
+
+Do not create ADRs for:
+
+* ordinary implementation details
+* local refactorings that do not change architectural boundaries
+* naming decisions
+* minor library usage
+* temporary experiments
+* speculative architecture that is not yet required
+* decisions that are still exploratory and have not been validated sufficiently
+
+Avoid creating architecture merely to satisfy an ADR and avoid creating ADRs for
+hypothetical future complexity.
+
+### ADR Timing
+
+Prefer making and documenting architectural decisions just in time.
+
+The normal sequence is:
 
 ```text
-ADR-001-python-project-structure.md
-ADR-002-tool-design.md
-ADR-003-state-model.md
+Requirement / Problem
+        |
+        v
+Explore the smallest viable solution
+        |
+        v
+Identify a long-lived architectural decision
+        |
+        v
+Create or update the ADR
+        |
+        v
+Implement
+        |
+        v
+Validate through tests / evaluations
 ```
 
-An ADR should contain:
+For decisions that establish architectural boundaries before implementation, create the
+ADR before introducing the corresponding production code.
 
+For exploratory work, gather enough evidence first and record the decision once it is
+stable enough to become an architectural constraint.
+
+### ADR Content
+
+Use short, focused ADR-style documents.
+
+An ADR should normally contain:
+
+* Status
 * Context
 * Decision
-* Alternatives
+* Alternatives considered
 * Consequences
+
+Where useful, also document:
+
+* dependency rules
+* architectural boundaries
+* configuration implications
+* testing implications
+* security implications
+* migration or evolution considerations
+
+The ADR must describe the actual decision precisely enough that future implementation
+work can be checked against it.
+
+### ADR Consistency
+
+ADRs, the Architecture Overview, `AGENTS.md`, and the implementation must remain
+consistent.
+
+When implementing a change:
+
+1. Check whether an existing ADR governs the affected architecture.
+2. Do not silently violate or bypass an accepted ADR.
+3. If the intended implementation conflicts with an existing ADR, stop and make the
+   architectural conflict explicit before changing the implementation.
+4. Update or supersede the ADR when the architectural decision itself changes.
+5. Update the Architecture Overview when the current system structure or responsibilities
+   change.
+6. Add durable implementation rules to `AGENTS.md` when future coding agents must
+   consistently enforce them.
+
+An ADR is not a substitute for implementation documentation, and `AGENTS.md` is not a
+substitute for explaining architectural rationale in an ADR.
+
+### Current Architecture Decisions
+
+The currently accepted architecture decisions include:
+
+```text
+ADR-001  Project foundation
+ADR-002  Provider- and model-independent LLM architecture
+ADR-003  Hexagonal Architecture
+```
+
+Future ADRs should be introduced only when the corresponding architectural decision
+becomes necessary and sufficiently concrete.
 
 ---
 

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Industrial Agentic AI learning and portfolio project"
 requires-python = ">=3.12"
 dependencies = [
+    "openai>=1.0,<3.0",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
 ]
