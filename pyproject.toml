@@ -1,0 +1,20 @@
+[project]
+name = "industrial-ai-agent"
+version = "0.1.0"
+description = "Industrial Agentic AI learning and portfolio project"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
