@@ -21,9 +21,13 @@ through `MachineStatusCapability.get_machine_status(station_id)`. Both use inner
 repository ports with deterministic in-memory adapters. A provider-independent
 `LLMClient` port and one OpenAI-compatible infrastructure adapter are also available.
 Model selection uses the configured semantic profile `troubleshooting`.
-`TroubleshootingAgent` offers exactly the two known tools to the model, validates and
-dispatches at most one selected call in deterministic code, and asks the model to
-formulate the final answer. There is no general agent or ReAct loop.
+`TroubleshootingAgent` offers exactly the two known tools to the model and runs an
+explicit sequential tool loop. It validates and dispatches one call per LLM decision,
+preserves structured observations in the current conversation context, and allows at
+most three successfully executed tools per run. A final model answer returns structured
+`SUCCESS`; a further tool request after the third result returns `LIMIT_REACHED` without
+executing that call or invoking the LLM again. There is no agent framework, dynamic
+tool registry, persistent memory, or context compression.
 
 A first deterministic evaluation baseline measures the agent's initial LLM tool
 selection and argument extraction against twelve versioned cases. It does not execute
@@ -42,9 +46,10 @@ python scripts/smoke_test_ollama.py
 python scripts/smoke_test_troubleshooting_agent.py
 ```
 
-The first script verifies basic LLM connectivity. The second runs the complete
-tool-selection slice and verifies both `get_product_history` for product `P4711` and
-`get_machine_status` for station `S12`.
+The first script verifies basic LLM connectivity. The second runs a multi-step
+troubleshooting request and structurally verifies the sequential calls
+`get_product_history(P4711)` and `get_machine_status(S04)` before a successful final
+answer.
 
 ## Manual Tool Selection Eval
 

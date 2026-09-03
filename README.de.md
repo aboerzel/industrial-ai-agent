@@ -23,9 +23,13 @@ Repository-Ports mit deterministischen In-Memory-Adaptern. Zusätzlich stehen ei
 provider-unabhängiger `LLMClient`-Port und ein OpenAI-compatible Infrastructure Adapter
 bereit. Die Modellwahl verwendet das konfigurierte semantische Profil
 `troubleshooting`. `TroubleshootingAgent` bietet dem Modell genau die zwei bekannten
-Tools an, validiert und dispatcht höchstens einen ausgewählten Aufruf in
-deterministischem Code und lässt das Modell die finale Antwort formulieren. Ein
-allgemeiner Agent- oder ReAct-Loop existiert nicht.
+Tools an und führt einen expliziten sequenziellen Tool Loop aus. Er validiert und
+dispatcht einen Call pro LLM-Entscheidung, erhält strukturierte Observations im aktuellen
+Conversation Context und erlaubt höchstens drei erfolgreich ausgeführte Tools pro Run.
+Eine finale Modellantwort liefert strukturiertes `SUCCESS`; ein weiterer Tool-Wunsch
+nach dem dritten Result liefert `LIMIT_REACHED`, ohne diesen Call auszuführen oder das
+LLM erneut aufzurufen. Es existieren weder Agent-Framework, dynamische Tool Registry,
+persistentes Memory noch Context Compression.
 
 Eine erste deterministische Eval-Baseline misst die initiale LLM-Tool-Auswahl und
 Argumentextraktion des Agenten anhand von zwölf versionierten Fällen. Sie führt keine
@@ -45,9 +49,10 @@ python scripts/smoke_test_ollama.py
 python scripts/smoke_test_troubleshooting_agent.py
 ```
 
-Das erste Skript prüft die grundlegende LLM-Verbindung. Das zweite führt den
-vollständigen Tool-Selection-Slice aus und prüft sowohl `get_product_history` für das
-Produkt `P4711` als auch `get_machine_status` für die Station `S12`.
+Das erste Skript prüft die grundlegende LLM-Verbindung. Das zweite führt eine
+mehrstufige Troubleshooting-Anfrage aus und prüft strukturell die sequenziellen Calls
+`get_product_history(P4711)` und `get_machine_status(S04)` vor einer erfolgreichen
+finalen Antwort.
 
 ## Manueller Tool-Selection-Eval
 

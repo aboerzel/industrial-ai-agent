@@ -334,6 +334,5 @@ possible, while concrete model and parameter metadata provide run provenance.
 ADR-003 remains unchanged. Ports and dependency injection keep Core logic testable with
 fakes and stubs, and concrete Infrastructure adapters are verified separately.
 
-ADR-004 remains unchanged. Deterministic tests verify loop safeguards when the bounded
-tool loop is implemented, while the existing first-decision baseline and later
-multi-step evaluations measure model-dependent orchestration quality.
+ADR-004 defines deterministic orchestration safeguards that are verified with tests,
+while model-dependent orchestration choices are measured with structured evaluations.

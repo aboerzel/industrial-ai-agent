@@ -1,4 +1,14 @@
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from enum import StrEnum
+from typing import Self
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from industrial_ai_agent.agent.llm import (
     LLMClient,
@@ -14,6 +24,7 @@ from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 TROUBLESHOOTING_PROFILE = ModelProfile("troubleshooting")
+MAX_TOOL_CALLS = 3
 GET_PRODUCT_HISTORY_TOOL = LLMToolDefinition(
     name="get_product_history",
     description=(
@@ -55,8 +66,13 @@ _SYSTEM_MESSAGE = LLMMessage(
     content=(
         "You are an industrial troubleshooting assistant. Use get_product_history "
         "for questions about a product's production history and get_machine_status "
-        "for questions about a station's current operational status. Base the final "
-        "answer on the tool result and do not invent industrial data."
+        "for questions about a station's current operational status. Call one tool at "
+        "a time. After each tool result, decide whether another tool is needed or a "
+        "final answer is possible. When investigating a product failure and the "
+        "current status of its relevant station, first retrieve the product history, "
+        "then use the station ID from the failed step to retrieve the machine status. "
+        "Do not repeat a tool call whose result is already available. Base the final "
+        "answer on the collected tool results and do not invent industrial data."
     ),
 )
 
@@ -75,6 +91,32 @@ class ToolCallLimitExceededError(RuntimeError):
 
 class MissingLLMResponseTextError(RuntimeError):
     pass
+
+
+class AgentRunStatus(StrEnum):
+    SUCCESS = "SUCCESS"
+    LIMIT_REACHED = "LIMIT_REACHED"
+
+
+class AgentRunResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: AgentRunStatus
+    final_answer: str | None = None
+    tool_call_count: int = Field(ge=0, le=MAX_TOOL_CALLS)
+
+    @model_validator(mode="after")
+    def validate_status_fields(self) -> Self:
+        if self.status is AgentRunStatus.SUCCESS and self.final_answer is None:
+            raise ValueError("SUCCESS requires a final answer")
+        if self.status is AgentRunStatus.LIMIT_REACHED:
+            if self.final_answer is not None:
+                raise ValueError("LIMIT_REACHED cannot contain a final answer")
+            if self.tool_call_count != MAX_TOOL_CALLS:
+                raise ValueError(
+                    f"LIMIT_REACHED requires {MAX_TOOL_CALLS} executed tool calls"
+                )
+        return self
 
 
 class ProductHistoryToolArguments(BaseModel):
@@ -122,26 +164,36 @@ class TroubleshootingAgent:
         user_message = _create_user_message(user_request)
         return self._request_tool_selection(user_message)
 
-    def answer(self, user_request: str) -> str:
+    def answer(self, user_request: str) -> AgentRunResult:
         user_message = _create_user_message(user_request)
-        initial_response = self._request_tool_selection(user_message)
+        messages = [_SYSTEM_MESSAGE, user_message]
+        executed_tool_calls = 0
 
-        if not initial_response.tool_calls:
-            return _require_response_text(initial_response)
-        if len(initial_response.tool_calls) > 1:
-            raise ToolCallLimitExceededError("At most one tool call is allowed")
+        while True:
+            response = self._request_decision(tuple(messages))
+            if not response.tool_calls:
+                return AgentRunResult(
+                    status=AgentRunStatus.SUCCESS,
+                    final_answer=_require_response_text(response),
+                    tool_call_count=executed_tool_calls,
+                )
+            if len(response.tool_calls) > 1:
+                raise ToolCallLimitExceededError(
+                    "At most one tool call per LLM response is allowed"
+                )
+            if executed_tool_calls == MAX_TOOL_CALLS:
+                return AgentRunResult(
+                    status=AgentRunStatus.LIMIT_REACHED,
+                    tool_call_count=executed_tool_calls,
+                )
 
-        tool_call = initial_response.tool_calls[0]
-        tool_result = self._dispatch_tool_call(tool_call)
-        final_response = self._llm_client.chat(
-            self._model_profile,
-            LLMRequest(
-                messages=(
-                    _SYSTEM_MESSAGE,
-                    user_message,
+            tool_call = response.tool_calls[0]
+            tool_result = self._dispatch_tool_call(tool_call)
+            messages.extend(
+                (
                     LLMMessage(
                         role=MessageRole.ASSISTANT,
-                        content=initial_response.text,
+                        content=response.text,
                         tool_calls=(tool_call,),
                     ),
                     LLMMessage(
@@ -149,20 +201,18 @@ class TroubleshootingAgent:
                         content=tool_result,
                         tool_call_id=tool_call.id,
                     ),
-                ),
-            ),
-        )
-        if final_response.tool_calls:
-            raise ToolCallLimitExceededError(
-                "The final response must not request another tool call"
+                )
             )
-        return _require_response_text(final_response)
+            executed_tool_calls += 1
 
     def _request_tool_selection(self, user_message: LLMMessage) -> LLMResponse:
+        return self._request_decision((_SYSTEM_MESSAGE, user_message))
+
+    def _request_decision(self, messages: tuple[LLMMessage, ...]) -> LLMResponse:
         return self._llm_client.chat(
             self._model_profile,
             LLMRequest(
-                messages=(_SYSTEM_MESSAGE, user_message),
+                messages=messages,
                 tools=(GET_PRODUCT_HISTORY_TOOL, GET_MACHINE_STATUS_TOOL),
             ),
         )

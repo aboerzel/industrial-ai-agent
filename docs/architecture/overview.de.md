@@ -3,10 +3,10 @@
 ## Aktuelle Architektur
 
 Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des aktuellen
-Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen begrenzten
-Slice zur Auswahl zwischen zwei Tools. Eine kleine deterministische Baseline evaluiert
-die erste LLM-Tool-Entscheidung. Ein allgemeiner Agent, ReAct-Loop oder ein
-Eval-Framework existiert nicht.
+Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen expliziten
+begrenzten Single-Agent Tool Loop über zwei Tools. Eine kleine deterministische Baseline
+evaluiert die erste LLM-Tool-Entscheidung. Es existieren weder Agent-Framework,
+dynamische Tool Registry, persistentes Agent Memory noch allgemeines Eval-Framework.
 
 Der implementierte Request Flow ist:
 
@@ -88,42 +88,42 @@ Profilzuordnung kann geändert werden, ohne Agent- oder Use-Case-Code anzupassen
 Der implementierte Tool-Calling-Ablauf ist:
 
 ```mermaid
-sequenceDiagram
-    actor User
-    participant Agent as TroubleshootingAgent
-    participant LLM as LLMClient<br/>(troubleshooting profile)
-    participant Product as ProductHistoryCapability
-    participant Machine as MachineStatusCapability
+flowchart TD
+    Start["Benutzeranfrage + genau zwei Tool-Definitionen"] --> Decide["LLM-Entscheidung<br/>troubleshooting Model Profile"]
+    Decide --> Shape{"Form der Response"}
+    Shape -->|"finaler Text"| Success["AgentRunResult<br/>SUCCESS + finale Antwort"]
+    Shape -->|"mehrere oder ungültige Calls"| Invalid["Deterministischer Fehler"]
+    Shape -->|"genau ein Tool Call"| Budget{"Bereits 3 Tools ausgeführt?"}
+    Budget -->|"ja"| Limit["AgentRunResult<br/>LIMIT_REACHED<br/>Call nicht ausgeführt"]
+    Budget -->|"nein"| Validate["Bekannten Namen und<br/>toolspezifische Argumente validieren"]
+    Validate -->|"ungültig"| Invalid
+    Validate -->|"gültig"| Dispatch["Fester Dispatch<br/>eine Capability ausführen"]
+    Dispatch --> Observe["Assistant Tool Call und<br/>strukturiertes Tool Result anhängen"]
+    Observe --> Count["Zähler ausgeführter Tools erhöhen"]
+    Count --> Decide
 
-    User->>Agent: Natürlichsprachige Anfrage
-    Agent->>LLM: LLMRequest + genau zwei Tool-Definitionen
-
-    alt Direkte Antwort
-        LLM-->>Agent: Antworttext ohne Tool Call
-    else Ein Tool Call
-        LLM-->>Agent: LLMToolCall
-        Note over Agent: Anzahl, Tool-Name und toolspezifische<br/>Argumente deterministisch validieren
-        alt get_product_history
-            Agent->>Product: get_product_history(product_id)
-            Product-->>Agent: ProductHistoryResult
-        else get_machine_status
-            Agent->>Machine: get_machine_status(station_id)
-            Machine-->>Agent: MachineStatusResult
-        end
-        Agent->>LLM: Strukturiertes Tool Result, keine Tools angeboten
-        LLM-->>Agent: Finaler Antworttext
-    end
-
-    Agent-->>User: Finale Antwort
+    classDef llm fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef deterministic fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef success fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class Decide,Shape llm
+    class Start,Budget,Validate,Dispatch,Observe,Count deterministic
+    class Success success
+    class Invalid,Limit failure
 ```
 
 Das LLM entscheidet, ob es `get_product_history` oder `get_machine_status` anfordert
 oder direkt antwortet, und formuliert die finale Antwort. Deterministischer Python-Code
-validiert den ausgewählten Namen gegen diese zwei bekannten Tools, validiert die
-toolspezifische `product_id` oder `station_id`, lehnt mehr als einen Tool Call ab,
-dispatcht fest an die entsprechende Capability und serialisiert deren strukturiertes
-Ergebnis. Nach einem Tool Call werden dem finalen LLM Request keine Tools angeboten;
-ein weiterer zurückgegebener Tool Call wird abgelehnt, statt einen Loop zu starten.
+validiert einen ausgewählten Call pro Response, validiert die toolspezifische
+`product_id` oder `station_id`, verwendet einen festen Dispatch, serialisiert jedes
+strukturierte Result und erhält den vollständigen Message Context des aktuellen Runs.
+Beide Tools bleiben bei jedem Entscheidungsschritt verfügbar.
+
+`MAX_TOOL_CALLS = 3` zählt erfolgreich ausgeführte Tools statt LLM Requests. Nach der
+dritten Observation ist genau eine finale LLM-Entscheidung erlaubt. Finaler Text ergibt
+`SUCCESS`; ein weiterer angeforderter Call ergibt `LIMIT_REACHED`, wird nicht ausgeführt
+und führt zu keinem weiteren LLM Request. Unbekannte Tools, ungültige Argumente und
+mehrere Calls in einer Response bleiben deterministische Fehler.
 
 ## Baseline für die Tool-Selection-Evaluation
 
@@ -233,23 +233,21 @@ einschließlich strukturierter Not-found-Ergebnisse.
 
 ### `agent`
 
-Enthält provider-unabhängige LLM-Verträge und später Agenten-Orchestrierungslogik.
+Enthält provider-unabhängige LLM-Verträge und Agenten-Orchestrierungslogik.
 
 Die aktuelle Implementierung definiert `LLMClient`, die Auswahl über semantische
 `ModelProfile`, kleine Request- und Response-Modelle sowie `TroubleshootingAgent`. Der
-Agent enthält die begrenzte Orchestrierung und den festen Zwei-Tool-Dispatch. Er
-importiert weder das OpenAI-SDK noch benennt er einen konkreten Provider oder ein
-konkretes Modell. ADR-004 akzeptiert einen begrenzten sequenziellen Tool Loop als
-nächste Orchestrierungsstufe; dieser Loop ist jedoch noch nicht implementiert.
+Agent enthält den expliziten begrenzten sequenziellen Loop und den festen
+Zwei-Tool-Dispatch. `AgentRunResult` unterscheidet `SUCCESS` von `LIMIT_REACHED` und gibt
+die Anzahl ausgeführter Tools an. Der Agent importiert weder das OpenAI-SDK noch benennt
+er einen konkreten Provider oder ein konkretes Modell.
 
-Spätere Verantwortlichkeiten können Folgendes umfassen:
+Mögliche spätere Verantwortlichkeiten sind:
 
-* tool selection
-* agent loop
-* state
-* context construction
-* routing
-* execution limits
+* persistenter Agent State
+* Context Compression
+* umfangreicheres Routing
+* Integration von Policies und Guardrails
 
 ### `infrastructure`
 
@@ -287,46 +285,6 @@ Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert werden.
 ## Weiterentwicklung
 
 Die Architektur sollte nur dann weiterentwickelt werden, wenn implementierte Fähigkeiten dies erfordern.
-
-### Akzeptierter nächster Schritt: Begrenzter Tool Loop
-
-[ADR-004](../decisions/ADR-004-agent-orchestration-strategy.de.md) akzeptiert einen
-expliziten, begrenzten und sequenziellen Single-Agent Tool Loop als nächste
-Orchestrierungsstrategie. Dies ist eine akzeptierte Richtung und nicht die aktuelle
-Implementierung: Das Produktionsverhalten erlaubt weiterhin höchstens einen Tool Call
-pro Run.
-
-```mermaid
-flowchart TD
-    Context["Benutzeranfrage + Observations dieses Runs"] --> LLM["LLM-Entscheidung<br/>LLMClient + semantisches Model Profile"]
-    LLM --> Choice{"Finale Antwort oder ein Tool Call?"}
-    Choice -->|"finale Antwort"| Done["Erfolgreich terminieren"]
-    Choice -->|"ein Tool Call"| Validate["Deterministische Namens- und Argumentvalidierung"]
-    Choice -->|"ungültige oder mehrere Calls"| Invalid["Mit deterministischem Fehler beenden"]
-    Validate -->|"ungültig"| Invalid
-    Validate -->|"gültig"| Budget{"Tool-Call-Budget verbleibt?"}
-    Budget -->|"nein"| Limit["Nicht ausführen<br/>mit Limitfehler beenden"]
-    Budget -->|"ja"| Execute["Deterministischer Dispatch und sequenzielle Ausführung"]
-    Execute --> Observe["Strukturiertes Result als Observation anhängen"]
-    Observe --> Context
-
-    classDef llm fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
-    classDef deterministic fill:#e8f1ff,stroke:#2563eb,color:#172554
-    classDef terminal fill:#ecfdf5,stroke:#059669,color:#022c22
-    classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    class LLM,Choice llm
-    class Context,Validate,Budget,Execute,Observe deterministic
-    class Done terminal
-    class Invalid,Limit failure
-```
-
-Das Modell entscheidet, ob weitere Informationen benötigt werden. Python-Code bleibt
-für Validierung, Dispatch, Ausführung, das endliche positive Tool-Call-Limit und alle
-Abbruchbedingungen verantwortlich. Calls werden sequenziell mit höchstens einem Call
-pro Iteration ausgeführt. Die erste Version besitzt weder parallele Ausführung,
-Planner/Executor, ein Multi-Agent-System, LangGraph noch MCP als Voraussetzung. Die
-bestehende Eval-Baseline für die erste Entscheidung bleibt als Regression-Vergleich
-erhalten.
 
 Mögliche spätere Stufen sind:
 

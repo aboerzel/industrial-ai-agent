@@ -6,13 +6,14 @@ Angenommen
 
 ## Kontext
 
-Der aktuelle `TroubleshootingAgent` kann das LLM nach einem Tool Call fragen, diesen Call
-ausführen und eine finale Antwort anfordern. Das genügt für isolierte Fragen zur
-Produktionshistorie oder zum Maschinenstatus. Realistisches Troubleshooting benötigt
-jedoch häufig mehrere voneinander abhängige Observations. Beispielsweise kann bei einem
-Produktfehler zunächst die Produktionshistorie und danach der aktuelle Zustand der dort
-fehlgeschlagenen Station benötigt werden. Die zweite Entscheidung hängt von den
-Informationen des ersten Tools ab.
+Bevor diese Entscheidung implementiert wurde, konnte `TroubleshootingAgent` das LLM nach
+einem Tool Call fragen, diesen Call ausführen und eine finale Antwort anfordern. Das
+genügte für isolierte Fragen zur Produktionshistorie oder zum Maschinenstatus.
+Realistisches Troubleshooting benötigt jedoch häufig mehrere voneinander abhängige
+Observations. Beispielsweise kann bei einem Produktfehler zunächst die
+Produktionshistorie und danach der aktuelle Zustand der dort fehlgeschlagenen Station
+benötigt werden. Die zweite Entscheidung hängt von den Informationen des ersten Tools
+ab.
 
 Das Projekt benötigt vor der Implementierung dieses Verhaltens eine
 Orchestrierungsstrategie. Sie muss den Lernwert sichtbarer Agent-Mechanik,
@@ -22,8 +23,8 @@ als Voraussetzung einzuführen.
 
 ## Entscheidung
 
-Der `TroubleshootingAgent` wird zunächst einen expliziten, begrenzten und sequenziellen
-Single-Agent Tool Loop verwenden, der in Python implementiert wird.
+Der `TroubleshootingAgent` verwendet einen expliziten, begrenzten und sequenziellen
+Single-Agent Tool Loop, der in Python implementiert ist.
 
 In jeder Iteration erhält das LLM die Benutzeranfrage sowie die zuvor im selben Run
 gesammelten Tool Calls und strukturierten Tool Results. Anhand dieses Kontexts wählt es
@@ -42,13 +43,13 @@ oder die Terminierungsregeln kontrollieren.
 flowchart TD
     Start["Benutzeranfrage + verfügbare Tools"] --> LLM["LLM-Entscheidung<br/>über LLMClient und Model Profile"]
     LLM --> Decision{"Form der Response"}
-    Decision -->|"finaler Text, kein Tool Call"| Final["Finale Antwort zurückgeben"]
-    Decision -->|"genau ein Tool Call"| Validate["Tool-Name und Argumente validieren"]
+    Decision -->|"finaler Text, kein Tool Call"| Final["SUCCESS<br/>finale Antwort zurückgeben"]
+    Decision -->|"genau ein Tool Call"| Limit{"Weniger als 3 Tools ausgeführt?"}
     Decision -->|"mehrere Calls oder ungültige Response"| Invalid["Mit deterministischem Fehler beenden"]
+    Limit -->|"nein"| Exhausted["LIMIT_REACHED<br/>angeforderten Call nicht ausführen"]
+    Limit -->|"ja"| Validate["Tool-Name und Argumente validieren"]
     Validate -->|"ungültig"| Invalid
-    Validate -->|"gültig"| Limit{"Tool-Call-Budget verfügbar?"}
-    Limit -->|"nein"| Exhausted["Mit explizitem Limitfehler beenden<br/>Call nicht ausführen"]
-    Limit -->|"ja"| Dispatch["Deterministischer Dispatch und Ausführung"]
+    Validate -->|"gültig"| Dispatch["Deterministischer Dispatch und Ausführung"]
     Dispatch --> Observation["Strukturiertes Tool Result als Observation anhängen"]
     Observation --> LLM
 
@@ -64,23 +65,34 @@ flowchart TD
 
 ### Begrenzung und Terminierung des Loops
 
-Jeder Run besitzt einen endlichen, positiven `max_tool_calls`-Wert, der durch
-Application-Konfiguration oder die Composition Root gewählt wird. Einen unbegrenzten
-Modus gibt es nicht. Die Orchestrierung prüft das verbleibende Budget vor jeder
-Ausführung und erhöht den Zähler nur für einen akzeptierten Tool Call, den sie ausführt.
+Die erste Implementierung definiert `MAX_TOOL_CALLS = 3` an einer klar sichtbaren Stelle
+im deterministischen Application Core. Das Limit zählt akzeptierte und erfolgreich
+ausgeführte Tools, nicht LLM Requests. Ein Run darf daher null bis drei Tool Calls
+ausführen. Einen unbegrenzten Modus gibt es nicht.
 
-Der Run endet sofort, wenn das Modell finalen Text ohne Tool Call zurückgibt. Fordert das
-Modell nach ausgeschöpftem Budget einen weiteren Call an, wird dieser nicht ausgeführt
-und der Run endet mit einem expliziten Limitfehler oder typisierten Fehlerergebnis. Der
-Agent lässt das Modell das Limit nicht überschreiben und synthetisiert keine
-unbegründete Teilantwort. Eine Response mit mehreren Tool Calls wird abgelehnt;
-parallele Tool-Ausführung wird in der ersten Version nicht unterstützt. Eine Response
-ohne verwendbaren finalen Text und ohne gültigen Tool Call gilt als ungültig und beendet
-den Run mit einem deterministischen Fehler.
+Der Run endet sofort, wenn das Modell finalen Text ohne Tool Call zurückgibt. Nach jedem
+erfolgreich ausgeführten Tool, einschließlich des dritten, darf das Modell anhand der
+neuen Observation genau eine nächste Entscheidung treffen. Die Entscheidung nach dem
+dritten Tool ist der letzte zulässige LLM Request des Runs. Enthält sie finalen Text ohne
+Tool Call, endet der Run mit `SUCCESS`. Fordert sie einen weiteren Tool Call an, endet
+der Run mit `LIMIT_REACHED`; dieser vierte Call wird weder für den Dispatch validiert
+noch ausgeführt und es erfolgt kein weiterer LLM Request. Der Agent lässt das Modell das
+Limit nicht überschreiben und synthetisiert keine unbegründete Teilantwort.
 
-Unbekannte Tool-Namen und ungültige Argumente werden vor dem Dispatch abgelehnt. Sie
-erreichen niemals eine Capability oder ein externes System. Authorization und spätere
-Safety Policies bleiben deterministische Prüfungen außerhalb der LLM-Entscheidung.
+Eine Response mit mehreren Tool Calls wird abgelehnt; parallele Tool-Ausführung wird in
+der ersten Version nicht unterstützt. Eine Response ohne verwendbaren finalen Text und
+ohne gültigen Tool Call gilt als ungültig und beendet den Run mit einem deterministischen
+Fehler. Unbekannte Tool-Namen und ungültige Argumente werden bei vorhandenem
+Ausführungsbudget vor dem Dispatch abgelehnt. Sie erreichen niemals eine Capability
+oder ein externes System.
+
+Das öffentliche Agent-Run-Ergebnis bleibt bewusst klein. Es unterscheidet `SUCCESS`, das
+die finale Modellantwort enthält, von `LIMIT_REACHED`, das als strukturierter Status
+erkennbar ist und nicht wie eine normale finale Antwort erscheinen darf. Zusätzlich
+wird die Anzahl ausgeführter Tools angegeben. Andere bestehende deterministische
+Validierungsfehler verwenden weiterhin fokussierte Exceptions; es wird keine allgemeine
+Agent-Fehlerhierarchie eingeführt. Authorization und spätere Safety Policies bleiben
+deterministische Prüfungen außerhalb der LLM-Entscheidung.
 
 ### Observations und Context
 
@@ -121,6 +133,9 @@ mehrstufige Datasets ergänzen und unterschiedliche Orchestrierungsstrategien an
 deterministischer Metriken wie Task Success, Tool-Sequenz, Argument Accuracy,
 Limit-Einhaltung und unnötigen Calls vergleichen. Dieses ADR ermöglicht solche
 Vergleiche, definiert oder implementiert aber kein allgemeines Eval-Framework.
+Gemäß ADR-005 werden deterministische Loop-Garantien mit Unit Tests und Fake-LLM-
+Responses geprüft, während reale Modellurteile Gegenstand versionierter Evaluationen
+bleiben.
 
 ## Alternativen
 
@@ -193,3 +208,8 @@ begrenzt.
 ADR-003 bleibt unverändert: Der Loop gehört zum Application Core, arbeitet über innere
 Ports und Capabilities und erhält konkrete Adapter per Dependency Injection. Die
 Dependency-Richtung ändert sich nicht.
+
+ADR-005 trennt deterministische Tests von modellabhängigen Evaluationen. Validierung,
+Dispatch, Zähler, Context-Aufbau, Result Status und Terminierungsregeln des Loops sind
+deterministische Testziele; das bestehende Dataset für die erste Entscheidung misst
+weiterhin LLM-Tool-Auswahl und Argumentextraktion.

@@ -3,9 +3,10 @@
 ## Current Architecture
 
 The project currently implements product-history retrieval, current machine-status
-retrieval, a provider-independent LLM integration boundary, and one bounded
-two-tool-selection slice. A small deterministic baseline evaluates the first LLM tool
-decision. There is no general agent, ReAct loop, or evaluation framework.
+retrieval, a provider-independent LLM integration boundary, and an explicit bounded
+single-agent loop over two tools. A small deterministic baseline evaluates the first
+LLM tool decision. There is no agent framework, dynamic tool registry, persistent agent
+memory, or general evaluation framework.
 
 The implemented request flow is:
 
@@ -87,42 +88,42 @@ changed without changing agent or use-case code.
 The implemented tool-calling flow is:
 
 ```mermaid
-sequenceDiagram
-    actor User
-    participant Agent as TroubleshootingAgent
-    participant LLM as LLMClient<br/>(troubleshooting profile)
-    participant Product as ProductHistoryCapability
-    participant Machine as MachineStatusCapability
+flowchart TD
+    Start["User request + exactly two tool definitions"] --> Decide["LLM decision<br/>troubleshooting Model Profile"]
+    Decide --> Shape{"Response shape"}
+    Shape -->|"final text"| Success["AgentRunResult<br/>SUCCESS + final answer"]
+    Shape -->|"multiple or malformed calls"| Invalid["Deterministic error"]
+    Shape -->|"exactly one tool call"| Budget{"3 tools already executed?"}
+    Budget -->|"yes"| Limit["AgentRunResult<br/>LIMIT_REACHED<br/>call not executed"]
+    Budget -->|"no"| Validate["Validate known name<br/>and tool-specific arguments"]
+    Validate -->|"invalid"| Invalid
+    Validate -->|"valid"| Dispatch["Fixed dispatch<br/>execute one capability"]
+    Dispatch --> Observe["Append assistant tool call<br/>and structured tool result"]
+    Observe --> Count["Increment executed-tool count"]
+    Count --> Decide
 
-    User->>Agent: Natural-language request
-    Agent->>LLM: LLMRequest + exactly two tool definitions
-
-    alt Direct answer
-        LLM-->>Agent: Response text without a tool call
-    else One tool call
-        LLM-->>Agent: LLMToolCall
-        Note over Agent: Deterministically validate call count,<br/>tool name, and tool-specific arguments
-        alt get_product_history
-            Agent->>Product: get_product_history(product_id)
-            Product-->>Agent: ProductHistoryResult
-        else get_machine_status
-            Agent->>Machine: get_machine_status(station_id)
-            Machine-->>Agent: MachineStatusResult
-        end
-        Agent->>LLM: Structured tool result, no tools offered
-        LLM-->>Agent: Final response text
-    end
-
-    Agent-->>User: Final answer
+    classDef llm fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef deterministic fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef success fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class Decide,Shape llm
+    class Start,Budget,Validate,Dispatch,Observe,Count deterministic
+    class Success success
+    class Invalid,Limit failure
 ```
 
 The LLM chooses whether to request `get_product_history`, request
 `get_machine_status`, or answer directly, and it formulates the final answer.
-Deterministic Python code validates the selected name against those two known tools,
-validates the tool-specific `product_id` or `station_id`, rejects more than one tool
-call, uses a fixed dispatch to the corresponding capability, and serializes its
-structured result. After one tool call, no tools are offered to the final LLM request;
-a further returned tool call is rejected rather than starting a loop.
+Deterministic Python code validates one selected call per response, validates the
+tool-specific `product_id` or `station_id`, uses a fixed dispatch, serializes each
+structured result, and keeps the complete current-run message context. Both tools remain
+available at every decision step.
+
+`MAX_TOOL_CALLS = 3` counts successfully executed tools rather than LLM requests. After
+the third observation, exactly one final LLM decision is allowed. Final text returns
+`SUCCESS`; another requested call returns `LIMIT_REACHED`, is not executed, and causes
+no further LLM request. Unknown tools, invalid arguments, and multiple calls in one
+response remain deterministic failures.
 
 ## Tool Selection Evaluation Baseline
 
@@ -229,22 +230,20 @@ results.
 
 ### `agent`
 
-Contains provider-independent LLM contracts and, later, agent orchestration logic.
+Contains provider-independent LLM contracts and agent orchestration logic.
 
 The current implementation defines `LLMClient`, semantic `ModelProfile` selection,
 small request and response models, and `TroubleshootingAgent`. The agent contains the
-bounded orchestration and fixed two-tool dispatch. It does not import the OpenAI SDK or
-name a concrete provider or model. ADR-004 accepts a bounded sequential tool loop as the
-next orchestration stage, but that loop is not implemented yet.
+explicit bounded sequential loop and fixed two-tool dispatch. `AgentRunResult`
+distinguishes `SUCCESS` from `LIMIT_REACHED` and reports the executed-tool count. The
+agent does not import the OpenAI SDK or name a concrete provider or model.
 
-Later responsibilities may include:
+Possible later responsibilities include:
 
-* tool selection
-* agent loop
-* state
-* context construction
-* routing
-* execution limits
+* persistent agent state
+* context compression
+* richer routing
+* policy and guardrail integration
 
 ### `infrastructure`
 
@@ -281,44 +280,6 @@ directory unless deliberately curated.
 ## Evolution
 
 The architecture should evolve only when required by implemented capabilities.
-
-### Accepted Next Step: Bounded Tool Loop
-
-[ADR-004](../decisions/ADR-004-agent-orchestration-strategy.md) accepts an explicit,
-bounded, sequential single-agent tool loop as the next orchestration strategy. This is
-an accepted direction, not the current implementation: production behavior still
-permits at most one tool call per run.
-
-```mermaid
-flowchart TD
-    Context["User request + observations from this run"] --> LLM["LLM decision<br/>LLMClient + semantic Model Profile"]
-    LLM --> Choice{"Final answer or one tool call?"}
-    Choice -->|"final answer"| Done["Terminate successfully"]
-    Choice -->|"one tool call"| Validate["Deterministic name and argument validation"]
-    Choice -->|"invalid or multiple calls"| Invalid["Terminate with deterministic error"]
-    Validate -->|"invalid"| Invalid
-    Validate -->|"valid"| Budget{"Tool-call budget remains?"}
-    Budget -->|"no"| Limit["Do not execute<br/>terminate with limit failure"]
-    Budget -->|"yes"| Execute["Deterministic dispatch and sequential execution"]
-    Execute --> Observe["Append structured result as observation"]
-    Observe --> Context
-
-    classDef llm fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
-    classDef deterministic fill:#e8f1ff,stroke:#2563eb,color:#172554
-    classDef terminal fill:#ecfdf5,stroke:#059669,color:#022c22
-    classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    class LLM,Choice llm
-    class Context,Validate,Budget,Execute,Observe deterministic
-    class Done terminal
-    class Invalid,Limit failure
-```
-
-The model decides whether more information is needed. Python code continues to own
-validation, dispatch, execution, the finite positive tool-call limit, and every
-termination condition. Calls are sequential, with at most one call per iteration. The
-first version has no parallel execution, Planner/Executor, multi-agent system,
-LangGraph, or MCP prerequisite. The existing first-decision eval baseline remains a
-regression comparison point.
 
 Possible later stages include:
 

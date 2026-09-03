@@ -147,16 +147,13 @@ The LLM must never be treated as a trusted enforcement mechanism.
 
 ## Troubleshooting Agent Orchestration
 
-The accepted next orchestration strategy is an explicit, bounded, sequential
-single-agent tool loop implemented in Python. Until that loop is implemented, keep the
-current single-tool-call behavior documented as the actual runtime state.
+Changes to troubleshooting orchestration must follow the explicit, bounded, sequential
+single-agent tool-loop strategy defined by ADR-004 unless a new ADR supersedes it.
 
 For the bounded loop:
 
 * the LLM decides between one next tool call and a final answer using prior observations
 * deterministic code owns validation, dispatch, execution, limits, and termination
-* every run has a finite positive tool-call limit; a call requested after exhaustion is
-  not executed and terminates with an explicit deterministic limit failure
 * execute at most one tool call per iteration and do not add parallel execution,
   Planner/Executor, multi-agent orchestration, or an agent framework without a new or
   superseding architecture decision

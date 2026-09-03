@@ -354,7 +354,6 @@ Provenienz eines Runs bereitstellen.
 ADR-003 bleibt unverändert. Ports und Dependency Injection halten Core-Logik mit Fakes
 und Stubs testbar; konkrete Infrastructure Adapter werden getrennt geprüft.
 
-ADR-004 bleibt unverändert. Deterministische Tests prüfen die Loop-Schutzmechanismen,
-sobald der begrenzte Tool Loop implementiert wird, während die bestehende Baseline für
-die erste Entscheidung und spätere mehrstufige Evaluationen die modellabhängige
-Orchestrierungsqualität messen.
+ADR-004 definiert deterministische Orchestrierungs-Schutzmechanismen, die mit Tests
+geprüft werden, während modellabhängige Orchestrierungsentscheidungen mit strukturierten
+Evaluationen gemessen werden.

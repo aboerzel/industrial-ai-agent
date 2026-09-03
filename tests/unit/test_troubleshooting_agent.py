@@ -8,9 +8,12 @@ from industrial_ai_agent.agent.llm import (
     LLMRequest,
     LLMResponse,
     LLMToolCall,
+    MessageRole,
     ModelProfile,
 )
 from industrial_ai_agent.agent.troubleshooting_agent import (
+    MAX_TOOL_CALLS,
+    AgentRunStatus,
     InvalidToolArgumentsError,
     ToolCallLimitExceededError,
     TroubleshootingAgent,
@@ -151,9 +154,11 @@ def test_product_question_executes_product_history_and_returns_final_answer() ->
     )
     agent, product_repository, machine_repository = create_agent(llm_client)
 
-    answer = agent.answer("Why was product P4711 rejected?")
+    result = agent.answer("Why was product P4711 rejected?")
 
-    assert answer == "P4711 failed at S04 with E-STOP-17."
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.final_answer == "P4711 failed at S04 with E-STOP-17."
+    assert result.tool_call_count == 1
     assert product_repository.requested_product_ids == [ProductId("P4711")]
     assert machine_repository.requested_station_ids == []
     assert len(llm_client.requests) == 2
@@ -170,7 +175,10 @@ def test_product_question_executes_product_history_and_returns_final_answer() ->
     assert initial_request.tools[0].parameters["required"] == ["product_id"]
 
     follow_up_request = llm_client.requests[1][1]
-    assert follow_up_request.tools == ()
+    assert [tool.name for tool in follow_up_request.tools] == [
+        "get_product_history",
+        "get_machine_status",
+    ]
     assert follow_up_request.messages[-2].tool_calls == (requested_tool_call,)
     assert follow_up_request.messages[-1].tool_call_id == "call-1"
     tool_result = json.loads(follow_up_request.messages[-1].content or "")
@@ -190,9 +198,11 @@ def test_station_question_executes_machine_status_with_correct_station_id() -> N
     )
     agent, product_repository, machine_repository = create_agent(llm_client)
 
-    answer = agent.answer("What is the current status of station S04?")
+    result = agent.answer("What is the current status of station S04?")
 
-    assert answer == "Station S04 is faulted with E-STOP-17."
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.final_answer == "Station S04 is faulted with E-STOP-17."
+    assert result.tool_call_count == 1
     assert product_repository.requested_product_ids == []
     assert machine_repository.requested_station_ids == [StationId("S04")]
 
@@ -229,9 +239,11 @@ def test_unknown_station_returns_structured_not_found_result_to_llm() -> None:
     )
     agent, _, machine_repository = create_agent(llm_client)
 
-    answer = agent.answer("What is the current status of station S99?")
+    result = agent.answer("What is the current status of station S99?")
 
-    assert answer == "No current status is available for station S99."
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.final_answer == "No current status is available for station S99."
+    assert result.tool_call_count == 1
     assert machine_repository.requested_station_ids == [StationId("S99")]
     tool_result = json.loads(llm_client.requests[1][1].messages[-1].content or "")
     assert tool_result == {
@@ -246,9 +258,11 @@ def test_returns_direct_answer_without_tool_call() -> None:
     llm_client = FakeLLMClient(final_response("Please provide an identifier."))
     agent, product_repository, machine_repository = create_agent(llm_client)
 
-    answer = agent.answer("Can you help me?")
+    result = agent.answer("Can you help me?")
 
-    assert answer == "Please provide an identifier."
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.final_answer == "Please provide an identifier."
+    assert result.tool_call_count == 0
     assert product_repository.requested_product_ids == []
     assert machine_repository.requested_station_ids == []
     assert len(llm_client.requests) == 1
@@ -310,14 +324,67 @@ def test_rejects_multiple_tool_calls_before_execution() -> None:
     )
     agent, product_repository, machine_repository = create_agent(llm_client)
 
-    with pytest.raises(ToolCallLimitExceededError, match="At most one tool call"):
+    with pytest.raises(
+        ToolCallLimitExceededError,
+        match="At most one tool call per LLM response",
+    ):
         agent.answer("Inspect P4711 and S04")
 
     assert product_repository.requested_product_ids == []
     assert machine_repository.requested_station_ids == []
 
 
-def test_rejects_second_tool_call_instead_of_starting_a_loop() -> None:
+def test_executes_two_sequential_tool_calls_and_preserves_observations() -> None:
+    product_call = tool_call(call_id="call-product")
+    machine_call = tool_call(
+        name="get_machine_status",
+        arguments={"station_id": "S04"},
+        call_id="call-machine",
+    )
+    llm_client = FakeLLMClient(
+        tool_response(product_call),
+        tool_response(machine_call),
+        final_response("P4711 failed at S04, which is currently faulted."),
+    )
+    agent, product_repository, machine_repository = create_agent(llm_client)
+
+    result = agent.answer("Investigate P4711 and check the relevant station.")
+
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.final_answer == "P4711 failed at S04, which is currently faulted."
+    assert result.tool_call_count == 2
+    assert product_repository.requested_product_ids == [ProductId("P4711")]
+    assert machine_repository.requested_station_ids == [StationId("S04")]
+    assert len(llm_client.requests) == 3
+
+    second_request = llm_client.requests[1][1]
+    assert second_request.messages[-2].role is MessageRole.ASSISTANT
+    assert second_request.messages[-2].tool_calls == (product_call,)
+    assert second_request.messages[-1].role is MessageRole.TOOL
+    assert second_request.messages[-1].tool_call_id == "call-product"
+    first_observation = json.loads(second_request.messages[-1].content or "")
+    assert first_observation["product_id"] == "P4711"
+    assert first_observation["steps"][0]["station_id"] == "S04"
+
+    final_request = llm_client.requests[2][1]
+    assert final_request.messages[-4:] == (
+        second_request.messages[-2],
+        second_request.messages[-1],
+        final_request.messages[-2],
+        final_request.messages[-1],
+    )
+    assert final_request.messages[-2].tool_calls == (machine_call,)
+    assert final_request.messages[-1].tool_call_id == "call-machine"
+    second_observation = json.loads(final_request.messages[-1].content or "")
+    assert second_observation == {
+        "station_id": "S04",
+        "found": True,
+        "state": "FAULTED",
+        "active_error_code": "E-STOP-17",
+    }
+
+
+def test_executes_three_tool_calls_before_success() -> None:
     llm_client = FakeLLMClient(
         tool_response(tool_call(call_id="call-1")),
         tool_response(
@@ -327,14 +394,68 @@ def test_rejects_second_tool_call_instead_of_starting_a_loop() -> None:
                 call_id="call-2",
             )
         ),
+        tool_response(tool_call(call_id="call-3")),
+        final_response("Investigation complete."),
     )
     agent, product_repository, machine_repository = create_agent(llm_client)
 
-    with pytest.raises(
-        ToolCallLimitExceededError,
-        match="final response must not request another tool call",
-    ):
-        agent.answer("Why was P4711 rejected?")
+    result = agent.answer("Investigate all available evidence.")
 
-    assert product_repository.requested_product_ids == [ProductId("P4711")]
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.final_answer == "Investigation complete."
+    assert result.tool_call_count == MAX_TOOL_CALLS
+    assert product_repository.requested_product_ids == [
+        ProductId("P4711"),
+        ProductId("P4711"),
+    ]
+    assert machine_repository.requested_station_ids == [StationId("S04")]
+    assert len(llm_client.requests) == 4
+
+
+def test_returns_limit_reached_without_executing_fourth_call_or_calling_llm_again() -> (
+    None
+):
+    llm_client = FakeLLMClient(
+        tool_response(tool_call(call_id="call-1")),
+        tool_response(tool_call(call_id="call-2")),
+        tool_response(tool_call(call_id="call-3")),
+        tool_response(
+            tool_call(
+                name="get_machine_status",
+                arguments={"station_id": "S04"},
+                call_id="call-4",
+            )
+        ),
+        final_response("This response must never be requested."),
+    )
+    agent, product_repository, machine_repository = create_agent(llm_client)
+
+    result = agent.answer("Keep investigating indefinitely.")
+
+    assert result.status is AgentRunStatus.LIMIT_REACHED
+    assert result.final_answer is None
+    assert result.tool_call_count == MAX_TOOL_CALLS
+    assert product_repository.requested_product_ids == [ProductId("P4711")] * 3
     assert machine_repository.requested_station_ids == []
+    assert len(llm_client.requests) == 4
+
+
+def test_tool_counter_counts_executed_tools_instead_of_llm_calls() -> None:
+    llm_client = FakeLLMClient(
+        tool_response(tool_call(call_id="call-1")),
+        tool_response(
+            tool_call(
+                name="get_machine_status",
+                arguments={"station_id": "S04"},
+                call_id="call-2",
+            )
+        ),
+        final_response("Done."),
+    )
+    agent, _, _ = create_agent(llm_client)
+
+    result = agent.answer("Investigate P4711 and its station.")
+
+    assert result.tool_call_count == 2
+    assert len(llm_client.requests) == 3
+    assert result.status is not AgentRunStatus.LIMIT_REACHED

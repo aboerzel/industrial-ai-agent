@@ -6,12 +6,12 @@ Accepted
 
 ## Context
 
-The current `TroubleshootingAgent` can ask the LLM for one tool call, execute that call,
-and request a final answer. This is sufficient for isolated product-history or
-machine-status questions, but realistic troubleshooting often requires several
-dependent observations. For example, a product failure may first require its production
-history and then the current state of the station at which it failed. The second choice
-depends on information returned by the first tool.
+Before this decision was implemented, `TroubleshootingAgent` could ask the LLM for one
+tool call, execute that call, and request a final answer. That was sufficient for
+isolated product-history or machine-status questions, but realistic troubleshooting
+often requires several dependent observations. For example, a product failure may first
+require its production history and then the current state of the station at which it
+failed. The second choice depends on information returned by the first tool.
 
 The project needs an orchestration strategy before implementing that behavior. It must
 preserve the learning value of visible agent mechanics, deterministic safety guarantees,
@@ -20,8 +20,8 @@ multiple agents, orchestration frameworks, or MCP as a prerequisite.
 
 ## Decision
 
-The `TroubleshootingAgent` will initially use an explicit, bounded, sequential
-single-agent tool loop implemented in Python.
+The `TroubleshootingAgent` uses an explicit, bounded, sequential single-agent tool loop
+implemented in Python.
 
 In every iteration, the LLM receives the user request plus the tool calls and structured
 tool results collected earlier in the same run. Based on that context, it chooses one of
@@ -39,13 +39,13 @@ bypass validation, increase the limit, or control termination policy.
 flowchart TD
     Start["User request + available tools"] --> LLM["LLM decision<br/>via LLMClient and Model Profile"]
     LLM --> Decision{"Response shape"}
-    Decision -->|"final text, no tool call"| Final["Return final answer"]
-    Decision -->|"exactly one tool call"| Validate["Validate tool name and arguments"]
+    Decision -->|"final text, no tool call"| Final["SUCCESS<br/>return final answer"]
+    Decision -->|"exactly one tool call"| Limit{"Fewer than 3 tools executed?"}
     Decision -->|"multiple calls or malformed response"| Invalid["Terminate with deterministic error"]
+    Limit -->|"no"| Exhausted["LIMIT_REACHED<br/>do not execute the requested call"]
+    Limit -->|"yes"| Validate["Validate tool name and arguments"]
     Validate -->|"invalid"| Invalid
-    Validate -->|"valid"| Limit{"Tool-call budget available?"}
-    Limit -->|"no"| Exhausted["Terminate with explicit limit-exceeded error<br/>without executing the call"]
-    Limit -->|"yes"| Dispatch["Deterministic dispatch and execution"]
+    Validate -->|"valid"| Dispatch["Deterministic dispatch and execution"]
     Dispatch --> Observation["Append structured tool result as observation"]
     Observation --> LLM
 
@@ -61,23 +61,32 @@ flowchart TD
 
 ### Loop Bound and Termination
 
-Every run has a finite, positive `max_tool_calls` value selected by application
-configuration or the Composition Root. There is no unlimited mode. The orchestration
-checks the remaining budget before each execution and increments the count only for an
-accepted tool call that it executes.
+The first implementation defines `MAX_TOOL_CALLS = 3` at a clearly visible location in
+the deterministic Application Core. The limit counts accepted and successfully
+executed tools, not LLM requests. A run may therefore execute zero through three tool
+calls. There is no unlimited mode.
 
 The run terminates immediately when the model returns final text without a tool call.
-If the model requests another call after the budget is exhausted, the call is not
-executed and the run terminates with an explicit limit-exceeded error or typed failure
-outcome. The agent does not ask the model to override the limit and does not synthesize
-an ungrounded partial answer. A response containing multiple tool calls is rejected;
-parallel tool execution is not supported in the first version. A response with neither
-usable final text nor a valid tool call is treated as malformed and terminates with a
-deterministic error.
+After every successfully executed tool, including the third, the model may make one
+next decision using the new observation. The decision following the third tool is the
+last permitted LLM request in the run. If it contains final text without a tool call,
+the run terminates with `SUCCESS`. If it requests another tool call, the run terminates
+with `LIMIT_REACHED`; that fourth call is neither validated for dispatch nor executed,
+and no subsequent LLM request is made. The agent does not ask the model to override the
+limit and does not synthesize an ungrounded partial answer.
 
-Unknown tool names and invalid arguments are rejected before dispatch. They never reach
-a capability or external system. Authorization and future safety policies remain
-deterministic checks outside LLM judgment.
+A response containing multiple tool calls is rejected; parallel tool execution is not
+supported in the first version. A response with neither usable final text nor a valid
+tool call is treated as malformed and terminates with a deterministic error. Unknown
+tool names and invalid arguments are rejected before dispatch whenever execution budget
+is available. They never reach a capability or external system.
+
+The public agent-run result is intentionally small. It distinguishes `SUCCESS`, which
+contains the final model answer, from `LIMIT_REACHED`, which is a structured status and
+must not look like a normal final answer. It also reports the number of tools executed.
+Other existing deterministic validation failures continue to use focused exceptions;
+no general agent-error hierarchy is introduced. Authorization and future safety
+policies remain deterministic checks outside LLM judgment.
 
 ### Observations and Context
 
@@ -118,7 +127,9 @@ invalidate that baseline. Later evaluations may add multi-step datasets and comp
 different orchestration strategies using deterministic metrics such as task success,
 tool sequence, argument accuracy, limit compliance, and unnecessary calls. This ADR
 enables those comparisons but does not define or implement a general evaluation
-framework.
+framework. In accordance with ADR-005, deterministic loop guarantees are covered by
+unit tests using fake LLM responses, while real model judgment remains the subject of
+versioned evaluations.
 
 ## Alternatives
 
@@ -187,3 +198,8 @@ with provider and model details confined to configuration and Infrastructure.
 ADR-003 remains unchanged: the loop belongs to the Application Core, works through
 inner ports and capabilities, and receives concrete adapters through dependency
 injection. No dependency direction is changed.
+
+ADR-005 separates deterministic tests from model-dependent evaluations. The loop's
+validation, dispatch, counter, context construction, result status, and termination
+rules are deterministic test targets; the existing first-decision dataset continues to
+measure LLM tool selection and argument extraction.

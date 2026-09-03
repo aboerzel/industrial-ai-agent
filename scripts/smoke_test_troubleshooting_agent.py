@@ -2,7 +2,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from industrial_ai_agent.agent.troubleshooting_agent import TroubleshootingAgent
+from industrial_ai_agent.agent.troubleshooting_agent import (
+    AgentRunStatus,
+    TroubleshootingAgent,
+)
 from industrial_ai_agent.domain.machine_status import MachineStatus
 from industrial_ai_agent.domain.product_history import (
     ProductHistory,
@@ -61,18 +64,25 @@ def main() -> None:
             ProductHistoryCapability(product_repository),
             MachineStatusCapability(machine_repository),
         )
-        product_answer = agent.answer("Why was product P4711 rejected?")
-        machine_answer = agent.answer("What is the current status of station S12?")
+        result = agent.answer(
+            "P4711 failed during production. Investigate what happened and check "
+            "the current status of the relevant station."
+        )
 
     if product_repository.requested_product_ids != [ProductId("P4711")]:
         raise RuntimeError("Smoke test did not select get_product_history for P4711")
-    if machine_repository.requested_station_ids != [StationId("S12")]:
-        raise RuntimeError("Smoke test did not select get_machine_status for S12")
+    if machine_repository.requested_station_ids != [StationId("S04")]:
+        raise RuntimeError("Smoke test did not select get_machine_status for S04")
+    if result.status is not AgentRunStatus.SUCCESS:
+        raise RuntimeError(f"Smoke test ended with status {result.status}")
+    if result.tool_call_count != 2:
+        raise RuntimeError("Smoke test did not execute exactly two tool calls")
+    if result.final_answer is None:
+        raise RuntimeError("Successful smoke test did not return a final answer")
 
-    print("tool_call=get_product_history product_id=P4711")
-    print(product_answer)
-    print("tool_call=get_machine_status station_id=S12")
-    print(machine_answer)
+    print("tool_calls=get_product_history(P4711),get_machine_status(S04)")
+    print(f"status={result.status.value}")
+    print(result.final_answer)
 
 
 if __name__ == "__main__":
