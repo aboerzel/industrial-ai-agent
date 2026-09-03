@@ -27,6 +27,10 @@ Tools an, validiert und dispatcht höchstens einen ausgewählten Aufruf in
 deterministischem Code und lässt das Modell die finale Antwort formulieren. Ein
 allgemeiner Agent- oder ReAct-Loop existiert nicht.
 
+Eine erste deterministische Eval-Baseline misst die initiale LLM-Tool-Auswahl und
+Argumentextraktion des Agenten anhand von zwölf versionierten Fällen. Sie führt keine
+Tools aus und bewertet keine finalen Antworten.
+
 Es wurden noch kein LLM framework, MCP server, keine vector database und kein multi-agent framework eingeführt.
 
 ## Manuelle Ollama Smoke Tests
@@ -44,6 +48,20 @@ python scripts/smoke_test_troubleshooting_agent.py
 Das erste Skript prüft die grundlegende LLM-Verbindung. Das zweite führt den
 vollständigen Tool-Selection-Slice aus und prüft sowohl `get_product_history` für das
 Produkt `P4711` als auch `get_machine_status` für die Station `S12`.
+
+## Manueller Tool-Selection-Eval
+
+Führe das versionierte Tool-Selection-Dataset gegen das konfigurierte semantische Profil
+aus:
+
+```powershell
+python -m evals.run_tool_selection --profile troubleshooting
+```
+
+Der Befehl gibt einen strukturierten JSON Report mit Einzelergebnissen, Tool Selection
+Accuracy und Argument Accuracy aus. Definitionen und Interpretation der Metriken sowie
+die optionale lokale Ergebnisausgabe beschreibt die
+[Baseline für die Tool-Selection-Evaluation](docs/learning/tool-selection-evaluation.de.md).
 
 Die committed Modellkonfiguration liegt in `config/model_profiles.toml`. Das lokale
 Ollama-Profil benötigt keinen API Key. Authentifizierte Profile müssen Credential-Werte

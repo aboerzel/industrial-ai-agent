@@ -1,0 +1,12 @@
+{"case_id":"product_rejection_reason","user_input":"Why was product P4711 rejected?","expected_tool":"get_product_history","expected_arguments":{"product_id":"P4711"}}
+{"case_id":"product_history_request","user_input":"Show me the production history for P8020.","expected_tool":"get_product_history","expected_arguments":{"product_id":"P8020"}}
+{"case_id":"product_station_trace_de","user_input":"Welche Stationen hat Produkt P1007 durchlaufen?","expected_tool":"get_product_history","expected_arguments":{"product_id":"P1007"}}
+{"case_id":"product_trace_variant","user_input":"Trace product LOT-AX19 through production.","expected_tool":"get_product_history","expected_arguments":{"product_id":"LOT-AX19"}}
+{"case_id":"product_event_question","user_input":"What happened to product SN-8842?","expected_tool":"get_product_history","expected_arguments":{"product_id":"SN-8842"}}
+{"case_id":"product_manufacturing_history","user_input":"Retrieve the manufacturing history of product P-2026-0042.","expected_tool":"get_product_history","expected_arguments":{"product_id":"P-2026-0042"}}
+{"case_id":"station_status_request","user_input":"What is the current status of station S04?","expected_tool":"get_machine_status","expected_arguments":{"station_id":"S04"}}
+{"case_id":"machine_running_question","user_input":"Is machine S12 running right now?","expected_tool":"get_machine_status","expected_arguments":{"station_id":"S12"}}
+{"case_id":"station_state_de","user_input":"Welchen aktuellen Zustand hat Station S21?","expected_tool":"get_machine_status","expected_arguments":{"station_id":"S21"}}
+{"case_id":"station_fault_check","user_input":"Check station CELL-A7 for active faults.","expected_tool":"get_machine_status","expected_arguments":{"station_id":"CELL-A7"}}
+{"case_id":"machine_live_status","user_input":"Give me the live machine status for LINE-03.","expected_tool":"get_machine_status","expected_arguments":{"station_id":"LINE-03"}}
+{"case_id":"station_active_error","user_input":"Is there an active error at station S99?","expected_tool":"get_machine_status","expected_arguments":{"station_id":"S99"}}

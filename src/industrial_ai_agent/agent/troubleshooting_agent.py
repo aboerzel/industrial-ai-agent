@@ -111,27 +111,20 @@ class TroubleshootingAgent:
         llm_client: LLMClient,
         product_history: ProductHistoryCapability,
         machine_status: MachineStatusCapability,
+        model_profile: ModelProfile = TROUBLESHOOTING_PROFILE,
     ) -> None:
         self._llm_client = llm_client
         self._product_history = product_history
         self._machine_status = machine_status
+        self._model_profile = model_profile
+
+    def request_tool_selection(self, user_request: str) -> LLMResponse:
+        user_message = _create_user_message(user_request)
+        return self._request_tool_selection(user_message)
 
     def answer(self, user_request: str) -> str:
-        normalized_request = user_request.strip()
-        if not normalized_request:
-            raise ValueError("User request must not be empty")
-
-        user_message = LLMMessage(
-            role=MessageRole.USER,
-            content=normalized_request,
-        )
-        initial_response = self._llm_client.chat(
-            TROUBLESHOOTING_PROFILE,
-            LLMRequest(
-                messages=(_SYSTEM_MESSAGE, user_message),
-                tools=(GET_PRODUCT_HISTORY_TOOL, GET_MACHINE_STATUS_TOOL),
-            ),
-        )
+        user_message = _create_user_message(user_request)
+        initial_response = self._request_tool_selection(user_message)
 
         if not initial_response.tool_calls:
             return _require_response_text(initial_response)
@@ -141,7 +134,7 @@ class TroubleshootingAgent:
         tool_call = initial_response.tool_calls[0]
         tool_result = self._dispatch_tool_call(tool_call)
         final_response = self._llm_client.chat(
-            TROUBLESHOOTING_PROFILE,
+            self._model_profile,
             LLMRequest(
                 messages=(
                     _SYSTEM_MESSAGE,
@@ -164,6 +157,15 @@ class TroubleshootingAgent:
                 "The final response must not request another tool call"
             )
         return _require_response_text(final_response)
+
+    def _request_tool_selection(self, user_message: LLMMessage) -> LLMResponse:
+        return self._llm_client.chat(
+            self._model_profile,
+            LLMRequest(
+                messages=(_SYSTEM_MESSAGE, user_message),
+                tools=(GET_PRODUCT_HISTORY_TOOL, GET_MACHINE_STATUS_TOOL),
+            ),
+        )
 
     def _dispatch_tool_call(self, tool_call: LLMToolCall) -> str:
         if tool_call.name == GET_PRODUCT_HISTORY_TOOL.name:
@@ -199,3 +201,13 @@ def _require_response_text(response: LLMResponse) -> str:
     if response.text is None:
         raise MissingLLMResponseTextError("LLM response did not contain text")
     return response.text
+
+
+def _create_user_message(user_request: str) -> LLMMessage:
+    normalized_request = user_request.strip()
+    if not normalized_request:
+        raise ValueError("User request must not be empty")
+    return LLMMessage(
+        role=MessageRole.USER,
+        content=normalized_request,
+    )

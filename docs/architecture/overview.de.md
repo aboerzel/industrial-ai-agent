@@ -4,8 +4,9 @@
 
 Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des aktuellen
 Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen begrenzten
-Slice zur Auswahl zwischen zwei Tools. Ein allgemeiner Agent- oder ReAct-Loop existiert
-nicht.
+Slice zur Auswahl zwischen zwei Tools. Eine kleine deterministische Baseline evaluiert
+die erste LLM-Tool-Entscheidung. Ein allgemeiner Agent, ReAct-Loop oder ein
+Eval-Framework existiert nicht.
 
 Der implementierte Request Flow ist:
 
@@ -124,6 +125,48 @@ dispatcht fest an die entsprechende Capability und serialisiert deren strukturie
 Ergebnis. Nach einem Tool Call werden dem finalen LLM Request keine Tools angeboten;
 ein weiterer zurückgegebener Tool Call wird abgelehnt, statt einen Loop zu starten.
 
+## Baseline für die Tool-Selection-Evaluation
+
+Der Repository-lokale Eval misst ausschließlich die von
+`TroubleshootingAgent.request_tool_selection()` exponierte erste Entscheidung. Jeder
+versionierte JSONL-Fall startet mit einem frischen Message Context. Der Runner verwendet
+ein konfigurierbares semantisches Model Profile und übergibt die provider-unabhängige
+`LLMResponse` an ein deterministisches Exact-Match-Scoring.
+
+```mermaid
+flowchart LR
+    D["Versioniertes JSONL-Dataset<br/>12 unabhängige Fälle"]
+    R["Tool-Selection-Eval-Runner"]
+    A["TroubleshootingAgent<br/>request_tool_selection()"]
+    L["LLMClient<br/>konfigurierbares Model Profile"]
+    S["Deterministisches Exact-Match-Scoring"]
+    O["Strukturierter JSON Report<br/>Einzelergebnisse + aggregierte Metriken"]
+    X["Ausgeschlossen<br/>Tool-Ausführung und finale Antwort"]
+
+    D -->|"Fall"| R
+    R -->|"user_input"| A
+    A -->|"initialer LLMRequest"| L
+    L -->|"erste LLMResponse"| A
+    A -->|"beobachteter Tool Call"| R
+    R --> S
+    S --> O
+    R -.->|"ruft nicht auf"| X
+
+    classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef metric fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef excluded fill:#f8fafc,stroke:#64748b,color:#0f172a
+    class D data
+    class R,A,L core
+    class S,O metric
+    class X excluded
+```
+
+Tool Selection Accuracy verlangt genau einen Call mit dem erwarteten Namen. Argument
+Accuracy verlangt zusätzlich die exakte Übereinstimmung der Argumente und vergibt daher
+keinen Argument-Punkt für ein falsches Tool. Die Baseline bewertet weder Tool Results,
+Qualität der finalen Antwort, Latenz, Kosten noch LLM-as-a-Judge-Qualität.
+
 ## Verantwortlichkeiten der Packages
 
 ### `domain`
@@ -199,6 +242,13 @@ Spätere Beispiele können sein:
 * MCP clients
 * observability
 * external APIs
+
+### `evals`
+
+Enthält das versionierte Tool-Selection-Dataset und einen fokussierten manuellen Runner.
+Parsing, Scoring pro Fall und Aggregation sind deterministisch und durch Unit Tests ohne
+live LLM abgedeckt. Generierte JSON Reports gehören in das von Git ignorierte
+Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert werden.
 
 ## Weiterentwicklung
 

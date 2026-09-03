@@ -4,7 +4,8 @@
 
 The project currently implements product-history retrieval, current machine-status
 retrieval, a provider-independent LLM integration boundary, and one bounded
-two-tool-selection slice. There is no general agent or ReAct loop.
+two-tool-selection slice. A small deterministic baseline evaluates the first LLM tool
+decision. There is no general agent, ReAct loop, or evaluation framework.
 
 The implemented request flow is:
 
@@ -123,6 +124,47 @@ call, uses a fixed dispatch to the corresponding capability, and serializes its
 structured result. After one tool call, no tools are offered to the final LLM request;
 a further returned tool call is rejected rather than starting a loop.
 
+## Tool Selection Evaluation Baseline
+
+The repository-local eval measures only the first decision exposed by
+`TroubleshootingAgent.request_tool_selection()`. Each versioned JSONL case starts with a
+fresh message context. The runner uses a configurable semantic Model Profile and passes
+the provider-independent `LLMResponse` to deterministic exact-match scoring.
+
+```mermaid
+flowchart LR
+    D["Versioned JSONL dataset<br/>12 independent cases"]
+    R["Tool-selection eval runner"]
+    A["TroubleshootingAgent<br/>request_tool_selection()"]
+    L["LLMClient<br/>configurable Model Profile"]
+    S["Deterministic exact-match scoring"]
+    O["Structured JSON report<br/>per-case results + aggregate metrics"]
+    X["Excluded<br/>tool execution and final answer"]
+
+    D -->|"case"| R
+    R -->|"user_input"| A
+    A -->|"initial LLMRequest"| L
+    L -->|"first LLMResponse"| A
+    A -->|"observed tool call"| R
+    R --> S
+    S --> O
+    R -.->|"does not invoke"| X
+
+    classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef metric fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef excluded fill:#f8fafc,stroke:#64748b,color:#0f172a
+    class D data
+    class R,A,L core
+    class S,O metric
+    class X excluded
+```
+
+Tool Selection Accuracy requires exactly one call with the expected name. Argument
+Accuracy additionally requires exact argument equality and therefore gives no argument
+credit to a wrong tool. The baseline does not evaluate tool results, final-answer
+quality, latency, cost, or LLM-as-a-Judge quality.
+
 ## Package Responsibilities
 
 ### `domain`
@@ -195,6 +237,13 @@ Examples may later include:
 * MCP clients
 * observability
 * external APIs
+
+### `evals`
+
+Contains the versioned tool-selection dataset and a focused manual runner. Parsing,
+per-case scoring, and aggregation are deterministic and covered by unit tests without a
+live LLM. Generated JSON reports belong under the Git-ignored `evals/results/`
+directory unless deliberately curated.
 
 ## Evolution
 

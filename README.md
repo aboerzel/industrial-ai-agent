@@ -25,6 +25,10 @@ Model selection uses the configured semantic profile `troubleshooting`.
 dispatches at most one selected call in deterministic code, and asks the model to
 formulate the final answer. There is no general agent or ReAct loop.
 
+A first deterministic evaluation baseline measures the agent's initial LLM tool
+selection and argument extraction against twelve versioned cases. It does not execute
+tools or evaluate final answers.
+
 No LLM framework, MCP server, vector database, or multi-agent framework is introduced yet.
 
 ## Manual Ollama Smoke Tests
@@ -41,6 +45,19 @@ python scripts/smoke_test_troubleshooting_agent.py
 The first script verifies basic LLM connectivity. The second runs the complete
 tool-selection slice and verifies both `get_product_history` for product `P4711` and
 `get_machine_status` for station `S12`.
+
+## Manual Tool Selection Eval
+
+Run the versioned tool-selection dataset against the configured semantic profile:
+
+```powershell
+python -m evals.run_tool_selection --profile troubleshooting
+```
+
+The command prints a structured JSON report with per-case results, Tool Selection
+Accuracy, and Argument Accuracy. See
+[Tool Selection Evaluation Baseline](docs/learning/tool-selection-evaluation.md) for
+metric definitions, interpretation, and optional local result output.
 
 The committed model configuration is in `config/model_profiles.toml`. The local Ollama
 profile requires no API key. Authenticated profiles must read credential values from

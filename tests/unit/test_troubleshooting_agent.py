@@ -121,6 +121,28 @@ def create_agent(
     return agent, product_repository, machine_repository
 
 
+def test_request_tool_selection_uses_profile_without_executing_tool() -> None:
+    requested_tool_call = tool_call(arguments={"product_id": "P4711"})
+    initial_response = tool_response(requested_tool_call)
+    llm_client = FakeLLMClient(initial_response)
+    product_repository = RecordingProductHistoryRepository()
+    machine_repository = RecordingMachineStatusRepository()
+    agent = TroubleshootingAgent(
+        llm_client,
+        ProductHistoryCapability(product_repository),
+        MachineStatusCapability(machine_repository),
+        model_profile=ModelProfile("evaluation-candidate"),
+    )
+
+    response = agent.request_tool_selection("Why was product P4711 rejected?")
+
+    assert response == initial_response
+    assert len(llm_client.requests) == 1
+    assert llm_client.requests[0][0] == ModelProfile("evaluation-candidate")
+    assert product_repository.requested_product_ids == []
+    assert machine_repository.requested_station_ids == []
+
+
 def test_product_question_executes_product_history_and_returns_final_answer() -> None:
     requested_tool_call = tool_call(arguments={"product_id": "P4711"})
     llm_client = FakeLLMClient(
