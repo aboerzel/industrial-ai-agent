@@ -8,14 +8,34 @@ two-tool-selection slice. There is no general agent or ReAct loop.
 
 The implemented request flow is:
 
-```text
-ProductHistoryCapability                 MachineStatusCapability
-        |                                         |
-        v                                         v
-ProductHistoryRepository                 MachineStatusRepository
-        |                                         |
-        v                                         v
-InMemoryProductHistoryRepository         InMemoryMachineStatusRepository
+```mermaid
+flowchart LR
+    subgraph Core["Application Core"]
+        PHC["ProductHistoryCapability"]
+        MSC["MachineStatusCapability"]
+    end
+
+    subgraph Ports["Domain-owned ports"]
+        PHR["ProductHistoryRepository"]
+        MSR["MachineStatusRepository"]
+    end
+
+    subgraph Infrastructure["Infrastructure adapters"]
+        PHM["InMemoryProductHistoryRepository"]
+        MSM["InMemoryMachineStatusRepository"]
+    end
+
+    PHC -->|"ProductId"| PHR
+    MSC -->|"StationId"| MSR
+    PHM -.->|"implements"| PHR
+    MSM -.->|"implements"| MSR
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    class PHC,MSC core
+    class PHR,MSR port
+    class PHM,MSM adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -27,19 +47,35 @@ Distributed services and AI frameworks are deliberately not part of this slice.
 
 The implemented LLM boundary is:
 
-```text
-Agent / Use Case
-    |
-    | semantic profile + LLMRequest
-    v
-LLMClient port
-    |
-    v
-OpenAICompatibleLLMClient
-    |
-    | profile configuration + credentials when required
-    v
-Configured OpenAI-compatible endpoint
+```mermaid
+flowchart LR
+    A["Agent / Use Case"] -->|"semantic ModelProfile + LLMRequest"| P["LLMClient port"]
+    C["OpenAICompatibleLLMClient"] -.->|"implements"| P
+    TOML["config/model_profiles.toml<br/>provider, model, base URL, temperature, auth mode"] --> C
+    ENV["Environment variables<br/>API keys for authenticated profiles only"] -.-> C
+    C -->|"provider-specific request"| E["Configured OpenAI-compatible endpoint"]
+
+    subgraph Core["Application Core"]
+        A
+        P
+    end
+
+    subgraph Infrastructure["Infrastructure"]
+        C
+        TOML
+        ENV
+    end
+
+    subgraph External["External system"]
+        E
+    end
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
+    class A,P core
+    class C,TOML,ENV adapter
+    class E external
 ```
 
 `config/model_profiles.toml` currently maps `troubleshooting` to Ollama,
@@ -49,32 +85,34 @@ changed without changing agent or use-case code.
 
 The implemented tool-calling flow is:
 
-```text
-Natural-language request
-    |
-    v
-TroubleshootingAgent
-    |
-    | LLMRequest + exactly two tool definitions
-    v
-LLMClient (troubleshooting profile)
-    |
-    +-- direct text response ----------------------------+
-    |
-    +-- one validated tool call                           |
-            |                                             |
-            v                                             |
-    fixed dispatch to ProductHistoryCapability           |
-    or MachineStatusCapability                           |
-            |                                             |
-            | structured tool result                      |
-            v                                             |
-    LLMClient final response                              |
-            |                                             |
-            +---------------------------------------------+
-                                  |
-                                  v
-                            Final answer
+```mermaid
+sequenceDiagram
+    actor User
+    participant Agent as TroubleshootingAgent
+    participant LLM as LLMClient<br/>(troubleshooting profile)
+    participant Product as ProductHistoryCapability
+    participant Machine as MachineStatusCapability
+
+    User->>Agent: Natural-language request
+    Agent->>LLM: LLMRequest + exactly two tool definitions
+
+    alt Direct answer
+        LLM-->>Agent: Response text without a tool call
+    else One tool call
+        LLM-->>Agent: LLMToolCall
+        Note over Agent: Deterministically validate call count,<br/>tool name, and tool-specific arguments
+        alt get_product_history
+            Agent->>Product: get_product_history(product_id)
+            Product-->>Agent: ProductHistoryResult
+        else get_machine_status
+            Agent->>Machine: get_machine_status(station_id)
+            Machine-->>Agent: MachineStatusResult
+        end
+        Agent->>LLM: Structured tool result, no tools offered
+        LLM-->>Agent: Final response text
+    end
+
+    Agent-->>User: Final answer
 ```
 
 The LLM chooses whether to request `get_product_history`, request
@@ -164,23 +202,35 @@ The architecture should evolve only when required by implemented capabilities.
 
 Possible later stages include:
 
-```text
-Agent Runtime
-    |
-    +-- State
-    +-- Context Builder
-    +-- Policy Layer
-    |
-    v
-Tool Router
-    |
-    v
-MCP Multiplexer
-    |
-    +-- Factory MCP
-    +-- Production MCP
-    +-- Knowledge MCP
-    +-- Vision MCP
+```mermaid
+flowchart TD
+    U["User / API"] --> AR["Agent Runtime"]
+
+    subgraph Runtime["Potential future runtime capabilities"]
+        AR
+        State["State"]
+        Context["Context Builder"]
+        Policy["Policy / Guardrails"]
+        Observability["Evals / Tracing"]
+        AR --- State
+        AR --- Context
+        AR --- Policy
+        AR --- Observability
+    end
+
+    AR --> Router["Tool Router"]
+    Router --> Multiplexer["MCP Multiplexer"]
+    Multiplexer --> Factory["Factory MCP"]
+    Multiplexer --> Production["Production MCP"]
+    Multiplexer --> Knowledge["Knowledge MCP"]
+    Multiplexer --> Vision["Vision MCP"]
+
+    classDef runtime fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef service fill:#fff7ed,stroke:#ea580c,color:#431407
+    class AR,State,Context,Policy,Observability runtime
+    class Router,Multiplexer routing
+    class Factory,Production,Knowledge,Vision service
 ```
 
 This is a target direction, not the current implementation.

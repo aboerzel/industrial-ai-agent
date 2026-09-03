@@ -25,17 +25,25 @@ outside that core and connect through explicit ports and adapters.
 
 Dependencies generally point inward:
 
-```text
-External systems and provider SDKs
-                |
-                v
-Infrastructure / Adapters
-                |
-                v
-Application Core / Ports
-                |
-                v
-Domain
+```mermaid
+flowchart TB
+    External["External systems<br/>Provider SDKs, databases, HTTP, MCP"]
+    Infrastructure["Infrastructure / Adapters"]
+    Core["Application Core / Ports<br/>currently agent and tools"]
+    Domain["Domain<br/>models, Value Objects, invariants, rules"]
+
+    External -->|"used only by outer adapters"| Infrastructure
+    Infrastructure -->|"implements and depends on inner ports"| Core
+    Core -->|"uses domain language and rules"| Domain
+
+    classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef domain fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    class External external
+    class Infrastructure adapter
+    class Core core
+    class Domain domain
 ```
 
 The diagram describes compile-time dependency direction, not runtime call direction.
@@ -77,8 +85,8 @@ physical directories are not.
 
 Ports belong to the inner side of the architectural boundary because the Core owns the
 capabilities it requires. Current examples are `LLMClient` and
-`ProductHistoryRepository`. Future examples may include ports for MES, maintenance,
-documentation, image analysis, or other external services.
+`ProductHistoryRepository`, and `MachineStatusRepository`. Future examples may include
+ports for MES, maintenance, documentation, image analysis, or other external services.
 
 Port signatures use internal models and language. They must not expose concrete
 provider SDK types, transport DTOs, database records, HTTP request objects, or similar
@@ -87,9 +95,9 @@ outer-layer details.
 ### Infrastructure and Adapters
 
 `infrastructure` contains concrete implementations of ports and integration-specific
-configuration. Current examples are `OpenAICompatibleLLMClient` and
-`InMemoryProductHistoryRepository`. Future examples can include SQL, MES, MCP, or cloud
-adapters.
+configuration. Current examples are `OpenAICompatibleLLMClient`,
+`InMemoryProductHistoryRepository`, and `InMemoryMachineStatusRepository`. Future
+examples can include SQL, MES, MCP, or cloud adapters.
 
 Infrastructure may depend on the Domain and Application Core in order to implement
 their ports and construct their models. The reverse dependency is forbidden. An
@@ -115,6 +123,33 @@ Concrete adapters are selected and wired at a Composition Root, such as a proces
 entry point, API bootstrap, CLI bootstrap, or explicit test setup. Domain, Application,
 `agent`, and `tools` modules do not secretly instantiate concrete Infrastructure
 dependencies or locate them through global service locators.
+
+```mermaid
+flowchart LR
+    Root["Composition Root"]
+    UseCase["Agent / Use Case"]
+    Port["Inner port"]
+    Adapter["Concrete Infrastructure adapter"]
+    External["External system"]
+
+    Root -->|"constructs"| UseCase
+    Root -->|"constructs"| Adapter
+    Root -->|"injects adapter"| UseCase
+    UseCase -->|"calls"| Port
+    Adapter -.->|"implements"| Port
+    Adapter -->|"translates and calls"| External
+
+    classDef root fill:#fefce8,stroke:#ca8a04,color:#422006
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
+    class Root root
+    class UseCase core
+    class Port port
+    class Adapter adapter
+    class External external
+```
 
 Infrastructure adapters may encapsulate creation and lifecycle of the external SDK
 clients they own. Tests can inject controlled client factories or adapter fakes where
