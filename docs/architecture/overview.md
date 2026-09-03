@@ -2,9 +2,9 @@
 
 ## Current Architecture
 
-The project currently implements its first deterministic vertical slice, retrieving
-the production history of a product, and its first provider-independent LLM integration
-boundary. There is no agent loop yet.
+The project currently implements product-history retrieval, a provider-independent LLM
+integration boundary, and one bounded tool-calling slice. There is no general agent or
+ReAct loop.
 
 The implemented request flow is:
 
@@ -49,6 +49,41 @@ Configured OpenAI-compatible endpoint
 configuration, not a commitment to that provider or model. The profile mapping can be
 changed without changing agent or use-case code.
 
+The implemented tool-calling flow is:
+
+```text
+Natural-language request
+    |
+    v
+ProductHistoryAgent
+    |
+    | LLMRequest + get_product_history definition
+    v
+LLMClient (troubleshooting profile)
+    |
+    +-- direct text response ----------------------------+
+    |
+    +-- one validated tool call                           |
+            |                                             |
+            v                                             |
+    ProductHistoryCapability                             |
+            |                                             |
+            | structured tool result                      |
+            v                                             |
+    LLMClient final response                              |
+            |                                             |
+            +---------------------------------------------+
+                                  |
+                                  v
+                            Final answer
+```
+
+The LLM chooses whether to request the tool and formulates the answer. Deterministic
+Python code enforces the single known tool name, validates `product_id`, rejects more
+than one tool call, dispatches to `ProductHistoryCapability`, and serializes its
+structured result. After one tool call, no tools are offered to the final LLM request;
+a further returned tool call is rejected rather than starting a loop.
+
 ## Package Responsibilities
 
 ### `domain`
@@ -79,9 +114,10 @@ It returns a Pydantic `ProductHistoryResult`, including a structured not-found r
 
 Contains provider-independent LLM contracts and, later, agent orchestration logic.
 
-The current implementation defines `LLMClient`, semantic `ModelProfile` selection, and
-small request and response models. It does not import the OpenAI SDK or name a concrete
-provider or model.
+The current implementation defines `LLMClient`, semantic `ModelProfile` selection,
+small request and response models, and `ProductHistoryAgent`. The agent contains the
+bounded orchestration and fixed one-tool dispatch. It does not import the OpenAI SDK or
+name a concrete provider or model.
 
 Later responsibilities may include:
 

@@ -7,6 +7,7 @@ from industrial_ai_agent.agent.llm import (
     FinishReason,
     LLMMessage,
     LLMRequest,
+    LLMToolCall,
     LLMToolDefinition,
     MessageRole,
     ModelProfile,
@@ -166,6 +167,68 @@ def test_maps_tool_definitions_and_tool_calls_without_executing_them() -> None:
     assert fake_client.completions.parameters["tools"][0]["function"]["name"] == (
         "get_product_history"
     )
+
+
+def test_maps_assistant_tool_call_and_tool_result_messages() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Final answer", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    fake_client = FakeOpenAIClient(completion)
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: fake_client,
+    )
+    request = LLMRequest(
+        messages=(
+            LLMMessage(role=MessageRole.USER, content="Inspect P4711"),
+            LLMMessage(
+                role=MessageRole.ASSISTANT,
+                content=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="call-1",
+                        name="get_product_history",
+                        arguments={"product_id": "P4711"},
+                    ),
+                ),
+            ),
+            LLMMessage(
+                role=MessageRole.TOOL,
+                content='{"product_id":"P4711","found":true,"steps":[]}',
+                tool_call_id="call-1",
+            ),
+        )
+    )
+
+    client.chat(TROUBLESHOOTING_PROFILE, request)
+
+    assert fake_client.completions.parameters is not None
+    messages = fake_client.completions.parameters["messages"]
+    assert messages[1] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "get_product_history",
+                    "arguments": '{"product_id": "P4711"}',
+                },
+            }
+        ],
+    }
+    assert messages[2] == {
+        "role": "tool",
+        "content": '{"product_id":"P4711","found":true,"steps":[]}',
+        "tool_call_id": "call-1",
+    }
 
 
 def test_requires_api_key_from_configured_environment_variable() -> None:

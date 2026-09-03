@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from industrial_ai_agent.agent.llm import (
     FinishReason,
+    LLMMessage,
     LLMRequest,
     LLMResponse,
     LLMToolCall,
@@ -45,10 +46,7 @@ class OpenAICompatibleLLMClient:
         client = self._get_client(profile)
         parameters: dict[str, Any] = {
             "model": profile_config.model,
-            "messages": [
-                {"role": message.role.value, "content": message.content}
-                for message in request.messages
-            ],
+            "messages": [_serialize_message(message) for message in request.messages],
             "temperature": profile_config.temperature,
         }
         if request.tools:
@@ -123,3 +121,25 @@ def _parse_tool_call(tool_call: Any) -> LLMToolCall:
         name=tool_call.function.name,
         arguments=arguments,
     )
+
+
+def _serialize_message(message: LLMMessage) -> dict[str, Any]:
+    serialized: dict[str, Any] = {
+        "role": message.role.value,
+        "content": message.content,
+    }
+    if message.tool_calls:
+        serialized["tool_calls"] = [
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": json.dumps(tool_call.arguments),
+                },
+            }
+            for tool_call in message.tool_calls
+        ]
+    if message.tool_call_id:
+        serialized["tool_call_id"] = message.tool_call_id
+    return serialized

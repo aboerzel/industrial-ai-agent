@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +20,7 @@ class MessageRole(StrEnum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 class FinishReason(StrEnum):
@@ -30,11 +31,42 @@ class FinishReason(StrEnum):
     UNKNOWN = "unknown"
 
 
+class LLMToolCall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
 class LLMMessage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     role: MessageRole
-    content: str
+    content: str | None
+    tool_calls: tuple[LLMToolCall, ...] = ()
+    tool_call_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_role_fields(self) -> Self:
+        if self.role is MessageRole.TOOL:
+            if self.content is None or not self.tool_call_id or self.tool_calls:
+                raise ValueError(
+                    "Tool messages require content and tool_call_id and cannot "
+                    "contain tool_calls"
+                )
+        elif self.role is MessageRole.ASSISTANT:
+            if self.tool_call_id or (self.content is None and not self.tool_calls):
+                raise ValueError(
+                    "Assistant messages require content or tool_calls and cannot "
+                    "contain tool_call_id"
+                )
+        elif self.content is None or self.tool_calls or self.tool_call_id:
+            raise ValueError(
+                "System and user messages require content and cannot contain "
+                "tool-call fields"
+            )
+        return self
 
 
 class LLMToolDefinition(BaseModel):
@@ -43,14 +75,6 @@ class LLMToolDefinition(BaseModel):
     name: str
     description: str
     parameters: dict[str, Any]
-
-
-class LLMToolCall(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    id: str
-    name: str
-    arguments: dict[str, Any]
 
 
 class LLMRequest(BaseModel):

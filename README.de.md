@@ -20,11 +20,15 @@ Produktionshistorie über die agent-facing Capability
 `ProductHistoryCapability.get_product_history(product_id)`, gestützt durch ein
 In-Memory-Repository. Zusätzlich stehen ein provider-unabhängiger `LLMClient`-Port und
 ein OpenAI-compatible Infrastructure Adapter bereit. Die Modellwahl verwendet das
-konfigurierte semantische Profil `troubleshooting`; ein Agent Loop existiert noch nicht.
+konfigurierte semantische Profil `troubleshooting`. `ProductHistoryAgent` implementiert
+jetzt einen begrenzten Tool-Calling-Slice: Das Modell darf `get_product_history`
+auswählen, deterministischer Code validiert und führt genau einen Aufruf aus und das
+Modell formuliert die finale Antwort. Ein allgemeiner Agent- oder ReAct-Loop existiert
+nicht.
 
 Es wurden noch kein LLM framework, MCP server, keine vector database und kein multi-agent framework eingeführt.
 
-## Manueller Ollama Smoke Test
+## Manuelle Ollama Smoke Tests
 
 Der Smoke Test ist bewusst von den automatisierten Tests getrennt und ruft das
 konfigurierte lokale Modell auf. Installiere und starte Ollama, stelle sicher, dass
@@ -33,7 +37,11 @@ konfigurierte lokale Modell auf. Installiere und starte Ollama, stelle sicher, d
 ```powershell
 ollama pull qwen3.5:9b
 python scripts/smoke_test_ollama.py
+python scripts/smoke_test_product_history_agent.py
 ```
+
+Das erste Skript prüft die grundlegende LLM-Verbindung. Das zweite führt den
+vollständigen `get_product_history`-Tool-Calling-Slice für Produkt `P4711` aus.
 
 Die committed Modellkonfiguration liegt in `config/model_profiles.toml`. Das lokale
 Ollama-Profil benötigt keinen API Key. Authentifizierte Profile müssen Credential-Werte

@@ -2,9 +2,9 @@
 
 ## Aktuelle Architektur
 
-Das Projekt implementiert derzeit seinen ersten deterministischen vertikalen Slice,
-das Abrufen der Produktionshistorie eines Produkts, sowie seine erste
-provider-unabhängige LLM-Integrationsgrenze. Ein Agent Loop existiert noch nicht.
+Das Projekt implementiert derzeit das Abrufen der Produktionshistorie, eine
+provider-unabhängige LLM-Integrationsgrenze und einen begrenzten Tool-Calling-Slice. Ein
+allgemeiner Agent- oder ReAct-Loop existiert nicht.
 
 Der implementierte Request Flow ist:
 
@@ -50,6 +50,42 @@ Configured OpenAI-compatible endpoint
 lokale Konfiguration und keine Festlegung auf diesen Provider oder dieses Modell. Die
 Profilzuordnung kann geändert werden, ohne Agent- oder Use-Case-Code anzupassen.
 
+Der implementierte Tool-Calling-Ablauf ist:
+
+```text
+Natural-language request
+    |
+    v
+ProductHistoryAgent
+    |
+    | LLMRequest + get_product_history definition
+    v
+LLMClient (troubleshooting profile)
+    |
+    +-- direct text response ----------------------------+
+    |
+    +-- one validated tool call                           |
+            |                                             |
+            v                                             |
+    ProductHistoryCapability                             |
+            |                                             |
+            | structured tool result                      |
+            v                                             |
+    LLMClient final response                              |
+            |                                             |
+            +---------------------------------------------+
+                                  |
+                                  v
+                            Final answer
+```
+
+Das LLM entscheidet, ob es das Tool anfordert, und formuliert die Antwort.
+Deterministischer Python-Code erzwingt den einen bekannten Tool-Namen, validiert
+`product_id`, lehnt mehr als einen Tool Call ab, dispatcht an
+`ProductHistoryCapability` und serialisiert dessen strukturiertes Ergebnis. Nach einem
+Tool Call werden dem finalen LLM Request keine Tools angeboten; ein weiterer
+zurückgegebener Tool Call wird abgelehnt, statt einen Loop zu starten.
+
 ## Verantwortlichkeiten der Packages
 
 ### `domain`
@@ -82,8 +118,10 @@ Not-found-Ergebnisses.
 Enthält provider-unabhängige LLM-Verträge und später Agenten-Orchestrierungslogik.
 
 Die aktuelle Implementierung definiert `LLMClient`, die Auswahl über semantische
-`ModelProfile` und kleine Request- und Response-Modelle. Sie importiert weder das
-OpenAI-SDK noch benennt sie einen konkreten Provider oder ein konkretes Modell.
+`ModelProfile`, kleine Request- und Response-Modelle sowie `ProductHistoryAgent`. Der
+Agent enthält die begrenzte Orchestrierung und den festen Ein-Tool-Dispatch. Er
+importiert weder das OpenAI-SDK noch benennt er einen konkreten Provider oder ein
+konkretes Modell.
 
 Spätere Verantwortlichkeiten können Folgendes umfassen:
 
