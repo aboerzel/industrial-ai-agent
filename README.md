@@ -47,16 +47,23 @@ No LLM framework, MCP server, vector database, or multi-agent framework is intro
 ## Manual Ollama Smoke Tests
 
 The smoke test is deliberately separate from automated tests and calls the configured
-local model. Install and start Ollama, make sure `qwen3.5:9b` is available, and run:
+local models. Install and start Ollama, make sure both configured models are available,
+and run:
 
 ```powershell
+ollama pull qwen3.5:4b
 ollama pull qwen3.5:9b
 python scripts/smoke_test_ollama.py
+python scripts/smoke_test_ollama.py --profile local_fast
+python scripts/smoke_test_ollama.py --profile local_quality
 python scripts/smoke_test_troubleshooting_agent.py
 ```
 
-The first script verifies basic LLM connectivity. The second runs a multi-step
-troubleshooting request and structurally verifies the sequential calls
+Without `--profile`, the first script calls `local_fast` and `local_quality` sequentially.
+The explicit invocations test either semantic profile separately and report its
+configured model with the response. The troubleshooting script continues to use the
+compatible `troubleshooting` profile, runs a multi-step request, and structurally
+verifies the sequential calls
 `get_product_history(P4711)` and `get_machine_status(S04)` before a successful final
 answer.
 

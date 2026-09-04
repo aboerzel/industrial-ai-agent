@@ -49,18 +49,24 @@ Es wurden noch kein LLM framework, MCP server, keine vector database und kein mu
 
 ## Manuelle Ollama Smoke Tests
 
-Der Smoke Test ist bewusst von den automatisierten Tests getrennt und ruft das
-konfigurierte lokale Modell auf. Installiere und starte Ollama, stelle sicher, dass
-`qwen3.5:9b` verfügbar ist, und führe Folgendes aus:
+Der Smoke Test ist bewusst von den automatisierten Tests getrennt und ruft die
+konfigurierten lokalen Modelle auf. Installiere und starte Ollama, stelle sicher, dass
+beide konfigurierten Modelle verfügbar sind, und führe Folgendes aus:
 
 ```powershell
+ollama pull qwen3.5:4b
 ollama pull qwen3.5:9b
 python scripts/smoke_test_ollama.py
+python scripts/smoke_test_ollama.py --profile local_fast
+python scripts/smoke_test_ollama.py --profile local_quality
 python scripts/smoke_test_troubleshooting_agent.py
 ```
 
-Das erste Skript prüft die grundlegende LLM-Verbindung. Das zweite führt eine
-mehrstufige Troubleshooting-Anfrage aus und prüft strukturell die sequenziellen Calls
+Ohne `--profile` ruft das erste Skript `local_fast` und `local_quality` nacheinander auf.
+Die expliziten Aufrufe testen jedes semantische Profile separat und geben sein
+konfiguriertes Modell zusammen mit der Antwort aus. Das Troubleshooting-Skript verwendet
+weiterhin das kompatible `troubleshooting`-Profile, führt eine mehrstufige Anfrage aus
+und prüft strukturell die sequenziellen Calls
 `get_product_history(P4711)` und `get_machine_status(S04)` vor einer erfolgreichen
 finalen Antwort.
 

@@ -12,10 +12,12 @@ from industrial_ai_agent.infrastructure.llm.configuration import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def load_project_configuration() -> LLMConfiguration:
+    return load_llm_configuration(PROJECT_ROOT / "config" / "model_profiles.toml")
+
+
 def test_loads_troubleshooting_profile() -> None:
-    configuration = load_llm_configuration(
-        PROJECT_ROOT / "config" / "model_profiles.toml"
-    )
+    configuration = load_project_configuration()
 
     profile = configuration.get_profile("troubleshooting")
 
@@ -25,6 +27,46 @@ def test_loads_troubleshooting_profile() -> None:
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.NONE
     assert profile.api_key_env is None
+
+
+def test_loads_local_fast_profile() -> None:
+    profile = load_project_configuration().get_profile("local_fast")
+
+    assert profile.provider == "ollama"
+    assert profile.model == "qwen3.5:4b"
+    assert str(profile.base_url) == "http://localhost:11434/v1"
+    assert profile.temperature == 0
+    assert profile.authentication is AuthenticationMode.NONE
+    assert profile.api_key_env is None
+
+
+def test_loads_local_quality_profile() -> None:
+    profile = load_project_configuration().get_profile("local_quality")
+
+    assert profile.provider == "ollama"
+    assert profile.model == "qwen3.5:9b"
+    assert str(profile.base_url) == "http://localhost:11434/v1"
+    assert profile.temperature == 0
+    assert profile.authentication is AuthenticationMode.NONE
+    assert profile.api_key_env is None
+
+
+def test_local_profiles_use_different_models() -> None:
+    configuration = load_project_configuration()
+
+    fast_profile = configuration.get_profile("local_fast")
+    quality_profile = configuration.get_profile("local_quality")
+
+    assert fast_profile.model != quality_profile.model
+
+
+def test_local_profiles_use_same_endpoint() -> None:
+    configuration = load_project_configuration()
+
+    fast_profile = configuration.get_profile("local_fast")
+    quality_profile = configuration.get_profile("local_quality")
+
+    assert fast_profile.base_url == quality_profile.base_url
 
 
 def test_rejects_unknown_profile() -> None:
