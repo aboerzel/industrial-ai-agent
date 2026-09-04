@@ -4,10 +4,11 @@
 
 The retrieval slice implements three measurable lexical baselines from ADR-006: simple
 term overlap, rarity-aware IDF overlap, and BM25. It adds the first semantic baseline
-described by ADR-007 and a rank-fused BM25-plus-semantic hybrid baseline. Version 2
-expanded and froze the corpus and evaluation set before BM25, semantic, and hybrid
-retrieval were implemented, so none of those strategies could shape its own benchmark.
-Retrieval remains isolated from `TroubleshootingAgent`.
+described by ADR-007, a rank-fused BM25-plus-semantic hybrid baseline, and a local
+cross-encoder reranking baseline. Version 2 expanded and froze the corpus and evaluation
+set before BM25, semantic, hybrid, and reranked retrieval were implemented, so none of
+those strategies could shape its own benchmark. Retrieval remains isolated from
+`TroubleshootingAgent`.
 
 ## Knowledge Base and Ingestion
 
@@ -150,6 +151,45 @@ scores use ascending `chunk_id` as the deterministic tie-breaker. The installed
 Ensemble/RRF retriever component, so this narrow deterministic function is local rather
 than introducing an additional LangChain package or a generic fusion framework.
 
+## Reranking Baseline
+
+Retrieval and reranking have different jobs. BM25 and the semantic bi-encoder retrieve
+candidate passages efficiently from the corpus; a cross-encoder receives the query and
+one candidate passage together, so it can model their direct relation more precisely.
+That joint inference is more expensive, which is why it runs only after candidate
+generation instead of over every chunk.
+
+The provider-neutral inner `Reranker` port accepts `rerank(query, candidates)` and
+returns the same structured candidates in a new order. It exposes no Torch,
+Transformers, Hugging Face, or Sentence Transformers types. The local
+`SentenceTransformersCrossEncoderReranker` adapts `sentence_transformers.CrossEncoder`
+with `BAAI/bge-reranker-v2-m3`. `RerankedKnowledgeRetriever` composes the existing
+hybrid retriever and that port, validates that the reranker returns exactly the supplied
+candidate IDs, and keeps the original content and provenance. Its generic
+`relevance_score` is the reranker result; no framework-specific score type reaches the
+Core.
+
+The fixed pipeline parameters, selected before the first reranked v2 run, are BM25
+candidate depth `10`, semantic candidate depth `10`, RRF rank constant `60`, fused
+candidate depth `10`, and final eval `top_k=3`. The reranker cannot introduce chunks
+outside those ten fused candidates. `HybridKnowledgeRetriever` retains its original
+full-corpus default; only the reranked composition explicitly supplies the candidate
+depth.
+
+Inference is local-only. The adapter loads from the local Hugging Face cache with
+`local_files_only=True`, so runtime cannot send queries, chunks, embeddings, or scores
+to a cloud service. Cache the public model artifact explicitly before a first local run:
+
+```powershell
+hf download BAAI/bge-reranker-v2-m3
+```
+
+The adapter selects `cuda` when `torch.cuda.is_available()` and otherwise falls back to
+`cpu`; neither behavior leaks into Core code. On the RTX 3070 used for this baseline,
+the cached model loaded in roughly 33 seconds and the complete 28-case eval, including
+model initialization, took roughly 18 seconds. These are local observations, not a
+performance target.
+
 ## Retrieval Evaluation Datasets
 
 `evals/datasets/knowledge_retrieval_v1.jsonl` remains byte-for-byte unchanged with its
@@ -195,7 +235,9 @@ python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.js
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy semantic
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy hybrid
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy reranked
 python scripts/smoke_test_semantic_retrieval.py
+python scripts/smoke_test_reranked_retrieval.py
 ```
 
 The original v1 dataset remains selectable with `--dataset
@@ -208,7 +250,7 @@ The seven-document corpus and v2 ground truth were frozen on 2026-09-04 before t
 first v2 retrieval run. The dataset SHA-256 at freeze is
 `E535816185D90DA816C5FD2033865094BD430E3752AE19632647E82309A46EA6`.
 Neither v2 queries nor relevance labels may be changed in response to later BM25,
-semantic, or hybrid-retrieval results. Corpus wording and chunking used for that
+semantic, hybrid, or reranked-retrieval results. Corpus wording and chunking used for that
 comparison are frozen as well. A necessary correction must be explicit and versioned as
 a later dataset rather than silently rewriting v2.
 
@@ -217,14 +259,14 @@ a later dataset rather than silently rewriting v2.
 The v1 values are the historical three-document baseline recorded before corpus
 expansion. The v2 values use the frozen seven-document, 25-chunk corpus.
 
-| Dataset | Metric | Simple overlap | Rarity-aware IDF | BM25 | Semantic | Hybrid RRF |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| v1 (10 cases) | Hit@1 | 0.9000 | 1.0000 | 0.9000 | not measured | not measured |
-| v1 (10 cases) | Hit@3 | 1.0000 | 1.0000 | 1.0000 | not measured | not measured |
-| v1 (10 cases) | Mean Recall@3 | 0.9500 | 0.9500 | 0.9500 | not measured | not measured |
-| v2 (28 cases) | Hit@1 | 0.7857 | 0.8571 | 0.7857 | 0.8571 | 0.7857 |
-| v2 (28 cases) | Hit@3 | 0.8929 | 0.9286 | 0.9643 | 0.9643 | 0.9643 |
-| v2 (28 cases) | Mean Recall@3 | 0.8155 | 0.8452 | 0.8810 | 0.8810 | 0.8988 |
+| Dataset | Metric | Simple overlap | Rarity-aware IDF | BM25 | Semantic | Hybrid RRF | Hybrid + reranker |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| v1 (10 cases) | Hit@1 | 0.9000 | 1.0000 | 0.9000 | not measured | not measured | not measured |
+| v1 (10 cases) | Hit@3 | 1.0000 | 1.0000 | 1.0000 | not measured | not measured | not measured |
+| v1 (10 cases) | Mean Recall@3 | 0.9500 | 0.9500 | 0.9500 | not measured | not measured | not measured |
+| v2 (28 cases) | Hit@1 | 0.7857 | 0.8571 | 0.7857 | 0.8571 | 0.7857 | 0.8214 |
+| v2 (28 cases) | Hit@3 | 0.8929 | 0.9286 | 0.9643 | 0.9643 | 0.9643 | 1.0000 |
+| v2 (28 cases) | Mean Recall@3 | 0.8155 | 0.8452 | 0.8810 | 0.8810 | 0.8988 | 0.9881 |
 
 The v1 regression against the expanded 25-chunk corpus reproduced the existing simple
 and IDF values. BM25 reached `0.9000 / 1.0000 / 0.9500`; its only Hit@1 miss was
@@ -233,26 +275,26 @@ Recall@3.
 
 The v2 failure lists are:
 
-| Failure | Simple overlap | Rarity-aware IDF | BM25 | Semantic | Hybrid RRF |
-| --- | --- | --- | --- | --- | --- |
-| Hit@1 misses | `station_quality_role`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_invalid_after_work`, `calibration_procedure`, `qv1_role_short` | `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `error_code_exact`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple` | `station_current_fault`, `axis_encoder_short`, `qv1_role_short`, `vision_recovery_multiple` | `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` |
-| Hit@3 misses | `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `s02_recovery_verification`, `calibration_procedure` | `s02_recovery_verification` | `qv1_role_short` | `s02_recovery_verification` |
-| Incomplete Recall@3 | `product_failure_context_multiple`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `calibration_procedure`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `service_evidence_multiple`, `vision_recovery_multiple` | `positioning_causes_natural`, `axis_encoder_short`, `positioning_long_diagnosis`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `service_evidence_multiple`, `vision_recovery_multiple` |
+| Failure | Simple overlap | Rarity-aware IDF | BM25 | Semantic | Hybrid RRF | Hybrid + reranker |
+| --- | --- | --- | --- | --- | --- | --- |
+| Hit@1 misses | `station_quality_role`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_invalid_after_work`, `calibration_procedure`, `qv1_role_short` | `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `error_code_exact`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple` | `station_current_fault`, `axis_encoder_short`, `qv1_role_short`, `vision_recovery_multiple` | `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `s02_operator_diagnosis`, `s02_recovery_verification`, `calibration_procedure`, `service_evidence_multiple`, `vision_recovery_multiple` |
+| Hit@3 misses | `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `s02_recovery_verification`, `calibration_procedure` | `s02_recovery_verification` | `qv1_role_short` | `s02_recovery_verification` | none |
+| Incomplete Recall@3 | `product_failure_context_multiple`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `calibration_procedure`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `service_evidence_multiple`, `vision_recovery_multiple` | `positioning_causes_natural`, `axis_encoder_short`, `positioning_long_diagnosis`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `service_evidence_multiple`, `vision_recovery_multiple` | `vision_recovery_multiple` |
 
 ## v2 Results by Category
 
-| Category (n) | Simple H@1/H@3/MR@3 | IDF H@1/H@3/MR@3 | BM25 H@1/H@3/MR@3 | Semantic H@1/H@3/MR@3 | Hybrid H@1/H@3/MR@3 |
-| --- | --- | --- | --- | --- | --- |
-| Exact identifiers (15) | 0.8667 / 0.8667 / 0.7889 | 0.8667 / 0.9333 / 0.8444 | 0.8000 / 1.0000 / 0.9111 | 0.7333 / 0.9333 / 0.8444 | 0.8000 / 1.0000 / 0.9444 |
-| Natural language (17) | 0.7059 / 0.8824 / 0.8235 | 0.8235 / 0.8824 / 0.8235 | 0.7647 / 0.9412 / 0.8824 | 0.9412 / 1.0000 / 0.9412 | 0.7647 / 0.9412 / 0.8824 |
-| Rare terms (7) | 1.0000 / 1.0000 / 1.0000 | 1.0000 / 1.0000 / 0.9286 | 0.8571 / 1.0000 / 0.9286 | 0.8571 / 1.0000 / 0.9286 | 1.0000 / 1.0000 / 0.9286 |
-| Common-term ambiguity (14) | 0.7143 / 0.7857 / 0.7857 | 0.7857 / 0.8571 / 0.8571 | 0.7857 / 0.9286 / 0.9286 | 0.8571 / 0.9286 / 0.9286 | 0.7857 / 0.9286 / 0.9286 |
-| Multi-relevance (9) | 0.8889 / 1.0000 / 0.7593 | 0.8889 / 1.0000 / 0.7407 | 0.7778 / 1.0000 / 0.7407 | 0.7778 / 1.0000 / 0.7407 | 0.6667 / 1.0000 / 0.7963 |
-| Short queries (5) | 0.8000 / 0.8000 / 0.8000 | 0.8000 / 1.0000 / 0.9000 | 0.8000 / 1.0000 / 0.9000 | 0.6000 / 0.8000 / 0.7000 | 0.8000 / 1.0000 / 0.9000 |
-| Longer technical queries (5) | 1.0000 / 1.0000 / 0.6667 | 1.0000 / 1.0000 / 0.7333 | 0.8000 / 1.0000 / 0.7333 | 0.8000 / 1.0000 / 0.7333 | 0.6000 / 1.0000 / 0.8333 |
-| Cross-document ambiguity (20) | 0.7500 / 0.9000 / 0.7917 | 0.8500 / 0.9500 / 0.8333 | 0.8000 / 0.9500 / 0.8333 | 0.8500 / 0.9500 / 0.8333 | 0.7500 / 0.9500 / 0.8583 |
-| Term-frequency-sensitive (4) | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 1.0000 / 0.8750 | 1.0000 / 1.0000 / 0.7500 | 0.5000 / 1.0000 / 0.8750 |
-| Length-sensitive (6) | 0.8333 / 1.0000 / 0.7222 | 0.8333 / 1.0000 / 0.7778 | 0.6667 / 1.0000 / 0.7778 | 0.8333 / 1.0000 / 0.6944 | 0.5000 / 1.0000 / 0.7778 |
+| Category (n) | Simple H@1/H@3/MR@3 | IDF H@1/H@3/MR@3 | BM25 H@1/H@3/MR@3 | Semantic H@1/H@3/MR@3 | Hybrid H@1/H@3/MR@3 | Reranked H@1/H@3/MR@3 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Exact identifiers (15) | 0.8667 / 0.8667 / 0.7889 | 0.8667 / 0.9333 / 0.8444 | 0.8000 / 1.0000 / 0.9111 | 0.7333 / 0.9333 / 0.8444 | 0.8000 / 1.0000 / 0.9444 | 0.8000 / 1.0000 / 0.9778 |
+| Natural language (17) | 0.7059 / 0.8824 / 0.8235 | 0.8235 / 0.8824 / 0.8235 | 0.7647 / 0.9412 / 0.8824 | 0.9412 / 1.0000 / 0.9412 | 0.7647 / 0.9412 / 0.8824 | 0.7647 / 1.0000 / 1.0000 |
+| Rare terms (7) | 1.0000 / 1.0000 / 1.0000 | 1.0000 / 1.0000 / 0.9286 | 0.8571 / 1.0000 / 0.9286 | 0.8571 / 1.0000 / 0.9286 | 1.0000 / 1.0000 / 0.9286 | 1.0000 / 1.0000 / 1.0000 |
+| Common-term ambiguity (14) | 0.7143 / 0.7857 / 0.7857 | 0.7857 / 0.8571 / 0.8571 | 0.7857 / 0.9286 / 0.9286 | 0.8571 / 0.9286 / 0.9286 | 0.7857 / 0.9286 / 0.9286 | 0.7857 / 1.0000 / 1.0000 |
+| Multi-relevance (9) | 0.8889 / 1.0000 / 0.7593 | 0.8889 / 1.0000 / 0.7407 | 0.7778 / 1.0000 / 0.7407 | 0.7778 / 1.0000 / 0.7407 | 0.6667 / 1.0000 / 0.7963 | 0.7778 / 1.0000 / 0.9630 |
+| Short queries (5) | 0.8000 / 0.8000 / 0.8000 | 0.8000 / 1.0000 / 0.9000 | 0.8000 / 1.0000 / 0.9000 | 0.6000 / 0.8000 / 0.7000 | 0.8000 / 1.0000 / 0.9000 | 1.0000 / 1.0000 / 1.0000 |
+| Longer technical queries (5) | 1.0000 / 1.0000 / 0.6667 | 1.0000 / 1.0000 / 0.7333 | 0.8000 / 1.0000 / 0.7333 | 0.8000 / 1.0000 / 0.7333 | 0.6000 / 1.0000 / 0.8333 | 0.6000 / 1.0000 / 0.9333 |
+| Cross-document ambiguity (20) | 0.7500 / 0.9000 / 0.7917 | 0.8500 / 0.9500 / 0.8333 | 0.8000 / 0.9500 / 0.8333 | 0.8500 / 0.9500 / 0.8333 | 0.7500 / 0.9500 / 0.8583 | 0.8000 / 1.0000 / 0.9833 |
+| Term-frequency-sensitive (4) | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 1.0000 / 0.8750 | 1.0000 / 1.0000 / 0.7500 | 0.5000 / 1.0000 / 0.8750 | 0.7500 / 1.0000 / 1.0000 |
+| Length-sensitive (6) | 0.8333 / 1.0000 / 0.7222 | 0.8333 / 1.0000 / 0.7778 | 0.6667 / 1.0000 / 0.7778 | 0.8333 / 1.0000 / 0.6944 | 0.5000 / 1.0000 / 0.7778 | 0.6667 / 1.0000 / 0.9444 |
 
 ## Ranking Differences and Interpretation
 
@@ -347,13 +389,37 @@ second relevant service passage, and `service_evidence_multiple` still retrieves
 one of its two expected passages. These are remaining depth and intent-disambiguation
 limits, not grounds for changing v2 labels or the frozen corpus.
 
+### Reranking Comparison
+
+`Hybrid + reranker` reaches `0.8214 / 1.0000 / 0.9881` for Hit@1, Hit@3, and Mean
+Recall@3 on v2, compared with hybrid's `0.7857 / 0.9643 / 0.8988`. It removes every
+Hit@3 miss; only `vision_recovery_multiple` retains incomplete Recall@3. By category,
+it reaches complete recall for natural language, rare terms, common-term ambiguity,
+short queries, and term-frequency-sensitive cases; multi-relevance rises to
+`0.7778 / 1.0000 / 0.9630`.
+
+`positioning_causes_natural` moves `station_s02::chunk-002` from hybrid rank 2 to rank
+1 (0.688441) and also raises the relevant `troubleshooting_service::chunk-002` to rank
+3. `qv1_role_short` places `vision_calibration::chunk-001` first (0.914100). For
+`s02_recovery_verification`, `station_s02::chunk-004` moves from hybrid rank 7 to rank
+3 (0.001280), fixing Hit@3 but not Hit@1. `calibration_procedure` retains
+`vision_calibration::chunk-003` at rank 3 (0.144749), and
+`service_evidence_multiple` retains `troubleshooting_service::chunk-002` first rather
+than an expected passage. Reranker scores are meaningful only for sorting candidates of
+the same query.
+
+The local smoke for "How do I verify that S02 is ready again after repair?" moved
+`station_s02::chunk-004` from hybrid rank 2 to reranker rank 1 (0.714973), while
+preserving complete source and chunk provenance.
+
 ## Known Limits
 
 The corpus remains intentionally small and manually inspectable rather than production
 scale. BM25 still has no stemming, synonyms, phrase model, query expansion, or semantic
 understanding. The semantic baseline is local-only, and the fixed hybrid has no
-identifier boost, learned weights, reranker, query rewriting, persistent index,
-freshness management, or embedding-routing policy. `InMemoryVectorStore` is recreated
-at construction and is not a vector-database decision. Section-position IDs can shift
-after structural document edits. Final-answer grounding and agent query quality are not
-evaluated by this retrieval baseline.
+identifier boost or learned weights. The first local reranker has no ensemble, second
+model variant, query rewriting, persistent index, freshness management, or
+embedding-routing policy. `InMemoryVectorStore` is recreated at construction and is not
+a vector-database decision. Section-position IDs can shift after structural document
+edits. Final-answer grounding and agent query quality are not evaluated by this
+retrieval baseline.

@@ -23,6 +23,7 @@ class HybridKnowledgeRetriever:
         bm25_retriever: KnowledgeRetriever,
         semantic_retriever: KnowledgeRetriever,
         rank_constant: int = DEFAULT_RRF_RANK_CONSTANT,
+        candidate_limit: int | None = None,
     ) -> None:
         indexed_chunks = tuple(chunks)
         self._chunks_by_id = {chunk.chunk_id: chunk for chunk in indexed_chunks}
@@ -32,12 +33,14 @@ class HybridKnowledgeRetriever:
             raise ValueError("Hybrid index must not contain duplicate chunk_ids")
         if rank_constant < 1:
             raise ValueError("rank_constant must be at least 1")
+        if candidate_limit is not None and candidate_limit < 1:
+            raise ValueError("candidate_limit must be at least 1")
 
         self._bm25_retriever = bm25_retriever
         self._semantic_retriever = semantic_retriever
         self._rank_constant = rank_constant
-        # The frozen corpus is small, so both component rankings include every chunk.
-        self._candidate_limit = len(self._chunks_by_id)
+        # The default retains the original full-corpus hybrid baseline behavior.
+        self._candidate_limit = candidate_limit or len(self._chunks_by_id)
 
     def search(
         self,

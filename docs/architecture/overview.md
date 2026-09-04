@@ -9,7 +9,7 @@ single-agent paths over the same two read-only tools: the handwritten
 also receive an explicitly injected demonstration action capability that pauses for human
 approval. Focused deterministic baselines evaluate
 the first LLM tool decision and complete bounded trajectories for either path. Local
-lexical, semantic, and hybrid knowledge-retrieval strategies are implemented behind one
+lexical, semantic, hybrid, and reranked knowledge-retrieval strategies are implemented behind one
 inner port but are not yet integrated into the agent. A deterministic, deny-by-default model-egress decorator
 checks explicit request classification against each Model Profile's validated Execution
 Zone before invoking the provider adapter.
@@ -43,6 +43,8 @@ flowchart LR
         BM25["InMemoryBm25KnowledgeRetriever"]
         SEM["InMemorySemanticKnowledgeRetriever"]
         HYB["HybridKnowledgeRetriever"]
+        RER["RerankedKnowledgeRetriever"]
+        CEP["SentenceTransformersCrossEncoderReranker"]
         OEC["OllamaEmbeddingClient"]
         VEC["LangChain InMemoryVectorStore"]
         KB["Versioned local Markdown knowledge base"]
@@ -59,6 +61,7 @@ flowchart LR
     BM25 -.->|"implements"| KR
     SEM -.->|"implements"| KR
     HYB -.->|"implements"| KR
+    RER -.->|"implements"| KR
     OEC -.->|"implements"| EP
     KB -->|"explicit index build"| LKR
     KB -->|"explicit index build"| IDF
@@ -66,6 +69,8 @@ flowchart LR
     KB -->|"explicit index build"| SEM
     BM25 --> HYB
     SEM --> HYB
+    HYB --> RER
+    CEP --> RER
     SEM -->|"embeds through"| EP
     SEM --> VEC
     OEC --> OLLAMA
@@ -75,7 +80,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,OEC,VEC,KB,OLLAMA adapter
+    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -110,17 +115,20 @@ flowchart LR
     Port --> BM25Search["BM25 ranking<br/>top 3"]
     Port --> SemanticSearch["Semantic vector ranking<br/>top 3"]
     Port --> HybridSearch["Hybrid RRF ranking<br/>top 3"]
+    Port --> RerankedSearch["Hybrid + local cross-encoder<br/>top 3"]
     Index --> Simple
     Index --> IDFSearch
     Index --> BM25Search
     Chunk --> SemanticSearch
     BM25Search --> HybridSearch
     SemanticSearch --> HybridSearch
+    HybridSearch --> RerankedSearch
     Simple --> Results["Structured results<br/>content + provenance + score"]
     IDFSearch --> Results
     BM25Search --> Results
     SemanticSearch --> Results
     HybridSearch --> Results
+    RerankedSearch --> Results
     Results --> Query
 
     classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
@@ -128,7 +136,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class Docs,Load,Chunk data
     class Query,Port,Results core
-    class Index,Simple,IDFSearch,BM25Search,SemanticSearch,HybridSearch adapter
+    class Index,Simple,IDFSearch,BM25Search,SemanticSearch,HybridSearch,RerankedSearch adapter
 ```
 
 The tokenizer case-folds alphanumeric and hyphenated terms so exact industrial
@@ -145,7 +153,7 @@ attached to every result.
 
 The focused retrieval eval is separate from the agent evals. Its 28 frozen v2 cases
 measure Hit@1, Hit@3, and Mean Recall@3 using structured relevant-chunk ground truth.
-The same unchanged dataset compares all five strategies. Agent query formulation and
+The same unchanged dataset compares all six strategies. Agent query formulation and
 final-answer grounding are outside this slice.
 
 The implemented LLM boundary includes deterministic task-level profile selection and a
@@ -485,7 +493,8 @@ The current implementations are `InMemoryProductHistoryRepository` and
 different scoring formulas, `InMemorySemanticKnowledgeRetriever`, which maps LangChain
 `InMemoryVectorStore` matches back to original chunk provenance through `EmbeddingClient`,
 `HybridKnowledgeRetriever`, which rank-fuses the existing BM25 and semantic retrievers,
-and `OllamaEmbeddingClient`, which confines the baseline embedding model to local Ollama,
+`RerankedKnowledgeRetriever`, which applies a bounded local cross-encoder stage, and
+`OllamaEmbeddingClient`, which confines the baseline embedding model to local Ollama,
 and
 `OpenAICompatibleLLMClient`, which translates the provider-independent LLM contract to
 an OpenAI-compatible Chat Completions API. `LLMClientChatModel` is the narrow
@@ -574,7 +583,7 @@ Cost and quality preferences cannot override the security filter. See
 ### Retrieval Evolution
 
 The lexical baselines and the first semantic baseline are now also compared with a
-fixed rank-fusion hybrid baseline. The retrieval
+fixed rank-fusion hybrid baseline and a bounded local cross-encoder reranking stage. The retrieval
 core remains independent from a later Knowledge MCP transport boundary as specified by
 [ADR-006](../decisions/ADR-006-knowledge-retrieval-and-rag-architecture.md). Embeddings
 remain a separate model role from `LLMClient`; the focused `EmbeddingClient` port is in
@@ -593,6 +602,8 @@ flowchart LR
         Bm25["InMemoryBm25KnowledgeRetriever"]
         Semantic["InMemorySemanticKnowledgeRetriever"]
         Hybrid["HybridKnowledgeRetriever<br/>RRF k=60"]
+        Reranked["RerankedKnowledgeRetriever<br/>candidate depth 10"]
+        Reranker["SentenceTransformersCrossEncoderReranker<br/>BAAI/bge-reranker-v2-m3"]
         Adapter["OllamaEmbeddingClient"]
         Index["LangChain InMemoryVectorStore"]
     end
@@ -600,25 +611,29 @@ flowchart LR
     Semantic -.->|"implements"| KnowledgePort
     Bm25 -.->|"implements"| KnowledgePort
     Hybrid -.->|"implements"| KnowledgePort
+    Reranked -.->|"implements"| KnowledgePort
     Semantic -->|"uses"| EmbeddingPort
     Adapter -.->|"implements"| EmbeddingPort
     Semantic --> Index
     Bm25 --> Hybrid
     Semantic --> Hybrid
+    Hybrid --> Reranked
+    Reranker --> Reranked
     Adapter --> Model["Local Ollama<br/>qwen3-embedding:0.6b"]
 
     classDef core fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
     class KnowledgePort,EmbeddingPort core
-    class Bm25,Semantic,Hybrid,Adapter,Index adapter
+    class Bm25,Semantic,Hybrid,Reranked,Reranker,Adapter,Index adapter
     class Model external
 ```
 
 The first model and in-memory index are implementation baselines, not durable provider
 or vector-store commitments. RRF is a fixed comparison baseline rather than a general
-fusion technology decision. Dimension, persistent storage, reranking, and embedding
-routing remain open. See
+fusion technology decision. The first reranker and its model are baseline configuration,
+not a permanent provider or model decision. Dimension, persistent storage, additional
+reranking, and embedding routing remain open. See
 [ADR-007](../decisions/ADR-007-embedding-model-abstraction.md).
 
 ### Broader Target Direction

@@ -23,6 +23,13 @@ from industrial_ai_agent.infrastructure.in_memory_semantic_knowledge_retriever i
 from industrial_ai_agent.infrastructure.ollama_embedding_client import (
     OllamaEmbeddingClient,
 )
+from industrial_ai_agent.infrastructure.reranked_knowledge_retriever import (
+    DEFAULT_RERANK_CANDIDATE_LIMIT,
+    RerankedKnowledgeRetriever,
+)
+from industrial_ai_agent.infrastructure.sentence_transformers_reranker import (
+    SentenceTransformersCrossEncoderReranker,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_PATH = (
@@ -30,7 +37,14 @@ DEFAULT_DATASET_PATH = (
 )
 DEFAULT_KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
 DEFAULT_K = 3
-RetrievalStrategy = Literal["simple", "idf", "bm25", "semantic", "hybrid"]
+RetrievalStrategy = Literal[
+    "simple",
+    "idf",
+    "bm25",
+    "semantic",
+    "hybrid",
+    "reranked",
+]
 RetrievalCategory = Literal[
     "exact_identifier",
     "natural_language",
@@ -346,7 +360,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=DEFAULT_K)
     parser.add_argument(
         "--strategy",
-        choices=("simple", "idf", "bm25", "semantic", "hybrid"),
+        choices=("simple", "idf", "bm25", "semantic", "hybrid", "reranked"),
         default="simple",
         help="Retrieval implementation to evaluate.",
     )
@@ -399,13 +413,23 @@ def _create_retriever(
         return InMemoryBm25KnowledgeRetriever(chunks)
     if strategy == "semantic":
         return InMemorySemanticKnowledgeRetriever(chunks, OllamaEmbeddingClient())
-    return HybridKnowledgeRetriever(
+    hybrid_retriever = HybridKnowledgeRetriever(
         chunks,
         bm25_retriever=InMemoryBm25KnowledgeRetriever(chunks),
         semantic_retriever=InMemorySemanticKnowledgeRetriever(
             chunks,
             OllamaEmbeddingClient(),
         ),
+        candidate_limit=(
+            DEFAULT_RERANK_CANDIDATE_LIMIT if strategy == "reranked" else None
+        ),
+    )
+    if strategy == "hybrid":
+        return hybrid_retriever
+    return RerankedKnowledgeRetriever(
+        candidate_retriever=hybrid_retriever,
+        reranker=SentenceTransformersCrossEncoderReranker(),
+        candidate_limit=DEFAULT_RERANK_CANDIDATE_LIMIT,
     )
 
 

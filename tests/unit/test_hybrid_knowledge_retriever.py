@@ -143,6 +143,24 @@ def test_hybrid_retriever_rejects_empty_query_and_invalid_limit() -> None:
         retriever.search("query", limit=0)
 
 
+def test_hybrid_retriever_can_bound_component_candidate_depth() -> None:
+    chunks = (chunk("a::chunk-001"), chunk("b::chunk-001"))
+    bm25 = StaticKnowledgeRetriever((chunks[1], chunks[0]))
+    semantic = StaticKnowledgeRetriever((chunks[0], chunks[1]))
+    retriever = HybridKnowledgeRetriever(
+        chunks,
+        bm25_retriever=bm25,
+        semantic_retriever=semantic,
+        candidate_limit=1,
+    )
+
+    results = retriever.search("query", limit=2)
+
+    assert bm25.requests == [("query", 1)]
+    assert semantic.requests == [("query", 1)]
+    assert [result.chunk_id for result in results] == ["a::chunk-001", "b::chunk-001"]
+
+
 def test_hybrid_retriever_rejects_component_result_without_known_provenance() -> None:
     source_chunk = chunk("a::chunk-001")
     retriever = HybridKnowledgeRetriever(

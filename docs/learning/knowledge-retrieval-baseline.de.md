@@ -5,8 +5,9 @@
 Der Retrieval-Slice implementiert drei messbare lexikalische Baselines aus ADR-006:
 einfaches Term Overlap, rarity-aware IDF Overlap und BM25. Er ergänzt die erste
 semantische Baseline aus ADR-007 sowie eine rangfusionierte BM25-plus-semantische
-Hybrid-Baseline. Version 2 erweiterte und fror Corpus sowie Evaluation Set ein, bevor
-BM25, Semantic und Hybrid Retrieval implementiert wurden. Keine dieser Strategien
+Hybrid-Baseline und eine lokale Cross-Encoder-Reranking-Baseline. Version 2 erweiterte
+und fror Corpus sowie Evaluation Set ein, bevor BM25, Semantic, Hybrid und Reranking
+implementiert wurden. Keine dieser Strategien
 konnte dadurch ihren eigenen Benchmark beeinflussen. Retrieval bleibt vom
 `TroubleshootingAgent` isoliert.
 
@@ -159,6 +160,42 @@ stabile Ensemble-/RRF-Retriever-Komponente. Daher bleibt diese kleine determinis
 Funktion lokal, statt ein zusätzliches LangChain-Paket oder ein generisches
 Fusion-Framework einzuführen.
 
+## Reranking-Baseline
+
+Retriever und Reranker haben unterschiedliche Aufgaben. BM25 und der semantische
+Bi-Encoder liefern effizient Kandidaten; ein Cross-Encoder verarbeitet Query und eine
+Kandidatenpassage gemeinsam und kann ihre direkte Relevanz genauer bewerten. Diese
+gemeinsame Inferenz ist teurer und läuft daher nur auf dem kleinen Candidate Set.
+
+Der providerneutrale innere `Reranker`-Port bietet `rerank(query, candidates)` und
+liefert dieselben strukturierten Kandidaten in neuer Reihenfolge. Er exponiert keine
+Torch-, Transformers-, Hugging-Face- oder Sentence-Transformers-Typen. Der lokale
+`SentenceTransformersCrossEncoderReranker` adaptiert `sentence_transformers.CrossEncoder`
+mit `BAAI/bge-reranker-v2-m3`. `RerankedKnowledgeRetriever` komponiert den bestehenden
+Hybrid Retriever und diesen Port, validiert exakt die übergebenen Candidate IDs und
+erhält Content sowie Provenance. `relevance_score` ist ein generischer Reranker-Score,
+kein Framework-Typ.
+
+Vor dem ersten rerankten v2-Lauf wurden festgelegt: BM25 Candidate Depth `10`, Semantic
+Candidate Depth `10`, RRF-Konstante `60`, fusionierte Candidate Depth `10` und finale
+Eval `top_k=3`. Der Reranker kann keine Chunks außerhalb dieser zehn fusionierten
+Kandidaten erzeugen. Die ursprüngliche Hybrid-Baseline behält ihren Full-Corpus-Default;
+nur die rerankte Komposition verwendet explizit diese Candidate Depth.
+
+Die Inferenz ist Local-Only. Der Adapter verwendet `local_files_only=True` und lädt aus
+dem lokalen Hugging-Face-Cache; Query, Chunks, Embeddings und Scores können dadurch zur
+Runtime keinen Cloud-Service erreichen. Das öffentliche Modellartefakt wird vor dem
+ersten lokalen Lauf explizit gecacht:
+
+```powershell
+hf download BAAI/bge-reranker-v2-m3
+```
+
+Bei erkannter CUDA verwendet der Adapter `cuda`, sonst `cpu`. Auf der verwendeten RTX
+3070 lud das gecachte Modell in ungefähr 33 Sekunden; der vollständige 28-Fall-Eval
+dauerte einschließlich Initialisierung ungefähr 18 Sekunden. Dies sind lokale
+Beobachtungen, keine Performance-Vorgabe.
+
 ## Retrieval-Evaluation-Datasets
 
 `evals/datasets/knowledge_retrieval_v1.jsonl` bleibt mit seinen zehn ursprünglichen
@@ -207,7 +244,9 @@ python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.js
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy semantic
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy hybrid
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy reranked
 python scripts/smoke_test_semantic_retrieval.py
+python scripts/smoke_test_reranked_retrieval.py
 ```
 
 Das ursprüngliche v1-Dataset bleibt mit `--dataset
@@ -220,8 +259,8 @@ werden.
 Der Corpus mit sieben Dokumenten und die v2 Ground Truth wurden am 04.09.2026 vor dem
 ersten v2-Retrieval-Lauf eingefroren. Der SHA-256-Wert des Datasets beim Freeze lautet
 `E535816185D90DA816C5FD2033865094BD430E3752AE19632647E82309A46EA6`.
-Weder v2-Queries noch Relevance Labels dürfen aufgrund späterer BM25-, Semantic- oder
-Hybrid-Retrieval-Ergebnisse verändert werden. Auch Corpus-Wortlaut und Chunking für
+Weder v2-Queries noch Relevance Labels dürfen aufgrund späterer BM25-, Semantic-,
+Hybrid- oder Reranking-Ergebnisse verändert werden. Auch Corpus-Wortlaut und Chunking für
 diesen Vergleich sind eingefroren. Eine notwendige Korrektur muss explizit als spätere
 Dataset-Version erfolgen, statt v2 stillschweigend umzuschreiben.
 
@@ -229,7 +268,7 @@ Dataset-Version erfolgen, statt v2 stillschweigend umzuschreiben.
 
 Die v1-Werte sind die historische Baseline mit drei Dokumenten vor der
 Corpus-Erweiterung. Die v2-Werte verwenden den eingefrorenen Corpus mit sieben
-Dokumenten und 25 Chunks.
+Dokumenten und 25 Chunks. Semantic, Hybrid und Reranking wurden auf v1 nicht gemessen.
 
 | Dataset | Metrik | Einfaches Overlap | Rarity-aware IDF | BM25 | Semantisch |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -411,13 +450,38 @@ Verification-Chunk auf Rang 1 setzt: die lexikalischen Spitzenränge verdrängen
 sind verbleibende Grenzen bei Tiefe und Intent-Disambiguierung, kein Anlass, v2 Labels
 oder den eingefrorenen Corpus zu ändern.
 
+### Reranking-Vergleich
+
+`Hybrid + Reranker` erreicht auf v2 `0.8214 / 1.0000 / 0.9881` für Hit@1, Hit@3 und
+Mean Recall@3, gegenüber Hybrids `0.7857 / 0.9643 / 0.8988`. Hit@3-Misses entfallen;
+unvollständiger Recall@3 bleibt nur bei `vision_recovery_multiple`. Nach Kategorie
+erreicht der Reranker insbesondere vollständigen Recall bei Natural Language,
+Rare Terms, Common-Term-Ambiguität, kurzen Queries und termfrequenz-sensitiven Fällen;
+Multi-Relevance steigt auf `0.7778 / 1.0000 / 0.9630`.
+
+`positioning_causes_natural` wechselt von Hybrid-Rang 2 für
+`station_s02::chunk-002` auf Rang 1 (0.688441) und hebt zugleich die relevante
+`troubleshooting_service::chunk-002` auf Rang 3. `qv1_role_short` setzt
+`vision_calibration::chunk-001` auf Rang 1 (0.914100). Bei
+`s02_recovery_verification` gelangt `station_s02::chunk-004` aus Hybrid-Rang 7 auf
+Rang 3 (0.001280), korrigiert also den Hit@3, aber nicht Hit@1.
+`calibration_procedure` behält `vision_calibration::chunk-003` auf Rang 3 (0.144749),
+und `service_evidence_multiple` behält `troubleshooting_service::chunk-002` auf Rang 1
+statt einer erwarteten Passage. Die Reranker-Scores sind nur innerhalb derselben Query
+zum Sortieren geeignet.
+
+Der lokale Smoke für "How do I verify that S02 is ready again after repair?" zeigte
+`station_s02::chunk-004` nach Hybrid-Rang 2 auf Reranker-Rang 1 (0.714973), mit
+vollständiger Source- und Chunk-Provenance.
+
 ## Bekannte Grenzen
 
 Der Corpus bleibt bewusst klein und manuell nachvollziehbar, statt Production Scale
 abzubilden. BM25 besitzt weiterhin weder Stemming, Synonyme, Phrase Model, Query
 Expansion noch semantisches Verständnis. Die semantische Baseline ist Local-Only, und
-der feste Hybrid besitzt weder Identifier-Boost noch gelernte Gewichte, Reranker, Query
-Rewriting, persistenten Index, Freshness Management oder Embedding-Routing-Policy.
+der feste Hybrid besitzt weder Identifier-Boost noch gelernte Gewichte. Der erste lokale
+Reranker hat kein Ensemble, keine zweite Modellvariante, kein Query Rewriting,
+persistenten Index, Freshness Management oder Embedding-Routing-Policy.
 `InMemoryVectorStore` wird bei der Erstellung neu gebaut und ist keine Entscheidung für
 eine Vector Database. Abschnittspositions-IDs können sich nach strukturellen
 Dokumentänderungen verschieben. Grounding der finalen Antwort und Qualität der Agent
