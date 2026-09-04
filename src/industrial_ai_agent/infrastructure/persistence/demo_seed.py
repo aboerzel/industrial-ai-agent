@@ -1,11 +1,28 @@
-"""Reproducible synthetic FACTORY-DEMO-01 seed data and document catalog loading."""
+"""Reproducible synthetic FACTORY-DEMO-01 ORM seed and catalog bootstrap."""
 
 import json
 import os
 from datetime import UTC, date, datetime
 from pathlib import Path
+from uuid import UUID
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from industrial_ai_agent.infrastructure.persistence.models import (
+    AlarmEventRecord,
+    DocumentCatalogRecord,
+    FactoryRecord,
+    MachineStateRecord,
+    MaintenanceEventRecord,
+    MaintenanceTicketRecord,
+    ProcessParameterRecord,
+    ProductEventRecord,
+    ProductionOrderRecord,
+    ProductRecord,
+    QualityInspectionRecord,
+    StationRecord,
+)
 
 DEMO_FACTORY_ROOT = Path(
     os.getenv("DEMO_FACTORY_ROOT", str(Path.cwd() / "demo_factory"))
@@ -28,59 +45,55 @@ PRODUCTS = {
 
 
 def seed_demo_data(admin_database_url: str) -> None:
-    """Idempotently insert synthetic records after the Alembic schema migration."""
+    """Upsert the deterministic synthetic scenario through SQLAlchemy mappings."""
     engine = create_engine(admin_database_url, pool_pre_ping=True)
-    with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-                INSERT INTO factory (id, code, name, classification)
-                VALUES (:id, 'FACTORY-DEMO-01', 'Synthetic Demonstration Factory', 0)
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {"id": FACTORY_ID},
+    try:
+        with Session(engine) as session, session.begin():
+            _seed_factory(session)
+            _seed_product_events(session)
+            _seed_operational_records(session)
+            _seed_document_catalog(session)
+    finally:
+        engine.dispose()
+
+
+def _seed_factory(session: Session) -> None:
+    session.merge(
+        FactoryRecord(
+            id=_uuid(FACTORY_ID),
+            code="FACTORY-DEMO-01",
+            name="Synthetic Demonstration Factory",
+            classification=0,
         )
-        for code, name in (
-            ("S01", "Material Intake"),
-            ("S02", "Positioning"),
-            ("S03", "Robot Assembly"),
-            ("S04", "Quality Inspection"),
-            ("S05", "Packaging"),
-        ):
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO station (id, factory_id, code, name, classification)
-                    VALUES (:id, :factory_id, :code, :name, 0)
-                    ON CONFLICT (id) DO NOTHING
-                    """
-                ),
-                {
-                    "id": STATIONS[code],
-                    "factory_id": FACTORY_ID,
-                    "code": code,
-                    "name": name,
-                },
+    )
+    for code, name in (
+        ("S01", "Material Intake"),
+        ("S02", "Positioning"),
+        ("S03", "Robot Assembly"),
+        ("S04", "Quality Inspection"),
+        ("S05", "Packaging"),
+    ):
+        session.merge(
+            StationRecord(
+                id=_uuid(STATIONS[code]),
+                factory_id=_uuid(FACTORY_ID),
+                code=code,
+                name=name,
+                classification=0,
             )
-        for code, identifier in PRODUCTS.items():
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO product (id, factory_id, product_code, classification)
-                    VALUES (:id, :factory_id, :product_code, 2)
-                    ON CONFLICT (id) DO NOTHING
-                    """
-                ),
-                {"id": identifier, "factory_id": FACTORY_ID, "product_code": code},
+        )
+    for code, identifier in PRODUCTS.items():
+        session.merge(
+            ProductRecord(
+                id=_uuid(identifier),
+                factory_id=_uuid(FACTORY_ID),
+                product_code=code,
+                classification=2,
             )
-        _seed_product_events(connection)
-        _seed_operational_records(connection)
-        _seed_document_catalog(connection)
-    engine.dispose()
+        )
 
 
-def _seed_product_events(connection) -> None:
+def _seed_product_events(session: Session) -> None:
     events = (
         ("P4711", "S01", "2026-01-15T08:00:00+00:00", "COMPLETED", None),
         ("P4711", "S02", "2026-01-15T08:04:00+00:00", "WARNING", "POSITION-ENC-02"),
@@ -94,95 +107,65 @@ def _seed_product_events(connection) -> None:
     for index, (product_code, station_code, event_at, status, error_code) in enumerate(
         events, start=1
     ):
-        connection.execute(
-            text(
-                """
-                INSERT INTO product_event
-                    (id, product_id, station_id, event_at, status, error_code, classification)
-                VALUES (:id, :product_id, :station_id, :event_at, :status, :error_code, 2)
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "id": f"00000000-0000-0000-0000-{index:012d}",
-                "product_id": PRODUCTS[product_code],
-                "station_id": STATIONS[station_code],
-                "event_at": datetime.fromisoformat(event_at),
-                "status": status,
-                "error_code": error_code,
-            },
+        session.merge(
+            ProductEventRecord(
+                id=_uuid(f"00000000-0000-0000-0000-{index:012d}"),
+                product_id=_uuid(PRODUCTS[product_code]),
+                station_id=_uuid(STATIONS[station_code]),
+                event_at=datetime.fromisoformat(event_at),
+                status=status,
+                error_code=error_code,
+                classification=2,
+            )
         )
 
 
-def _seed_operational_records(connection) -> None:
-    connection.execute(
-        text(
-            """
-            INSERT INTO production_order (id, factory_id, order_code, classification)
-            VALUES ('00000000-0000-0000-0000-000000000501', :factory_id, 'PO-P4711', 2)
-            ON CONFLICT (id) DO NOTHING
-            """
-        ),
-        {"factory_id": FACTORY_ID},
-    )
-    records = (
-        (
-            "machine_state",
-            "00000000-0000-0000-0000-000000000201",
-            "S02",
-            "2026-01-16T09:00:00+00:00",
-            "FAULTED",
-            "POSITION-ENC-02",
-        ),
-        (
-            "machine_state",
-            "00000000-0000-0000-0000-000000000202",
-            "S04",
-            "2026-01-15T08:10:00+00:00",
-            "FAULTED",
-            "QUALITY-09",
-        ),
-    )
-    for table, identifier, station_code, observed_at, state, error_code in records:
-        connection.execute(
-            text(
-                f"""
-                INSERT INTO {table} (id, station_id, observed_at, state, active_error_code, classification)
-                VALUES (:id, :station_id, :observed_at, :state, :error_code, 2)
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "id": identifier,
-                "station_id": STATIONS[station_code],
-                "observed_at": datetime.fromisoformat(observed_at),
-                "state": state,
-                "error_code": error_code,
-            },
+def _seed_operational_records(session: Session) -> None:
+    session.merge(
+        ProductionOrderRecord(
+            id=_uuid("00000000-0000-0000-0000-000000000501"),
+            factory_id=_uuid(FACTORY_ID),
+            order_code="PO-P4711",
+            classification=2,
         )
-    connection.execute(
-        text(
-            """
-            INSERT INTO alarm_event
-                (id, station_id, event_at, alarm_code, severity, classification)
-            VALUES ('00000000-0000-0000-0000-000000000601', :station_id,
-                    '2026-01-16T08:35:00+00:00', 'E-STOP-17', 'high', 2)
-            ON CONFLICT (id) DO NOTHING
-            """
-        ),
-        {"station_id": STATIONS["S02"]},
     )
-    connection.execute(
-        text(
-            """
-            INSERT INTO quality_inspection
-                (id, product_id, station_id, inspected_at, result, defect_code, classification)
-            VALUES ('00000000-0000-0000-0000-000000000701', :product_id, :station_id,
-                    '2026-01-15T08:09:00+00:00', 'REJECTED', 'QUALITY-09', 2)
-            ON CONFLICT (id) DO NOTHING
-            """
+    for index, (station, observed_at, state, error_code) in enumerate(
+        (
+            ("S02", "2026-01-16T09:00:00+00:00", "FAULTED", "POSITION-ENC-02"),
+            ("S04", "2026-01-15T08:10:00+00:00", "FAULTED", "QUALITY-09"),
         ),
-        {"product_id": PRODUCTS["P4711"], "station_id": STATIONS["S04"]},
+        start=201,
+    ):
+        session.merge(
+            MachineStateRecord(
+                id=_uuid(f"00000000-0000-0000-0000-{index:012d}"),
+                station_id=_uuid(STATIONS[station]),
+                observed_at=datetime.fromisoformat(observed_at),
+                state=state,
+                active_error_code=error_code,
+                classification=2,
+            )
+        )
+    session.merge(
+        AlarmEventRecord(
+            id=_uuid("00000000-0000-0000-0000-000000000601"),
+            station_id=_uuid(STATIONS["S02"]),
+            event_at=datetime(2026, 1, 16, 8, 35, tzinfo=UTC),
+            alarm_code="E-STOP-17",
+            severity="high",
+            classification=2,
+        )
+    )
+    session.merge(
+        QualityInspectionRecord(
+            id=_uuid("00000000-0000-0000-0000-000000000701"),
+            product_id=_uuid(PRODUCTS["P4711"]),
+            station_id=_uuid(STATIONS["S04"]),
+            inspected_at=datetime(2026, 1, 15, 8, 9, tzinfo=UTC),
+            result="REJECTED",
+            defect_code="QUALITY-09",
+            classification=2,
+        )
     )
     for index, action in enumerate(
         (
@@ -192,92 +175,69 @@ def _seed_operational_records(connection) -> None:
             "inspection verification",
             "return to service",
         ),
-        start=1,
+        start=301,
     ):
-        connection.execute(
-            text(
-                """
-                INSERT INTO maintenance_event (id, station_id, event_at, action, outcome, classification)
-                VALUES (:id, :station_id, :event_at, :action, 'completed', 2)
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "id": f"00000000-0000-0000-0000-{300 + index:012d}",
-                "station_id": STATIONS["S02"],
-                "event_at": datetime(2026, 1, 17, 9, index, tzinfo=UTC),
-                "action": action,
-            },
+        session.merge(
+            MaintenanceEventRecord(
+                id=_uuid(f"00000000-0000-0000-0000-{index:012d}"),
+                station_id=_uuid(STATIONS["S02"]),
+                event_at=datetime(2026, 1, 17, 9, index - 300, tzinfo=UTC),
+                action=action,
+                outcome="completed",
+                classification=2,
+            )
         )
-    connection.execute(
-        text(
-            """
-            INSERT INTO maintenance_ticket
-                (id, station_id, ticket_code, status, classification)
-            VALUES ('00000000-0000-0000-0000-000000000801', :station_id,
-                    'MT-S02-20260117', 'CLOSED', 2)
-            ON CONFLICT (id) DO NOTHING
-            """
-        ),
-        {"station_id": STATIONS["S02"]},
+    session.merge(
+        MaintenanceTicketRecord(
+            id=_uuid("00000000-0000-0000-0000-000000000801"),
+            station_id=_uuid(STATIONS["S02"]),
+            ticket_code="MT-S02-20260117",
+            status="CLOSED",
+            classification=2,
+        )
     )
-    for index, (name, value) in enumerate(
-        (("robot_trajectory_limit", "12.5 mm/s"),), start=1
-    ):
-        connection.execute(
-            text(
-                """
-                INSERT INTO process_parameter (id, station_id, parameter_name, parameter_value, classification)
-                VALUES (:id, :station_id, :parameter_name, :parameter_value, 3)
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "id": f"00000000-0000-0000-0000-{400 + index:012d}",
-                "station_id": STATIONS["S03"],
-                "parameter_name": name,
-                "parameter_value": value,
-            },
+    session.merge(
+        ProcessParameterRecord(
+            id=_uuid("00000000-0000-0000-0000-000000000401"),
+            station_id=_uuid(STATIONS["S03"]),
+            parameter_name="robot_trajectory_limit",
+            parameter_value="12.5 mm/s",
+            classification=3,
         )
+    )
 
 
-def _seed_document_catalog(connection) -> None:
+def _seed_document_catalog(session: Session) -> None:
     catalog = json.loads(
         (DEMO_FACTORY_ROOT / "metadata" / "document_catalog.json").read_text(
             encoding="utf-8"
         )
     )
     for document in catalog:
-        station_code = document["station_code"]
-        connection.execute(
-            text(
-                """
-                INSERT INTO document_catalog
-                    (id, title, classification, mime_type, source_system, factory_id,
-                     station_id, version, valid_from, tags, file_path, checksum)
-                VALUES (:id, :title, :classification, :mime_type, :source_system, :factory_id,
-                        :station_id, :version, :valid_from, :tags, :file_path, :checksum)
-                ON CONFLICT (id) DO UPDATE SET checksum = EXCLUDED.checksum,
-                    updated_at = CURRENT_TIMESTAMP
-                """
-            ),
-            {
-                "id": document["document_id"],
-                "title": document["title"],
-                "classification": {
+        session.merge(
+            DocumentCatalogRecord(
+                id=document["document_id"],
+                title=document["title"],
+                classification={
                     "PUBLIC": 0,
                     "INTERNAL": 1,
                     "CONFIDENTIAL": 2,
                     "RESTRICTED": 3,
                 }[document["classification"]],
-                "mime_type": document["mime_type"],
-                "source_system": document["source_system"],
-                "factory_id": FACTORY_ID,
-                "station_id": STATIONS.get(station_code),
-                "version": document["version"],
-                "valid_from": date.fromisoformat(document["valid_from"]),
-                "tags": document["tags"],
-                "file_path": document["file_path"],
-                "checksum": document["checksum"],
-            },
+                mime_type=document["mime_type"],
+                source_system=document["source_system"],
+                factory_id=_uuid(FACTORY_ID),
+                station_id=_uuid(STATIONS[document["station_code"]])
+                if document["station_code"]
+                else None,
+                version=document["version"],
+                valid_from=date.fromisoformat(document["valid_from"]),
+                tags=list(document["tags"]),
+                file_path=document["file_path"],
+                checksum=document["checksum"],
+            )
         )
+
+
+def _uuid(value: str) -> UUID:
+    return UUID(value)

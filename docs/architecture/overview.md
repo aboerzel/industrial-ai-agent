@@ -2,6 +2,13 @@
 
 ## Current Architecture
 
+The local Compose deployment names its PostgreSQL service `factory-db`. In this
+single-instance demo, `factory-mcp` waits for its health check, completes idempotent
+Alembic migration and seed bootstrap before opening its MCP port, and `knowledge-mcp`
+waits for the healthy Factory service. This avoids a partial document catalog without a
+visible one-shot migration container; a production multi-replica deployment should use a
+dedicated migration Job instead.
+
 The project currently implements product-history retrieval, current machine-status
 retrieval, a provider-independent LLM integration boundary, and one bounded
 `LangGraphTroubleshootingAgent` path over runtime-discovered read-only MCP tools. A

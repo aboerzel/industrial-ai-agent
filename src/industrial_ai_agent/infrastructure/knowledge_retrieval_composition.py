@@ -30,6 +30,7 @@ def create_reranked_knowledge_retriever(
     *,
     embedding_base_url: str | None = None,
     reranker_device: str | None = None,
+    reranker_local_files_only: bool = True,
 ) -> KnowledgeRetriever:
     """Assemble the immutable BM25, semantic, RRF, and reranker baseline."""
     semantic_retriever = InMemorySemanticKnowledgeRetriever(
@@ -46,6 +47,9 @@ def create_reranked_knowledge_retriever(
     )
     return RerankedKnowledgeRetriever(
         candidate_retriever=hybrid_retriever,
-        reranker=SentenceTransformersCrossEncoderReranker(device=reranker_device),
+        reranker=SentenceTransformersCrossEncoderReranker(
+            device=reranker_device,
+            local_files_only=reranker_local_files_only,
+        ),
         candidate_limit=DEFAULT_RERANK_CANDIDATE_LIMIT,
     )

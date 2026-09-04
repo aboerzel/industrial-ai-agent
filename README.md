@@ -104,11 +104,15 @@ Copy `.env.example` to a local unversioned `.env` and replace the two PostgreSQL
 password placeholders. Then start the persistent services:
 
 ```powershell
-docker compose up --build -d postgres factory-mcp knowledge-mcp
+docker compose up --build -d factory-db factory-mcp knowledge-mcp
 ```
 
-The migration service creates the schema and deterministic seed records. Runtime MCP
-services use the non-superuser `factory_app` database role. Each transaction sets a
+For the local single-instance demo, `factory-mcp` waits for `factory-db` health, runs
+idempotent Alembic migration and deterministic seed bootstrap, drops the admin URL from
+its runtime environment, and only then starts MCP. `knowledge-mcp` waits for the healthy
+Factory service, so it never reads a partial catalog. A multi-replica or production
+deployment should use a separate migration job again. Runtime MCP services use the
+non-superuser `factory_app` database role. Each transaction sets a
 parameterized, transaction-local `app.clearance`, and PostgreSQL Row-Level Security
 filters classified rows independently of Python repository code. The server-injected
 demo `SecurityContext` is `demo-engineer` with `CONFIDENTIAL` clearance; there is no

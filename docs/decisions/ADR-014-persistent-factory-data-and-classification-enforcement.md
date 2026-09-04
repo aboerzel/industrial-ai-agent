@@ -48,18 +48,52 @@ boundary before every model invocation.
 
 PostgreSQL Row-Level Security is enabled and forced for classified runtime tables. The
 non-superuser application role has neither `BYPASSRLS` nor ownership privileges. It sets
-the validated clearance only with parameterized `SET LOCAL app.clearance` in each
-transaction. Policies admit only rows whose stored classification rank is at or below
-the transaction clearance. Repository-side predicates are retained as defense in depth,
-but are not the sole access boundary. A separate migration/owner role initializes the
-schema and seed data; Factory and Knowledge MCP runtime connections use only the
-application role.
+the validated clearance only with parameterized transaction-local
+`set_config('app.clearance', ...)`. Policies admit only rows whose stored classification
+rank is at or below the transaction clearance. Repository-side predicates are retained
+as defense in depth, but are not the sole access boundary. A separate migration/owner
+role initializes the schema and seed data; Factory and Knowledge MCP runtime connections
+use only the application role.
 
 SQLAlchemy 2.x and Psycopg 3 implement PostgreSQL adapters. Alembic owns migrations;
 there is no project-specific migration system. Reproducible synthetic seed data supports
 Factory MCP and document-catalog integration tests. In-memory factory repositories remain
 for focused unit tests and become cleanup candidates after the persistent composition is
 validated.
+
+### PostgreSQL Persistence Mapping
+
+PostgreSQL-backed business persistence SHALL use SQLAlchemy 2.x ORM as its standard
+mapping and query-composition technology:
+
+```text
+Domain / Core
+    -> Repository Ports
+    -> SQLAlchemy 2.x Repository Adapter
+    -> PostgreSQL
+    -> PostgreSQL RLS
+```
+
+Domain and Application code SHALL remain independent of SQLAlchemy, Psycopg, and
+PostgreSQL-specific types. Repository ports and adapters SHALL return Domain objects or
+provider-independent result models; SQLAlchemy entities SHALL remain Infrastructure
+implementation details.
+
+Handwritten SQL is not the standard path for business queries, CRUD, or repository
+operations. SQLAlchemy ORM provides persistence mapping and query composition, not
+authorization enforcement. PostgreSQL RLS remains the independent security boundary and
+SHALL NOT be replaced by ORM-level filters.
+
+The project standard is modern SQLAlchemy 2.x: `DeclarativeBase`, typed `Mapped[T]`,
+`mapped_column()`, `select()`, and explicit `Session` and transaction scopes. Legacy
+SQLAlchemy 1.x query patterns SHALL NOT be introduced. ORM mappings remain inside
+Infrastructure and SHALL respect the hexagonal dependency direction.
+
+Native PostgreSQL SQL remains explicitly permitted for database-specific infrastructure
+and security functions: Alembic migrations; `CREATE POLICY`; `ENABLE ROW LEVEL
+SECURITY`; `FORCE ROW LEVEL SECURITY`; role and grant management;
+`set_config('app.clearance', ...)`; and similarly PostgreSQL-specific schema or security
+mechanisms.
 
 Docling performs local ingestion for PDF, DOCX, PPTX, XLSX, and image assets into one
 normalized representation. The pipeline is explicit:
@@ -127,6 +161,21 @@ decisions.
 ### Build custom parsers per format
 
 Rejected. Docling provides a local unified parser for the required formats.
+
+### Use raw SQL as the primary persistence access path
+
+Rejected. It would reduce mapping and query consistency, couple business persistence
+more strongly to PostgreSQL details, and make adapters harder to maintain.
+
+### Use ORM-level security filtering instead of PostgreSQL RLS
+
+Rejected. Application code is not an adequate final security boundary. ORM predicates
+may provide defense in depth but cannot replace database-enforced row visibility.
+
+### Add a generic repository or ORM framework
+
+Rejected. SQLAlchemy 2.x already provides the required typed mapping, query composition,
+and transaction lifecycle without another framework layer.
 
 ## Relationship to Existing Decisions
 

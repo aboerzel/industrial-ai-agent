@@ -2,9 +2,9 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
 
-from sqlalchemy import Connection, Engine, create_engine, text
+from sqlalchemy import Connection, Engine, create_engine, select, text
+from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from industrial_ai_agent.domain.machine_status import MachineState, MachineStatus
 from industrial_ai_agent.domain.product_history import (
@@ -15,32 +15,45 @@ from industrial_ai_agent.domain.product_history import (
     StationId,
 )
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
+from industrial_ai_agent.infrastructure.persistence.models import (
+    DocumentCatalogRecord,
+    MachineStateRecord,
+    ProductEventRecord,
+    ProductRecord,
+)
 
 
 class PostgreSqlSessionFactory:
-    """Owns only the non-privileged application database connection lifecycle."""
+    """Own only the non-privileged application Session lifecycle and RLS context."""
 
     def __init__(self, database_url: str) -> None:
         if not database_url.strip():
             raise ValueError("database_url must not be empty")
         self._engine: Engine = create_engine(database_url, pool_pre_ping=True)
+        self._sessions = sessionmaker(self._engine, expire_on_commit=False)
 
     @contextmanager
-    def connection(self, security_context: SecurityContext) -> Iterator[Connection]:
-        with self._engine.begin() as connection:
-            # set_config is parameterized and transaction-local, unlike interpolated SET.
-            connection.execute(
+    def session(self, security_context: SecurityContext) -> Iterator[Session]:
+        with self._sessions() as session, session.begin():
+            # PostgreSQL-specific security context: parameterized and transaction-local.
+            session.execute(
                 text("SELECT set_config('app.clearance', :clearance, true)"),
                 {"clearance": str(int(security_context.clearance))},
             )
-            yield connection
+            yield session
 
     def dispose(self) -> None:
         self._engine.dispose()
 
+    @contextmanager
+    def connection(self, security_context: SecurityContext) -> Iterator[Connection]:
+        """Expose a transaction-scoped connection only for RLS integration assertions."""
+        with self.session(security_context) as session:
+            yield session.connection()
+
 
 class PostgreSqlProductHistoryRepository:
-    """Map classified persistent production events to the existing Domain model."""
+    """Map RLS-filtered ORM records to the existing Domain product-history model."""
 
     def __init__(
         self,
@@ -51,55 +64,43 @@ class PostgreSqlProductHistoryRepository:
         self._security_context = security_context
 
     def get_product_history(self, product_id: ProductId) -> ProductHistory | None:
-        with self._session_factory.connection(self._security_context) as connection:
-            product = (
-                connection.execute(
-                    text(
-                        "SELECT id, product_code, classification FROM product "
-                        "WHERE product_code = :product_code"
-                    ),
-                    {"product_code": product_id.value},
+        with self._session_factory.session(self._security_context) as session:
+            product = session.scalar(
+                select(ProductRecord).where(
+                    ProductRecord.product_code == product_id.value
                 )
-                .mappings()
-                .one_or_none()
             )
             if product is None:
                 return None
-            events = connection.execute(
-                text(
-                    """
-                    SELECT station.code, product_event.event_at, product_event.status,
-                           product_event.error_code, product_event.classification
-                    FROM product_event
-                    JOIN station ON station.id = product_event.station_id
-                    WHERE product_event.product_id = :product_id
-                    ORDER BY product_event.event_at
-                    """
-                ),
-                {"product_id": product["id"]},
-            ).mappings()
-            event_rows = tuple(events)
-            classification = max(
-                DataClassification(product["classification"]),
-                *(DataClassification(event["classification"]) for event in event_rows),
+            events = tuple(
+                session.scalars(
+                    select(ProductEventRecord)
+                    .options(joinedload(ProductEventRecord.station))
+                    .where(ProductEventRecord.product_id == product.id)
+                    .order_by(ProductEventRecord.event_at)
+                )
             )
-            return ProductHistory(
-                product_id=ProductId(product["product_code"]),
-                classification=classification,
-                steps=tuple(
-                    ProductionStep(
-                        station_id=StationId(event["code"]),
-                        timestamp=_as_datetime(event["event_at"]),
-                        status=ProductionStepStatus(event["status"]),
-                        error_code=event["error_code"],
-                    )
-                    for event in event_rows
-                ),
-            )
+        classification = max(
+            DataClassification(product.classification),
+            *(DataClassification(event.classification) for event in events),
+        )
+        return ProductHistory(
+            product_id=ProductId(product.product_code),
+            classification=classification,
+            steps=tuple(
+                ProductionStep(
+                    station_id=StationId(event.station.code),
+                    timestamp=event.event_at,
+                    status=ProductionStepStatus(event.status),
+                    error_code=event.error_code,
+                )
+                for event in events
+            ),
+        )
 
 
 class PostgreSqlMachineStatusRepository:
-    """Read the latest RLS-filtered state for one station."""
+    """Read the latest RLS-filtered ORM machine state for one station."""
 
     def __init__(
         self,
@@ -110,37 +111,26 @@ class PostgreSqlMachineStatusRepository:
         self._security_context = security_context
 
     def get_machine_status(self, station_id: StationId) -> MachineStatus | None:
-        with self._session_factory.connection(self._security_context) as connection:
-            row = (
-                connection.execute(
-                    text(
-                        """
-                    SELECT station.code, machine_state.state, machine_state.active_error_code,
-                           machine_state.classification
-                    FROM machine_state
-                    JOIN station ON station.id = machine_state.station_id
-                    WHERE station.code = :station_code
-                    ORDER BY machine_state.observed_at DESC
-                    LIMIT 1
-                    """
-                    ),
-                    {"station_code": station_id.value},
-                )
-                .mappings()
-                .one_or_none()
+        with self._session_factory.session(self._security_context) as session:
+            record = session.scalar(
+                select(MachineStateRecord)
+                .options(joinedload(MachineStateRecord.station))
+                .where(MachineStateRecord.station.has(code=station_id.value))
+                .order_by(MachineStateRecord.observed_at.desc())
+                .limit(1)
             )
-            if row is None:
-                return None
-            return MachineStatus(
-                station_id=StationId(row["code"]),
-                state=MachineState(row["state"]),
-                active_error_code=row["active_error_code"],
-                classification=DataClassification(row["classification"]),
-            )
+        if record is None:
+            return None
+        return MachineStatus(
+            station_id=StationId(record.station.code),
+            state=MachineState(record.state),
+            active_error_code=record.active_error_code,
+            classification=DataClassification(record.classification),
+        )
 
 
 class PostgreSqlDocumentCatalogRepository:
-    """Read RLS-filtered document metadata without exposing SQL types to retrieval."""
+    """Map RLS-filtered ORM document metadata to the Docling boundary DTO."""
 
     def __init__(
         self,
@@ -153,41 +143,29 @@ class PostgreSqlDocumentCatalogRepository:
     def list_documents(self):
         from industrial_ai_agent.infrastructure.docling_ingestion import CatalogDocument
 
-        with self._session_factory.connection(self._security_context) as connection:
-            rows = connection.execute(
-                text(
-                    """
-                    SELECT document_catalog.id, document_catalog.title,
-                           document_catalog.classification, document_catalog.mime_type,
-                           document_catalog.source_system, station.code AS station_code,
-                           document_catalog.version, document_catalog.valid_from,
-                           document_catalog.tags, document_catalog.file_path,
-                           document_catalog.checksum
-                    FROM document_catalog
-                    LEFT JOIN station ON station.id = document_catalog.station_id
-                    ORDER BY document_catalog.file_path
-                    """
+        with self._session_factory.session(self._security_context) as session:
+            records = tuple(
+                session.scalars(
+                    select(DocumentCatalogRecord)
+                    .options(joinedload(DocumentCatalogRecord.station))
+                    .order_by(DocumentCatalogRecord.file_path)
                 )
-            ).mappings()
-            return tuple(
-                CatalogDocument(
-                    document_id=str(row["id"]),
-                    title=row["title"],
-                    classification=DataClassification(row["classification"]),
-                    mime_type=row["mime_type"],
-                    source_system=row["source_system"],
-                    station_code=row["station_code"],
-                    version=row["version"],
-                    valid_from=row["valid_from"].isoformat(),
-                    tags=tuple(row["tags"]),
-                    file_path=row["file_path"],
-                    checksum=row["checksum"],
-                )
-                for row in rows
             )
-
-
-def _as_datetime(value: object) -> datetime:
-    if not isinstance(value, datetime):
-        raise TypeError("PostgreSQL event_at must be a datetime")
-    return value
+        return tuple(
+            CatalogDocument(
+                document_id=record.id,
+                title=record.title,
+                classification=DataClassification(record.classification),
+                mime_type=record.mime_type,
+                source_system=record.source_system,
+                station_code=record.station.code
+                if record.station is not None
+                else None,
+                version=record.version,
+                valid_from=record.valid_from.isoformat(),
+                tags=tuple(record.tags),
+                file_path=record.file_path,
+                checksum=record.checksum,
+            )
+            for record in records
+        )

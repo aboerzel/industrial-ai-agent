@@ -29,8 +29,28 @@ Migrations create `factory_migration_owner` and the non-superuser, no-`BYPASSRLS
 `factory_app` role. Each classified table enables and forces RLS. Application repository
 transactions call parameterized PostgreSQL `set_config` to set a transaction-local
 `app.clearance`; the RLS policy returns only records at or below that value. The migration
-service uses the separate admin path. Python filtering is defense in depth, not the sole
-database boundary.
+bootstrap path inside `factory-mcp` uses the separate admin URL, then unsets it before
+the application role starts serving MCP. Python filtering is defense in depth, not the
+sole database boundary.
+
+## Local Compose Lifecycle
+
+The Compose database service is named `factory-db`. For this deliberately simple,
+single-instance demo, `factory-mcp` waits for its health check, runs idempotent `alembic
+upgrade head` plus the deterministic seed, and starts listening only after success.
+`knowledge-mcp` waits for the healthy Factory MCP service, which also guarantees that
+the catalog is present. A migration error prevents Factory MCP startup; no sleep or
+ignored-error path exists. A future multi-replica, Kubernetes, or production deployment
+should return to a dedicated migration Job.
+
+## SQLAlchemy Mapping
+
+The persistence adapters and deterministic seed use SQLAlchemy 2.x `DeclarativeBase`,
+typed `Mapped[]` and `mapped_column()` mappings, `select()`, `Session` transaction
+scopes, and typed Domain mappers for product history, machine state, and document
+catalog. Raw SQL remains only for PostgreSQL-specific migration/RLS DDL and
+transaction-local `set_config` because those are security and database-administration
+mechanisms rather than ordinary data queries.
 
 ## Local Document Ingestion
 

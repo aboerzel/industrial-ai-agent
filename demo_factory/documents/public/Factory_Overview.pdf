@@ -12,9 +12,30 @@ endobj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
 endobj
 5 0 obj
-<< /Length 83 >>
+<< /Length 1309 >>
 stream
-BT /F1 12 Tf 72 720 Td (Factory Overview - FACTORY-DEMO-01, stations S01-S05) Tj ET
+BT /F1 10 Tf 54 740 Td (Document ID: FO-100) Tj ET
+BT /F1 10 Tf 54 722 Td (Title: Factory Overview) Tj ET
+BT /F1 10 Tf 54 704 Td (Factory: FACTORY-DEMO-01) Tj ET
+BT /F1 10 Tf 54 686 Td (Station: All stations) Tj ET
+BT /F1 10 Tf 54 668 Td (Classification: PUBLIC) Tj ET
+BT /F1 10 Tf 54 650 Td (Revision: 1.1) Tj ET
+BT /F1 10 Tf 54 632 Td (Effective Date: 2026-01-17) Tj ET
+BT /F1 10 Tf 54 614 Td (Owner: Demo Operations Engineering) Tj ET
+BT /F1 10 Tf 54 596 Td (Status: Approved) Tj ET
+BT /F1 10 Tf 54 578 Td (Synthetic demonstration document) Tj ET
+BT /F1 10 Tf 54 560 Td () Tj ET
+BT /F1 10 Tf 54 542 Td (Purpose) Tj ET
+BT /F1 10 Tf 54 524 Td (FACTORY-DEMO-01 is a synthetic automated assembly and inspection line.) Tj ET
+BT /F1 10 Tf 54 506 Td () Tj ET
+BT /F1 10 Tf 54 488 Td (High-level process flow) Tj ET
+BT /F1 10 Tf 54 470 Td (S01 Material Intake -> S02 Positioning -> S03 Robot Assembly -> S04 Quality Inspection -> S05 Packaging) Tj ET
+BT /F1 10 Tf 54 452 Td () Tj ET
+BT /F1 10 Tf 54 434 Td (Capabilities) Tj ET
+BT /F1 10 Tf 54 416 Td (Traceable assembly, high-level quality decisions, and controlled material flow.) Tj ET
+BT /F1 10 Tf 54 398 Td () Tj ET
+BT /F1 10 Tf 54 380 Td (Revision History) Tj ET
+BT /F1 10 Tf 54 362 Td (1.1 | 2026-01-17 | Demo Operations Engineering | Portfolio refresh) Tj ET
 endstream
 endobj
 xref
@@ -27,5 +48,5 @@ xref
 0000000311 00000 n 
 trailer << /Size 6 /Root 1 0 R >>
 startxref
-444
+1672
 %%EOF

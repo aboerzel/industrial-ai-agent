@@ -3,29 +3,105 @@
 << /Type /Catalog /Pages 2 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 >>
 endobj
 3 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 8 0 R >>
 endobj
 4 0 obj
-<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 9 0 R >>
 endobj
 5 0 obj
-<< /Length 129 >>
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 10 0 R >>
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 11 0 R >>
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+8 0 obj
+<< /Length 1076 >>
 stream
-BT /F1 12 Tf 72 720 Td (Positioning Error Troubleshooting - P4711, QUALITY-09 and repeated positioning error investigation) Tj ET
+BT /F1 10 Tf 54 740 Td (Document ID: TS-320) Tj ET
+BT /F1 10 Tf 54 722 Td (Title: Positioning Error Troubleshooting) Tj ET
+BT /F1 10 Tf 54 704 Td (Factory: FACTORY-DEMO-01) Tj ET
+BT /F1 10 Tf 54 686 Td (Station: S02) Tj ET
+BT /F1 10 Tf 54 668 Td (Classification: CONFIDENTIAL) Tj ET
+BT /F1 10 Tf 54 650 Td (Revision: 1.1) Tj ET
+BT /F1 10 Tf 54 632 Td (Effective Date: 2026-01-17) Tj ET
+BT /F1 10 Tf 54 614 Td (Owner: Demo Operations Engineering) Tj ET
+BT /F1 10 Tf 54 596 Td (Status: Approved) Tj ET
+BT /F1 10 Tf 54 578 Td (Synthetic demonstration document) Tj ET
+BT /F1 10 Tf 54 560 Td () Tj ET
+BT /F1 10 Tf 54 542 Td (Purpose and Scope) Tj ET
+BT /F1 10 Tf 54 524 Td (This procedure addresses POSITION-ENC-02 on station S02 Positioning.) Tj ET
+BT /F1 10 Tf 54 506 Td (Applies to P4711 investigations and repeated P4801/P4802/P4805/P4811 position warnings.) Tj ET
+BT /F1 10 Tf 54 488 Td () Tj ET
+BT /F1 10 Tf 54 470 Td (Observable symptoms) Tj ET
+BT /F1 10 Tf 54 452 Td (Positioning warning, failed homing reference, cycle interruption, downstream QUALITY-09 rejection.) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Length 704 >>
+stream
+BT /F1 10 Tf 54 740 Td (TS-320 | S02 diagnostic workflow | Page 2 of 5) Tj ET
+BT /F1 10 Tf 54 722 Td () Tj ET
+BT /F1 10 Tf 54 704 Td (Prerequisites and safety notes) Tj ET
+BT /F1 10 Tf 54 686 Td (Place S02 in maintenance mode. Follow local lockout and safety-zone procedures.) Tj ET
+BT /F1 10 Tf 54 668 Td () Tj ET
+BT /F1 10 Tf 54 650 Td (Numbered procedure) Tj ET
+BT /F1 10 Tf 54 632 Td (1. Record active alarms and product context.) Tj ET
+BT /F1 10 Tf 54 614 Td (2. Inspect encoder connector, cable routing, and reference mark.) Tj ET
+BT /F1 10 Tf 54 596 Td (3. Compare measured position against commanded reference.) Tj ET
+BT /F1 10 Tf 54 578 Td (4. Execute controlled homing and record result.) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Length 736 >>
+stream
+BT /F1 10 Tf 54 740 Td (TS-320 | S02 positioning and verification | Page 3 of 5) Tj ET
+BT /F1 10 Tf 54 722 Td () Tj ET
+BT /F1 10 Tf 54 704 Td (Encoder and positioning checks) Tj ET
+BT /F1 10 Tf 54 686 Td (Verify encoder feedback stability and mechanical coupling. Do not change restricted robot parameters.) Tj ET
+BT /F1 10 Tf 54 668 Td () Tj ET
+BT /F1 10 Tf 54 650 Td (Homing and dry cycle) Tj ET
+BT /F1 10 Tf 54 632 Td (Run homing after approved component replacement. Complete three dry cycles without POSITION-ENC-02.) Tj ET
+BT /F1 10 Tf 54 614 Td () Tj ET
+BT /F1 10 Tf 54 596 Td (Related events) Tj ET
+BT /F1 10 Tf 54 578 Td (P4711: S02 warning then S04 QUALITY-09 rejection. S02 alarm history includes E-STOP-17 escalation.) Tj ET
+endstream
+endobj
+11 0 obj
+<< /Length 735 >>
+stream
+BT /F1 10 Tf 54 740 Td (TS-320 | S02 return to service | Page 4 of 5) Tj ET
+BT /F1 10 Tf 54 722 Td () Tj ET
+BT /F1 10 Tf 54 704 Td (Verification and return-to-service criteria) Tj ET
+BT /F1 10 Tf 54 686 Td (Inspection verification passes, dry cycle is stable, and no active S02 position alarm remains.) Tj ET
+BT /F1 10 Tf 54 668 Td () Tj ET
+BT /F1 10 Tf 54 650 Td (Escalation criteria) Tj ET
+BT /F1 10 Tf 54 632 Td (Escalate if feedback remains unstable after encoder replacement or if repeated products fail the same position check.) Tj ET
+BT /F1 10 Tf 54 614 Td () Tj ET
+BT /F1 10 Tf 54 596 Td (Revision history) Tj ET
+BT /F1 10 Tf 54 578 Td (1.1 | 2026-01-17 | Added repeated S02 failure context | Demo Operations Engineering) Tj ET
 endstream
 endobj
 xref
-0 6
+0 12
 0000000000 65535 f 
 0000000009 00000 n 
 0000000058 00000 n 
-0000000115 00000 n 
-0000000241 00000 n 
-0000000311 00000 n 
-trailer << /Size 6 /Root 1 0 R >>
+0000000133 00000 n 
+0000000259 00000 n 
+0000000385 00000 n 
+0000000512 00000 n 
+0000000639 00000 n 
+0000000709 00000 n 
+0000001837 00000 n 
+0000002592 00000 n 
+0000003380 00000 n 
+trailer << /Size 12 /Root 1 0 R >>
 startxref
-491
+4167
 %%EOF

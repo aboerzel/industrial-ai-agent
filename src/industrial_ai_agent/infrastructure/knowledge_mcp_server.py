@@ -52,6 +52,7 @@ def create_default_knowledge_mcp_server(
     knowledge_base_path: Path = DEFAULT_KNOWLEDGE_BASE_PATH,
     embedding_base_url: str | None = None,
     reranker_device: str | None = None,
+    reranker_local_files_only: bool = True,
     database_url: str | None = None,
     demo_factory_root: Path = DEFAULT_DEMO_FACTORY_ROOT,
 ) -> MCPServer:
@@ -93,6 +94,7 @@ def create_default_knowledge_mcp_server(
         chunks,
         embedding_base_url=embedding_base_url,
         reranker_device=reranker_device,
+        reranker_local_files_only=reranker_local_files_only,
     )
     return create_knowledge_mcp_server(
         documentation_search=DocumentationSearchCapability(retriever)
@@ -106,6 +108,7 @@ def main() -> None:
         knowledge_base_path=args.knowledge_base,
         embedding_base_url=args.ollama_base_url,
         reranker_device=args.reranker_device,
+        reranker_local_files_only=args.reranker_local_files_only,
         database_url=os.getenv("KNOWLEDGE_DATABASE_URL"),
         demo_factory_root=Path(
             os.getenv("KNOWLEDGE_MCP_DEMO_FACTORY_ROOT", DEFAULT_DEMO_FACTORY_ROOT)
@@ -153,7 +156,19 @@ def _parse_args() -> argparse.Namespace:
         "--reranker-device",
         default=os.getenv("KNOWLEDGE_MCP_RERANKER_DEVICE"),
     )
+    parser.add_argument(
+        "--reranker-local-files-only",
+        default=_environment_bool("KNOWLEDGE_MCP_RERANKER_LOCAL_FILES_ONLY", True),
+        action=argparse.BooleanOptionalAction,
+    )
     return parser.parse_args()
+
+
+def _environment_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 if __name__ == "__main__":

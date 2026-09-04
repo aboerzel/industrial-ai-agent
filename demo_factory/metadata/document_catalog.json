@@ -1,152 +1,168 @@
 [
   {
-    "document_id": "doc-91b090f6f38c8dc6",
+    "document_id": "doc-958096ad21a480be",
     "title": "Factory Overview",
     "classification": "PUBLIC",
     "mime_type": "application/pdf",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": null,
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "FACTORY-DEMO-01",
-      "stations S01-S05"
+      "FO-100",
+      "FACTORY-DEMO-01"
     ],
     "file_path": "documents/public/Factory_Overview.pdf",
-    "checksum": "3cdd76775e68d38484209ed0bd0af6956408537a739d8cfecef2900d8f0b1ebc"
+    "checksum": "8d34b766f02c99d145bad329e5d47315b0793cb565b52384b27eda41315e50f6"
   },
   {
-    "document_id": "doc-0ff92d65fc001163",
+    "document_id": "doc-2cc308582fec3bcc",
     "title": "S04 Quality Inspection Overview",
     "classification": "PUBLIC",
     "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S04",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "QUALITY-09 inspection decision flow"
+      "QI-104",
+      "FACTORY-DEMO-01",
+      "S04",
+      "QUALITY-09"
     ],
     "file_path": "documents/public/S04_Quality_Inspection_Overview.pptx",
-    "checksum": "7fd064b929013a540451cbcc9ca9c635cc66e3a53102aeba8e878e588d6dfefe"
+    "checksum": "b0b97a15f390e9fb69d0c28b75f4fdda1fdc55ca2e89546e0c790699b15a6354"
   },
   {
-    "document_id": "doc-6cb675c6431e6447",
+    "document_id": "doc-ebb5dc762870b7b0",
     "title": "Operator Handbook",
     "classification": "INTERNAL",
     "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S02",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "Positioning warnings and E-STOP-17 escalation"
+      "OH-210",
+      "FACTORY-DEMO-01",
+      "S02",
+      "POSITION-ENC-02"
     ],
     "file_path": "documents/internal/Operator_Handbook.docx",
-    "checksum": "0d010cc2fdb18491bdfc51fbf1d7c39b2bca0bee3586cfabc99fc60cb36d87ab"
+    "checksum": "18d4d494a9e099a1e37673c7b29ca1f595d5e36c7d265442d894539a78ee9348"
   },
   {
-    "document_id": "doc-a464b381b74e277f",
+    "document_id": "doc-5aa5c90d70d48810",
     "title": "Station Layout",
     "classification": "INTERNAL",
     "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": null,
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "S01 Material Intake through S05 Packaging"
+      "SL-211",
+      "FACTORY-DEMO-01"
     ],
     "file_path": "documents/internal/Station_Layout.xlsx",
-    "checksum": "8414bff02ad5fb66297d9c1f707bc3a3c0c6f30b6a59017b2ca5bf70aba99a7d"
+    "checksum": "4b20d4440df750d95d5aa8fa523b84ec5bbc5a9420483d81aa37e91d01e5567a"
   },
   {
-    "document_id": "doc-18f2b672990c86b7",
+    "document_id": "doc-e435d31cc10c44cf",
     "title": "Positioning Error Troubleshooting",
     "classification": "CONFIDENTIAL",
     "mime_type": "application/pdf",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S02",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "P4711",
-      "QUALITY-09 and repeated positioning error investigation"
+      "TS-320",
+      "FACTORY-DEMO-01",
+      "S02",
+      "POSITION-ENC-02"
     ],
     "file_path": "documents/confidential/Positioning_Error_Troubleshooting.pdf",
-    "checksum": "96d6411c6fecf19a6742b907d0737499d8da0e3e51592ac8627a297bd69ee2eb"
+    "checksum": "6be4798e17bb5d6f597cf71869056cf479ed5a5a39cccbc5e92a40f677a9252d"
   },
   {
-    "document_id": "doc-91429d8a9dbe2443",
+    "document_id": "doc-98184e84726f7cda",
     "title": "Maintenance Report S02",
     "classification": "CONFIDENTIAL",
     "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S02",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "encoder replacement",
-      "homing",
-      "dry cycle",
-      "inspection verification"
+      "MR-321",
+      "FACTORY-DEMO-01",
+      "S02",
+      "POSITION-ENC-02"
     ],
     "file_path": "documents/confidential/Maintenance_Report_S02.docx",
-    "checksum": "52f4b0c155c146d17b429d65ebb2022a5687919c4a6cf48a27d159b5a4dfd7af"
+    "checksum": "cbacaacf7fb332836f7c8ff206ace869829ccea31ef06dcd45175a44802dc422"
   },
   {
-    "document_id": "doc-320d17a68d800d22",
+    "document_id": "doc-5359b0a5a28599cb",
     "title": "Failure Analysis S02",
     "classification": "CONFIDENTIAL",
     "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S02",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "P4801 P4802 P4805 P4811 repeated station failure"
+      "FA-322",
+      "FACTORY-DEMO-01",
+      "S02",
+      "POSITION-ENC-02"
     ],
     "file_path": "documents/confidential/Failure_Analysis_S02.pptx",
-    "checksum": "a0dfe9fd200f4fa288658fdf78717f27d8094e73a21291377ad891b1a1b44425"
+    "checksum": "e61b61dfaffc79cfab988b7f13f2c92b46aafcfef1c62b3ee3873dd6813735a5"
   },
   {
-    "document_id": "doc-48838dd00dae0e45",
+    "document_id": "doc-956f1822fbbac958",
     "title": "Process Recipe",
     "classification": "RESTRICTED",
     "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S03",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "customer-specific assembly force and thermal dwell process recipe"
+      "PR-430",
+      "FACTORY-DEMO-01",
+      "S03"
     ],
     "file_path": "documents/restricted/Process_Recipe.xlsx",
-    "checksum": "2aa51bad230c1aaf6745a22495cdfac9a0c0923e9a659850f952c451d76144b3"
+    "checksum": "ed6ae5c39c6776210c9a937729257380297ba305d8eb5e61d0e28aaded7969fd"
   },
   {
-    "document_id": "doc-6b9404babed1e04b",
+    "document_id": "doc-f389bc642fe94ebb",
     "title": "Robot Calibration Parameters",
     "classification": "RESTRICTED",
     "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S03",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "robot trajectory limits and calibration offsets"
+      "RC-431",
+      "FACTORY-DEMO-01",
+      "S03"
     ],
     "file_path": "documents/restricted/Robot_Calibration_Parameters.xlsx",
-    "checksum": "4b9997e5edb87e689f114bc83776ccaae345bbd4b14c2b10c6a4b2cddbb2d7eb"
+    "checksum": "fd11ed33d62d27968b1fe266df42d6afafea2772915dbb8fe1557e0e043b0ca6"
   },
   {
     "document_id": "doc-2fa51d225fe80cf1",
@@ -156,13 +172,16 @@
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S02",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "positioning reference image"
+      "IMG-210",
+      "FACTORY-DEMO-01",
+      "S02",
+      "POSITION-ENC-02"
     ],
     "file_path": "images/S02_Positioning_Reference.png",
-    "checksum": "18f19eb194ab8d7ab2cfe3532e4b09ccfd51ddfc6599c0a0cf3f00e53747438f"
+    "checksum": "cbb0ea3c5200acd55c0536f5f167183e9d152a55c276a9b32712e50e2d53d9df"
   },
   {
     "document_id": "doc-55f76a9441b7f01e",
@@ -172,13 +191,16 @@
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S04",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "accepted inspection reference image"
+      "IMG-104",
+      "FACTORY-DEMO-01",
+      "S04",
+      "QUALITY-09"
     ],
     "file_path": "images/S04_Inspection_Good.png",
-    "checksum": "8e3da484afedce818541920de4de0fe80845dce4103f5e9f17aa8629ef7bbcb5"
+    "checksum": "8d181fe7123c2247ee0a4ddcc671508019644be0c1a157bfce165a3926113b3c"
   },
   {
     "document_id": "doc-8118c5246ed1bb7b",
@@ -188,12 +210,15 @@
     "source_system": "FACTORY-DEMO-01-DOCUMENTS",
     "factory_code": "FACTORY-DEMO-01",
     "station_code": "S04",
-    "version": "1.0",
-    "valid_from": "2026-01-01",
+    "version": "1.1",
+    "valid_from": "2026-01-17",
     "tags": [
-      "QUALITY-09 defect reference image"
+      "IMG-324",
+      "FACTORY-DEMO-01",
+      "S04",
+      "QUALITY-09"
     ],
     "file_path": "images/S04_Inspection_Defect.png",
-    "checksum": "9619017b3c9ff5c2096b01f2731259501ccdd4cbff12249f71253beb5bd6d7b3"
+    "checksum": "d82b22aa1a4c6d60a770acba22182adadd7ca73767ae87d35b0e1883551a0078"
   }
 ]
