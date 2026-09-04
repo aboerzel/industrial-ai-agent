@@ -8,6 +8,9 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
+from industrial_ai_agent.infrastructure.hybrid_knowledge_retriever import (
+    HybridKnowledgeRetriever,
+)
 from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
     InMemoryBm25KnowledgeRetriever,
     InMemoryIdfKnowledgeRetriever,
@@ -27,7 +30,7 @@ DEFAULT_DATASET_PATH = (
 )
 DEFAULT_KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
 DEFAULT_K = 3
-RetrievalStrategy = Literal["simple", "idf", "bm25", "semantic"]
+RetrievalStrategy = Literal["simple", "idf", "bm25", "semantic", "hybrid"]
 RetrievalCategory = Literal[
     "exact_identifier",
     "natural_language",
@@ -343,7 +346,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=DEFAULT_K)
     parser.add_argument(
         "--strategy",
-        choices=("simple", "idf", "bm25", "semantic"),
+        choices=("simple", "idf", "bm25", "semantic", "hybrid"),
         default="simple",
         help="Retrieval implementation to evaluate.",
     )
@@ -394,7 +397,16 @@ def _create_retriever(
         return InMemoryIdfKnowledgeRetriever(chunks)
     if strategy == "bm25":
         return InMemoryBm25KnowledgeRetriever(chunks)
-    return InMemorySemanticKnowledgeRetriever(chunks, OllamaEmbeddingClient())
+    if strategy == "semantic":
+        return InMemorySemanticKnowledgeRetriever(chunks, OllamaEmbeddingClient())
+    return HybridKnowledgeRetriever(
+        chunks,
+        bm25_retriever=InMemoryBm25KnowledgeRetriever(chunks),
+        semantic_retriever=InMemorySemanticKnowledgeRetriever(
+            chunks,
+            OllamaEmbeddingClient(),
+        ),
+    )
 
 
 if __name__ == "__main__":

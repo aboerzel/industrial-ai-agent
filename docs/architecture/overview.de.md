@@ -9,9 +9,9 @@ begrenzte Single-Agent-Pfade über dieselben zwei Read-Only-Tools: den handgesch
 kann zusätzlich eine explizit injizierte Demonstrations-Action-Capability erhalten, die
 für Human Approval pausiert. Fokussierte
 deterministische Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige
-begrenzte Trajectories für beide Pfade. Lokale lexical und semantische
-Knowledge-Retrieval-Strategien
-sind hinter einem inneren Port implementiert, aber noch nicht in den Agenten integriert. Ein
+begrenzte Trajectories für beide Pfade. Lokale lexical, semantische und hybride
+Knowledge-Retrieval-Strategien sind hinter einem inneren Port implementiert, aber noch
+nicht in den Agenten integriert. Ein
 deterministischer Model-Egress-Decorator mit Deny-by-default prüft die explizite
 Request-Klassifikation gegen die validierte Execution Zone jedes Model Profiles, bevor
 der Provider Adapter aufgerufen wird. LangGraph und LangChain Core werden nun gezielt
@@ -44,6 +44,7 @@ flowchart LR
         IDF["InMemoryIdfKnowledgeRetriever"]
         BM25["InMemoryBm25KnowledgeRetriever"]
         SEM["InMemorySemanticKnowledgeRetriever"]
+        HYB["HybridKnowledgeRetriever"]
         OEC["OllamaEmbeddingClient"]
         VEC["LangChain InMemoryVectorStore"]
         KB["Versionierte lokale Markdown Knowledge Base"]
@@ -59,11 +60,14 @@ flowchart LR
     IDF -.->|"implementiert"| KR
     BM25 -.->|"implementiert"| KR
     SEM -.->|"implementiert"| KR
+    HYB -.->|"implementiert"| KR
     OEC -.->|"implementiert"| EP
     KB -->|"expliziter Index Build"| LKR
     KB -->|"expliziter Index Build"| IDF
     KB -->|"expliziter Index Build"| BM25
     KB -->|"expliziter Index Build"| SEM
+    BM25 --> HYB
+    SEM --> HYB
     SEM -->|"embedded über"| EP
     SEM --> VEC
     OEC --> OLLAMA
@@ -73,7 +77,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,OEC,VEC,KB,OLLAMA adapter
+    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,OEC,VEC,KB,OLLAMA adapter
 ```
 
 Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
@@ -82,7 +86,7 @@ zurück. Die deterministischen Demo-Daten enthalten das Produkt `P4711` und die 
 `S04` und `S12`.
 
 `DocumentationSearchCapability` erhält `KnowledgeRetriever` per Dependency Injection
-und gibt strukturierte Passagen zurück. Lexical und semantische Adapter laden die lokale
+und gibt strukturierte Passagen zurück. Lexical, semantische und hybride Adapter laden die lokale
 Markdown Knowledge Base einmalig bei der expliziten Erstellung; Suchen zur Request-Zeit
 verwenden ihre vorbereiteten In-Memory-Indizes. Der semantische Adapter erhält den
 separaten inneren `EmbeddingClient`-Port, baut Dokumentvektoren in LangChains
@@ -107,14 +111,18 @@ flowchart LR
     Port --> IDFSearch["Rarity-aware IDF-Ranking<br/>Top 3"]
     Port --> BM25Search["BM25-Ranking<br/>Top 3"]
     Port --> SemanticSearch["Semantisches Vector-Ranking<br/>Top 3"]
+    Port --> HybridSearch["Hybrides RRF-Ranking<br/>Top 3"]
     Index --> Simple
     Index --> IDFSearch
     Index --> BM25Search
     Chunk --> SemanticSearch
+    BM25Search --> HybridSearch
+    SemanticSearch --> HybridSearch
     Simple --> Results["Strukturierte Results<br/>Content + Provenance + Score"]
     IDFSearch --> Results
     BM25Search --> Results
     SemanticSearch --> Results
+    HybridSearch --> Results
     Results --> Query
 
     classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
@@ -122,7 +130,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class Docs,Load,Chunk data
     class Query,Port,Results core
-    class Index,Simple,IDFSearch,BM25Search,SemanticSearch adapter
+    class Index,Simple,IDFSearch,BM25Search,SemanticSearch,HybridSearch adapter
 ```
 
 Der Tokenizer führt Case Folding für alphanumerische Terme und Identifier mit
@@ -131,13 +139,16 @@ einfache Adapter bewertet den Anteil unterschiedlicher Query-Terme im Chunk. Der
 Adapter gewichtet übereinstimmende Terme mit geglätteter inverser Chunk Frequency und
 normalisiert anschließend mit dem gesamten Query-Gewicht. BM25 ergänzt gesättigte Term
 Frequency und Chunk-Length-Normalisierung. Der semantische Adapter baut lokale Vektoren
-über `EmbeddingClient` und LangChains `InMemoryVectorStore`. Alle lexikalischen
-Strategien lassen Chunks mit Score null aus und lösen Ties durch `chunk_id`. Source Path,
-Document ID, Chunk ID, Abschnitts-Metadata und Score bleiben an jedem Result erhalten.
+über `EmbeddingClient` und LangChains `InMemoryVectorStore`. Der hybride Adapter
+komponiert BM25- und Semantic-Rankings mit gleichgewichteter Reciprocal Rank Fusion und
+der festen Rank-Konstante `60`; inkompatible Rohscores werden nie addiert. Alle
+lexikalischen Strategien lassen Chunks mit Score null aus und lösen Ties durch
+`chunk_id`; Hybrid löst gleiche fusionierte Scores ebenso. Source Path, Document ID,
+Chunk ID, Abschnitts-Metadata und Score bleiben an jedem Result erhalten.
 
 Der fokussierte Retrieval-Eval ist von den Agent-Evals getrennt. Seine 28 eingefrorenen
 v2-Fälle messen Hit@1, Hit@3 und Mean Recall@3 mit strukturierter
-Relevant-Chunk-Ground-Truth. Dasselbe unveränderte Dataset vergleicht alle vier Strategien.
+Relevant-Chunk-Ground-Truth. Dasselbe unveränderte Dataset vergleicht alle fünf Strategien.
 Agent-Query-Formulierung und Grounding der finalen Antwort liegen außerhalb dieses
 Slice.
 
@@ -487,7 +498,8 @@ bereitstellen, `InMemoryLexicalKnowledgeRetriever`, `InMemoryIdfKnowledgeRetriev
 `InMemoryBm25KnowledgeRetriever`, die vorbereitete lokale Token-Indizes mit
 unterschiedlichen Scoring-Formeln durchsuchen, `InMemorySemanticKnowledgeRetriever`, das
 LangChains `InMemoryVectorStore`-Matches über `EmbeddingClient` auf originale
-Chunk-Provenance zurückmappt, sowie `OllamaEmbeddingClient`, das das Baseline-Embedding-
+Chunk-Provenance zurückmappt, `HybridKnowledgeRetriever`, das die bestehenden BM25- und
+Semantic-Retriever rangbasiert fusioniert, sowie `OllamaEmbeddingClient`, das das Baseline-Embedding-
 Modell auf lokales Ollama beschränkt, sowie `OpenAICompatibleLLMClient`, das den
 provider-unabhängigen LLM-Vertrag in eine OpenAI-compatible Chat Completions API
 übersetzt. `LLMClientChatModel` ist der schmale Infrastructure Adapter zwischen
@@ -576,8 +588,8 @@ Cost- und Quality-Präferenzen können den Security-Filter nicht überstimmen. S
 
 ### Retrieval-Weiterentwicklung
 
-Die lexical Baselines werden nun mit einer ersten semantischen Baseline verglichen. Der
-Retrieval Core bleibt gemäß
+Die lexical Baselines und die erste semantische Baseline werden nun auch mit einer
+festen rangbasierten Hybrid-Baseline verglichen. Der Retrieval Core bleibt gemäß
 [ADR-006](../decisions/ADR-006-knowledge-retrieval-and-rag-architecture.de.md)
 unabhängig von einer späteren Knowledge-MCP-Transportgrenze. Embeddings bleiben eine von
 `LLMClient` getrennte Modellrolle; der fokussierte `EmbeddingClient`-Port liegt im Core,
@@ -593,28 +605,35 @@ flowchart LR
     end
 
     subgraph Infrastructure["Implementierte lokale Infrastructure"]
+        Bm25["InMemoryBm25KnowledgeRetriever"]
         Semantic["InMemorySemanticKnowledgeRetriever"]
+        Hybrid["HybridKnowledgeRetriever<br/>RRF k=60"]
         Adapter["OllamaEmbeddingClient"]
         Index["LangChain InMemoryVectorStore"]
     end
 
     Semantic -.->|"implementiert"| KnowledgePort
+    Bm25 -.->|"implementiert"| KnowledgePort
+    Hybrid -.->|"implementiert"| KnowledgePort
     Semantic -->|"verwendet"| EmbeddingPort
     Adapter -.->|"implementiert"| EmbeddingPort
     Semantic --> Index
+    Bm25 --> Hybrid
+    Semantic --> Hybrid
     Adapter --> Model["Lokales Ollama<br/>qwen3-embedding:0.6b"]
 
     classDef core fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
     class KnowledgePort,EmbeddingPort core
-    class Semantic,Adapter,Index adapter
+    class Bm25,Semantic,Hybrid,Adapter,Index adapter
     class Model external
 ```
 
 Das erste Modell und der In-Memory-Index sind Implementierungsbaselines, keine
-langlebigen Provider- oder Vector-Store-Festlegungen. Dimension, persistenter Storage,
-Hybrid Fusion, Reranking und Embedding Routing bleiben offen. Siehe
+langlebigen Provider- oder Vector-Store-Festlegungen. RRF ist eine feste
+Vergleichsbaseline, keine allgemeine Fusionstechnologie-Entscheidung. Dimension,
+persistenter Storage, Reranking und Embedding Routing bleiben offen. Siehe
 [ADR-007](../decisions/ADR-007-embedding-model-abstraction.de.md).
 
 ### Breitere Zielrichtung

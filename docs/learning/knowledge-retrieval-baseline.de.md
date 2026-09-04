@@ -3,10 +3,11 @@
 ## Zweck
 
 Der Retrieval-Slice implementiert drei messbare lexikalische Baselines aus ADR-006:
-einfaches Term Overlap, rarity-aware IDF Overlap und BM25. Er ergänzt nun die erste
-semantische Baseline aus ADR-007. Version 2 erweiterte und fror Corpus sowie Evaluation
-Set ein, bevor BM25 und Semantic Retrieval implementiert wurden. Keine der neuen
-Strategien konnte dadurch ihren eigenen Benchmark beeinflussen. Retrieval bleibt vom
+einfaches Term Overlap, rarity-aware IDF Overlap und BM25. Er ergänzt die erste
+semantische Baseline aus ADR-007 sowie eine rangfusionierte BM25-plus-semantische
+Hybrid-Baseline. Version 2 erweiterte und fror Corpus sowie Evaluation Set ein, bevor
+BM25, Semantic und Hybrid Retrieval implementiert wurden. Keine dieser Strategien
+konnte dadurch ihren eigenen Benchmark beeinflussen. Retrieval bleibt vom
 `TroubleshootingAgent` isoliert.
 
 ## Knowledge Base und Ingestion
@@ -134,6 +135,30 @@ einen Cloud Provider gesendet. `numpy` ist eine direkte Dependency, weil LangCha
 Store wird bei der expliziten Adapter-Erstellung neu gebaut; er ist weder eine
 persistente Vector Database noch eine projektweite Similarity-Entscheidung.
 
+## Hybrid-Baseline
+
+`HybridKnowledgeRetriever` ist eine weitere Infrastructure-Implementierung des
+unveränderten `KnowledgeRetriever`-Ports. Er komponiert die bestehenden BM25- und
+Semantic-Retriever; Tokenizer, Index, Ranking-Algorithmus und Score der Komponenten
+bleiben unverändert. Für den kleinen eingefrorenen Corpus fragt er bei beiden
+Komponenten alle 25 Chunks ab und führt die Ränge anschließend mit gleichgewichteter
+Reciprocal Rank Fusion (RRF) und einsbasierten Rängen zusammen:
+
+```text
+rrf_score(d) = sum(1 / (60 + rank_i(d)))
+               für jedes Komponenten-Ranking i, das d enthält
+```
+
+Die Rank-Konstante ist vor dem ersten Hybrid-v2-Lauf fest auf `60` gesetzt. BM25- und
+Vector-Store-Scores werden absichtlich weder addiert noch normalisiert oder sonst
+verglichen, da sie inkompatible Skalen haben. Ein in beiden Rankings enthaltener Chunk
+erhält beide Rangbeiträge; ein einseitiger Chunk bleibt berechtigt. Gleiche fusionierte
+Scores werden deterministisch über aufsteigende `chunk_id` aufgelöst. Die installierten
+Versionen von `langchain-core`, `langchain-ollama` und `langgraph` enthalten keine
+stabile Ensemble-/RRF-Retriever-Komponente. Daher bleibt diese kleine deterministische
+Funktion lokal, statt ein zusätzliches LangChain-Paket oder ein generisches
+Fusion-Framework einzuführen.
+
 ## Retrieval-Evaluation-Datasets
 
 `evals/datasets/knowledge_retrieval_v1.jsonl` bleibt mit seinen zehn ursprünglichen
@@ -181,6 +206,7 @@ python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.js
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy idf
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy semantic
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy hybrid
 python scripts/smoke_test_semantic_retrieval.py
 ```
 
@@ -194,11 +220,10 @@ werden.
 Der Corpus mit sieben Dokumenten und die v2 Ground Truth wurden am 04.09.2026 vor dem
 ersten v2-Retrieval-Lauf eingefroren. Der SHA-256-Wert des Datasets beim Freeze lautet
 `E535816185D90DA816C5FD2033865094BD430E3752AE19632647E82309A46EA6`.
-Weder v2-Queries noch Relevance Labels dürfen aufgrund späterer BM25- oder
-Semantic-Retrieval-Ergebnisse
-verändert werden. Auch Corpus-Wortlaut und Chunking für diesen Vergleich sind
-eingefroren. Eine notwendige Korrektur muss explizit als spätere Dataset-Version
-erfolgen, statt v2 stillschweigend umzuschreiben.
+Weder v2-Queries noch Relevance Labels dürfen aufgrund späterer BM25-, Semantic- oder
+Hybrid-Retrieval-Ergebnisse verändert werden. Auch Corpus-Wortlaut und Chunking für
+diesen Vergleich sind eingefroren. Eine notwendige Korrektur muss explizit als spätere
+Dataset-Version erfolgen, statt v2 stillschweigend umzuschreiben.
 
 ## v1- und v2-Baselines
 
@@ -263,6 +288,29 @@ Hit@3-Miss ist `qv1_role_short`. Unvollständiger Recall@3 bleibt bei
 | Dokumentübergreifende Ambiguität (20) | 0.8500 / 0.9500 / 0.8333 |
 | Termfrequenz-sensitive (4) | 1.0000 / 1.0000 / 0.7500 |
 | Längensensitive (6) | 0.8333 / 1.0000 / 0.6944 |
+
+### Hybrid-Ergebnisse und Kategorien
+
+Die Hybrid-RRF-Baseline ist für v1 nicht gemessen. Auf v2 erreicht sie `0.7857 /
+0.9643 / 0.8988` für Hit@1, Hit@3 und Mean Recall@3. Ihre Hit@1-Misses sind
+`positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`,
+`qv1_role_short`, `service_evidence_multiple` und `vision_recovery_multiple`; der
+einzige Hit@3-Miss ist `s02_recovery_verification`. Unvollständiger Recall@3 bleibt bei
+`positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`,
+`service_evidence_multiple` und `vision_recovery_multiple`.
+
+| Kategorie (n) | Hybrid H@1/H@3/MR@3 |
+| --- | --- |
+| Exakte Identifier (15) | 0.8000 / 1.0000 / 0.9444 |
+| Natural Language (17) | 0.7647 / 0.9412 / 0.8824 |
+| Seltene Terme (7) | 1.0000 / 1.0000 / 0.9286 |
+| Common-Term-Ambiguität (14) | 0.7857 / 0.9286 / 0.9286 |
+| Multi-Relevance (9) | 0.6667 / 1.0000 / 0.7963 |
+| Kurze Queries (5) | 0.8000 / 1.0000 / 0.9000 |
+| Längere technische Queries (5) | 0.6000 / 1.0000 / 0.8333 |
+| Dokumentübergreifende Ambiguität (20) | 0.7500 / 0.9500 / 0.8583 |
+| Termfrequenz-sensitive (4) | 0.5000 / 1.0000 / 0.8750 |
+| Längensensitive (6) | 0.5000 / 1.0000 / 0.7778 |
 
 ## Ranking-Unterschiede und Interpretation
 
@@ -332,13 +380,44 @@ das semantische Modell nicht, weil ergänzende Chunks weiter um nur drei Plätze
 konkurrieren. Die Score-Skalen unterscheiden sich und dienen daher nur der
 Ranking-Inspektion, nicht einem direkten strategieübergreifenden Zahlenvergleich.
 
+### Hybrid-Vergleich
+
+Der feste RRF-Hybrid erreicht `0.7857 / 0.9643 / 0.8988` für Hit@1, Hit@3 und Mean
+Recall@3. Damit behält er den besten Hit@3 bei und erhöht die Recall-Tiefe gegenüber
+jeder einzelnen BM25- und Semantic-Baseline um `0.0179`. Dies zeigt sich besonders bei
+exakten Identifiern (`0.9444` Mean Recall@3), Multi-Relevance (`0.7963`), längeren
+technischen Queries (`0.8333`) und dokumentübergreifender Ambiguität (`0.8583`). Die
+Rank-1-Präzision verbessert sich nicht: Lexikalische BM25-Evidence kann semantisch
+korrekte erste Ergebnisse abwerten, und gleiche fusionierte Scores werden ohne
+semantische Präferenz über `chunk_id` aufgelöst.
+
+| Fall | Erwartete Chunks | BM25 Top 3 | Semantic Top 3 | Hybrid Top 3 (RRF) |
+| --- | --- | --- | --- | --- |
+| `positioning_causes_natural` | `station_s02::chunk-002`, `troubleshooting_service::chunk-002` | `station_s02::chunk-001` (8.5921), `station_s02::chunk-002` (5.6584), `maintenance::chunk-002` (2.7372) | `station_s02::chunk-002` (0.6968), `station_s02::chunk-001` (0.6228), `station_s02::chunk-003` (0.6038) | `station_s02::chunk-001` (0.032522), `station_s02::chunk-002` (0.032522), `station_s02::chunk-003` (0.030798) |
+| `s02_recovery_verification` | `station_s02::chunk-004` | `station_s02::chunk-003` (4.7327), `troubleshooting_service::chunk-002` (4.5982), `maintenance::chunk-002` (4.4223) | `station_s02::chunk-004` (0.5760), `station_s02::chunk-001` (0.5430), `station_s02::chunk-002` (0.5113) | `station_s02::chunk-003` (0.032018), `station_s02::chunk-002` (0.031498), `station_s02::chunk-001` (0.031281) |
+| `qv1_role_short` | `vision_calibration::chunk-001` | `production_quality::chunk-002` (3.1451), `vision_calibration::chunk-001` (2.3338), `station_s04::chunk-001` (1.5720) | `error_codes::chunk-003` (0.5685), `station_s04::chunk-001` (0.5537), `production_quality::chunk-002` (0.5486) | `production_quality::chunk-002` (0.032266), `station_s04::chunk-001` (0.032002), `vision_calibration::chunk-001` (0.031754) |
+| `calibration_procedure` | `vision_calibration::chunk-003` | `vision_calibration::chunk-002` (5.7888), `vision_calibration::chunk-003` (4.8377), `vision_calibration::chunk-004` (4.5653) | `vision_calibration::chunk-003` (0.6519), `vision_calibration::chunk-002` (0.6496), `vision_calibration::chunk-004` (0.5898) | `vision_calibration::chunk-002` (0.032522), `vision_calibration::chunk-003` (0.032522), `vision_calibration::chunk-004` (0.031746) |
+| `error_code_exact` | `error_codes::chunk-002` | `station_s04::chunk-002` (6.2842), `error_codes::chunk-002` (5.5117), `error_codes::chunk-001` (3.9496) | `error_codes::chunk-002` (0.8045), `station_s04::chunk-002` (0.7444), `maintenance::chunk-002` (0.6557) | `error_codes::chunk-002` (0.032522), `station_s04::chunk-002` (0.032522), `error_codes::chunk-001` (0.031258) |
+| `service_evidence_multiple` | `production_quality::chunk-003`, `troubleshooting_service::chunk-004` | `troubleshooting_service::chunk-002` (8.5692), `production_quality::chunk-003` (8.3476), `maintenance::chunk-003` (5.4675) | `troubleshooting_service::chunk-004` (0.6593), `troubleshooting_service::chunk-001` (0.6158), `maintenance::chunk-003` (0.5190) | `troubleshooting_service::chunk-002` (0.032018), `maintenance::chunk-003` (0.031746), `troubleshooting_service::chunk-004` (0.031545) |
+
+Der Vergleich zeigt komplementäre Evidence, aber keine universelle Rank-1-Lösung. Bei
+`error_code_exact` wird der gleiche RRF-Score zugunsten des erwarteten Error-Code-Chunks
+aufgelöst. Bei `qv1_role_short` stellt Hybrid einen Top-3-Hit wieder her, den das
+Semantic Retrieval verfehlt, platziert ihn aber unter der BM25-Position. Umgekehrt ist
+`s02_recovery_verification` ein Hybrid-Hit@3-Miss, obwohl Semantic allein den erwarteten
+Verification-Chunk auf Rang 1 setzt: die lexikalischen Spitzenränge verdrängen ihn.
+`positioning_causes_natural` fehlen weiter die zweite relevante Service-Passage und
+`service_evidence_multiple` enthält weiter nur eine von zwei erwarteten Passagen. Das
+sind verbleibende Grenzen bei Tiefe und Intent-Disambiguierung, kein Anlass, v2 Labels
+oder den eingefrorenen Corpus zu ändern.
+
 ## Bekannte Grenzen
 
 Der Corpus bleibt bewusst klein und manuell nachvollziehbar, statt Production Scale
 abzubilden. BM25 besitzt weiterhin weder Stemming, Synonyme, Phrase Model, Query
-Expansion noch semantisches Verständnis. Die semantische Baseline ist Local-Only und
-hat weder Exact-Identifier-Boost, Hybrid Fusion, Reranker, Query Rewriting,
-persistenten Index, Freshness Management noch Embedding-Routing-Policy.
+Expansion noch semantisches Verständnis. Die semantische Baseline ist Local-Only, und
+der feste Hybrid besitzt weder Identifier-Boost noch gelernte Gewichte, Reranker, Query
+Rewriting, persistenten Index, Freshness Management oder Embedding-Routing-Policy.
 `InMemoryVectorStore` wird bei der Erstellung neu gebaut und ist keine Entscheidung für
 eine Vector Database. Abschnittspositions-IDs können sich nach strukturellen
 Dokumentänderungen verschieben. Grounding der finalen Antwort und Qualität der Agent
