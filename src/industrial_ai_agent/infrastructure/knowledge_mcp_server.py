@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
 from industrial_ai_agent.tools.documentation_search import DocumentationSearchCapability
 
 KNOWLEDGE_MCP_SERVER_NAME = "knowledge_mcp"
@@ -14,6 +15,7 @@ KNOWLEDGE_MCP_SERVER_VERSION = "0.1.0"
 KNOWLEDGE_MCP_HTTP_PATH = "/mcp"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
+DEFAULT_DEMO_FACTORY_ROOT = PROJECT_ROOT / "demo_factory"
 
 
 def create_knowledge_mcp_server(
@@ -50,18 +52,45 @@ def create_default_knowledge_mcp_server(
     knowledge_base_path: Path = DEFAULT_KNOWLEDGE_BASE_PATH,
     embedding_base_url: str | None = None,
     reranker_device: str | None = None,
+    database_url: str | None = None,
+    demo_factory_root: Path = DEFAULT_DEMO_FACTORY_ROOT,
 ) -> MCPServer:
     """Assemble the frozen local retrieval pipeline at the server composition root."""
     # Import expensive local-model adapters only when this production composition runs.
-    from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
-        load_markdown_chunks,
-    )
     from industrial_ai_agent.infrastructure.knowledge_retrieval_composition import (
         create_reranked_knowledge_retriever,
     )
 
+    if database_url:
+        from industrial_ai_agent.infrastructure.docling_ingestion import (
+            DoclingDocumentIngestor,
+            eligible_catalog_documents,
+        )
+        from industrial_ai_agent.infrastructure.persistence.postgres import (
+            PostgreSqlDocumentCatalogRepository,
+            PostgreSqlSessionFactory,
+        )
+
+        catalog = PostgreSqlDocumentCatalogRepository(
+            PostgreSqlSessionFactory(database_url), DEMO_ENGINEER_SECURITY_CONTEXT
+        ).list_documents()
+        eligible_catalog = eligible_catalog_documents(
+            catalog, DEMO_ENGINEER_SECURITY_CONTEXT
+        )
+        ingestor = DoclingDocumentIngestor(demo_factory_root)
+        chunks = tuple(
+            chunk
+            for document in eligible_catalog
+            for chunk in ingestor.ingest(document)
+        )
+    else:
+        from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
+            load_markdown_chunks,
+        )
+
+        chunks = load_markdown_chunks(knowledge_base_path)
     retriever = create_reranked_knowledge_retriever(
-        load_markdown_chunks(knowledge_base_path),
+        chunks,
         embedding_base_url=embedding_base_url,
         reranker_device=reranker_device,
     )
@@ -77,6 +106,10 @@ def main() -> None:
         knowledge_base_path=args.knowledge_base,
         embedding_base_url=args.ollama_base_url,
         reranker_device=args.reranker_device,
+        database_url=os.getenv("KNOWLEDGE_DATABASE_URL"),
+        demo_factory_root=Path(
+            os.getenv("KNOWLEDGE_MCP_DEMO_FACTORY_ROOT", DEFAULT_DEMO_FACTORY_ROOT)
+        ),
     )
     if args.transport == "stdio":
         server.run(transport="stdio")

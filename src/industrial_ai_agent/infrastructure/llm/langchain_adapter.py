@@ -23,6 +23,7 @@ from industrial_ai_agent.agent.llm import (
     MessageRole,
     ModelProfile,
 )
+from industrial_ai_agent.domain.security import DataClassification
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,14 @@ class LLMClientChatModel:
             ),
         )
         return _to_ai_message(response)
+
+    def raise_data_classification(self, classification: DataClassification) -> None:
+        """Forward monotonic run context only to a security-aware LLM decorator."""
+        raise_classification = getattr(
+            self.llm_client, "raise_request_classification", None
+        )
+        if callable(raise_classification):
+            raise_classification(classification)
 
 
 def _to_internal_message(message: BaseMessage) -> LLMMessage:

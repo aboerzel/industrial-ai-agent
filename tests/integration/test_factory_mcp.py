@@ -56,12 +56,18 @@ def test_factory_mcp_tool_handlers_delegate_to_injected_capabilities() -> None:
 
     assert product_history.product_ids == ["P4711"]
     assert machine_status.station_ids == ["S04"]
-    assert product_content == {"product_id": "P4711", "found": False, "steps": []}
+    assert product_content == {
+        "product_id": "P4711",
+        "found": False,
+        "steps": [],
+        "classification": 2,
+    }
     assert machine_content == {
         "station_id": "S04",
         "found": False,
         "state": None,
         "active_error_code": None,
+        "classification": 2,
     }
 
 
@@ -81,12 +87,18 @@ def test_factory_mcp_preserves_structured_not_found_results() -> None:
 
     product_content, machine_content = asyncio.run(call_unknowns())
 
-    assert product_content == {"product_id": "P9999", "found": False, "steps": []}
+    assert product_content == {
+        "product_id": "P9999",
+        "found": False,
+        "steps": [],
+        "classification": 2,
+    }
     assert machine_content == {
         "station_id": "S99",
         "found": False,
         "state": None,
         "active_error_code": None,
+        "classification": 2,
     }
 
 
@@ -140,17 +152,20 @@ def _assert_factory_smoke_result(result: FactoryMcpSmokeResult) -> None:
         "found": True,
         "state": "FAULTED",
         "active_error_code": "E-STOP-17",
+        "classification": 2,
     }
     assert result.unknown_product_history == {
         "product_id": "P9999",
         "found": False,
         "steps": [],
+        "classification": 2,
     }
     assert result.unknown_machine_status == {
         "station_id": "S99",
         "found": False,
         "state": None,
         "active_error_code": None,
+        "classification": 2,
     }
 
 

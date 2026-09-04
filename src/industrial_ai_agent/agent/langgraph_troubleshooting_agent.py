@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from enum import StrEnum
@@ -38,6 +39,7 @@ from industrial_ai_agent.agent.langchain_model import (
 from industrial_ai_agent.agent.llm import LLMResponse
 from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpToolSession
 from industrial_ai_agent.agent.model_egress import DataClassification
+from industrial_ai_agent.domain.security import effective_data_classification
 from industrial_ai_agent.tools.maintenance_ticket import (
     CreateMaintenanceTicketArguments,
     MaintenanceTicketCapability,
@@ -75,6 +77,7 @@ class TroubleshootingGraphState(TypedDict):
     approval_result: ApprovalDecision | None
     model_profile_name: str
     run_classification: DataClassification | None
+    effective_classification: DataClassification | None
 
 
 class CheckpointedTroubleshootingGraphState(TypedDict):
@@ -89,6 +92,7 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     approval_result: str | None
     model_profile_name: str
     run_classification: int | None
+    effective_classification: int | None
 
 
 def _validate_pydantic_arguments(
@@ -354,6 +358,7 @@ class LangGraphTroubleshootingAgent:
 
         arguments = self._validate_tool_arguments(tool, dict(tool_call["args"]))
         result = tool.invoke(arguments)
+        effective_classification = self._observe_result_classification(state, result)
         executed_call = {"tool": tool_name, "arguments": arguments}
         return {
             "messages": [
@@ -364,6 +369,7 @@ class LangGraphTroubleshootingAgent:
             ],
             "executed_tool_count": state["executed_tool_count"] + 1,
             "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
+            "effective_classification": effective_classification,
         }
 
     async def _atool_node(
@@ -383,6 +389,7 @@ class LangGraphTroubleshootingAgent:
 
         arguments = self._validate_tool_arguments(tool, dict(tool_call["args"]))
         result = await tool.ainvoke(arguments)
+        effective_classification = self._observe_result_classification(state, result)
         executed_call = {"tool": tool_name, "arguments": arguments}
         return {
             "messages": [
@@ -393,6 +400,7 @@ class LangGraphTroubleshootingAgent:
             ],
             "executed_tool_count": state["executed_tool_count"] + 1,
             "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
+            "effective_classification": effective_classification,
         }
 
     def _prepare_action_node(
@@ -558,6 +566,11 @@ class LangGraphTroubleshootingAgent:
                 if self._run_classification is not None
                 else None
             ),
+            "effective_classification": (
+                int(self._run_classification)
+                if self._run_classification is not None
+                else None
+            ),
         }
 
     @staticmethod
@@ -619,7 +632,28 @@ class LangGraphTroubleshootingAgent:
                 if raw_classification is not None
                 else None
             ),
+            "effective_classification": (
+                DataClassification(state["effective_classification"])
+                if state["effective_classification"] is not None
+                else None
+            ),
         }
+
+    def _observe_result_classification(
+        self,
+        state: CheckpointedTroubleshootingGraphState,
+        result: object,
+    ) -> int | None:
+        observed = _extract_classification(result)
+        current = state["effective_classification"]
+        if observed is None:
+            return current
+        effective = effective_data_classification(
+            DataClassification(current) if current is not None else observed,
+            observed,
+        )
+        self._chat_model.raise_data_classification(effective)
+        return int(effective)
 
     @staticmethod
     def _checkpoint_config(thread_id: str) -> RunnableConfig:
@@ -653,3 +687,30 @@ def _parse_approval(value: object) -> ApprovalDecision:
     if value == ApprovalDecision.REJECT.value:
         return ApprovalDecision.REJECT
     raise ValueError("Approval must be either 'approve' or 'reject'")
+
+
+def _extract_classification(result: object) -> DataClassification | None:
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(result, dict):
+        return None
+    values: list[DataClassification] = []
+    value = result.get("classification")
+    if isinstance(value, str) and value in DataClassification.__members__:
+        values.append(DataClassification[value])
+    elif isinstance(value, int) and not isinstance(value, bool):
+        try:
+            values.append(DataClassification(value))
+        except ValueError:
+            return None
+    nested_results = result.get("results")
+    if isinstance(nested_results, list):
+        for item in nested_results:
+            if isinstance(item, dict):
+                nested = _extract_classification(item)
+                if nested is not None:
+                    values.append(nested)
+    return effective_data_classification(*values) if values else None

@@ -1,4 +1,4 @@
-from enum import IntEnum, StrEnum
+from enum import StrEnum
 from typing import Protocol
 
 from industrial_ai_agent.agent.llm import (
@@ -7,31 +7,15 @@ from industrial_ai_agent.agent.llm import (
     LLMResponse,
     ModelProfile,
 )
-
-
-class DataClassification(IntEnum):
-    PUBLIC = 0
-    INTERNAL = 1
-    CONFIDENTIAL = 2
-    RESTRICTED = 3
+from industrial_ai_agent.domain.security import (
+    DataClassification,
+    effective_data_classification,
+)
 
 
 class ExecutionZone(StrEnum):
     LOCAL = "LOCAL"
     PUBLIC_CLOUD = "PUBLIC_CLOUD"
-
-
-def effective_data_classification(
-    *classifications: DataClassification,
-) -> DataClassification:
-    if not classifications:
-        raise ValueError("At least one data classification is required")
-    if any(
-        not isinstance(classification, DataClassification)
-        for classification in classifications
-    ):
-        raise ValueError("Unknown data classification")
-    return max(classifications)
 
 
 class ModelEgressDeniedError(RuntimeError):
@@ -94,3 +78,10 @@ class EgressCheckedLLMClient:
             execution_zone,
         )
         return self._delegate.chat(profile, request)
+
+    def raise_request_classification(self, classification: DataClassification) -> None:
+        """Monotonically retain the highest classified data observed in this run."""
+        self._request_classification = effective_data_classification(
+            self._request_classification or classification,
+            classification,
+        )

@@ -49,10 +49,13 @@ once, performs all sequential calls on that session, and closes it afterwards. T
 slice deliberately has no session-per-call behavior or connection pool.
 
 Docker packages each networked server as a reproducible, non-root Python 3.12 service.
-The local `compose.yaml` maps factory port `8001` and knowledge port `8002`. Factory
-needs no model. Knowledge contains no model artifact, uses the host's local Ollama
-endpoint for `qwen3-embedding:0.6b`, and mounts a pre-populated named Hugging Face cache
-read-only for `BAAI/bge-reranker-v2-m3`; CPU is the default. Local in-process execution
+The local `compose.yaml` adds PostgreSQL, maps factory port `8001` and knowledge port
+`8002`, and uses a one-shot migration/seed service. Factory uses PostgreSQL through its
+non-superuser application role. Knowledge reads RLS-eligible `document_catalog` rows
+and local multi-format assets through Docling before building the unchanged retrieval
+pipeline. Knowledge contains no model artifact, uses the host's local Ollama endpoint
+for `qwen3-embedding:0.6b`, and uses a persistent named Hugging Face cache volume for
+`BAAI/bge-reranker-v2-m3`; CPU is the default. Local in-process execution
 can use CUDA, while the Compose demo has no NVIDIA or Ollama-container requirement.
 Docker is not MCP: Docker starts and isolates processes, whereas MCP defines discovery,
 schemas, messages, and tool-call semantics. Internal Docker networking, an agent
@@ -85,7 +88,16 @@ context from public-cloud model profiles. A local HTTP connection to either cont
 MCP service-network transport, not authorization to send factory or knowledge results to
 `public_fast`. Knowledge MCP's documents, chunks, queries, embeddings, and reranker
 inputs stay local: Ollama is local and the cross-encoder loads only from its local cache.
-MCP does not authorize model calls or cloud egress.
+MCP does not authorize model calls or cloud egress. ADR-014 additionally propagates
+classification from PostgreSQL rows and catalog documents to chunks and structured MCP
+results. Retrieval filters above-clearance catalog entries before parsing, embedding, or
+reranking; PostgreSQL RLS independently enforces the same row-level limit for the
+application database role.
+
+At first container startup, Docling/RapidOCR and the reranker can fetch their public
+model artifacts into local runtime caches. This bootstrap is not factory-data egress:
+no document content, query, chunk, embedding, or reranker input is uploaded. A
+deployment with fully pre-provisioned artifacts can disable that initial network need.
 
 The first Docker demo deliberately has no MCP authentication because it binds a local
 host port for development. That is not a remote-deployment security model. Authentication
@@ -102,6 +114,9 @@ The cleanup classification is:
   LangGraph composition roots. Knowledge retrieval remains behind `knowledge_mcp`.
 * **KEEP TEMPORARILY:** stdio-only helpers; stdio remains an intentional development/test
   transport, not historical code.
+* **KEEP FOR UNIT TESTS / DEVELOPMENT FALLBACK:** the in-memory Factory repositories.
+  Production and integration composition roots use PostgreSQL; the in-memory adapters
+  keep deterministic unit tests and local stdio development independent of PostgreSQL.
 * **BLOCKED BY FRAMEWORK:** `mcp_langchain_tool_provider.py`; it is the single temporary
   MCP SDK v2 to LangChain bridge until a stable compatible adapter exists.
 

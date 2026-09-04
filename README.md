@@ -17,8 +17,9 @@ The project starts with simple, explicit Python building blocks and evolves incr
 
 Two deterministic domain capabilities are implemented: product history lookup through
 `ProductHistoryCapability.get_product_history(product_id)` and current machine status
-through `MachineStatusCapability.get_machine_status(station_id)`. Both use inner
-repository ports with deterministic in-memory adapters. A provider-independent
+through `MachineStatusCapability.get_machine_status(station_id)`. Production and Docker
+compositions use PostgreSQL repository adapters; deterministic in-memory adapters remain
+focused unit-test doubles. A provider-independent
 `LLMClient` port and one OpenAI-compatible infrastructure adapter are also available.
 Model selection uses explicit task requirements and the deterministic model router.
 `LangGraphTroubleshootingAgent` is the sole troubleshooting loop. It receives only
@@ -90,6 +91,41 @@ streaming, durable persistence, or HITL resume endpoint. A remotely reachable de
 requires those controls in a later slice. See
 [FastAPI Application Boundary](docs/learning/fastapi-application-boundary.md).
 
+## Persistent Factory Demo Data
+
+ADR-014 makes PostgreSQL the persistent source of truth for structured
+`FACTORY-DEMO-01` data and `document_catalog` metadata. Synthetic records cover P4711's
+S02 positioning warning and S04 `QUALITY-09` rejection, recurring S02 failures, S02
+maintenance, and an explicitly `RESTRICTED` S03 process parameter. The accompanying
+local `demo_factory/` assets are real PDF, DOCX, PPTX, XLSX, and PNG files. Their
+cataloged checksum and classification, rather than folder names, govern ingestion.
+
+Copy `.env.example` to a local unversioned `.env` and replace the two PostgreSQL demo
+password placeholders. Then start the persistent services:
+
+```powershell
+docker compose up --build -d postgres factory-mcp knowledge-mcp
+```
+
+The migration service creates the schema and deterministic seed records. Runtime MCP
+services use the non-superuser `factory_app` database role. Each transaction sets a
+parameterized, transaction-local `app.clearance`, and PostgreSQL Row-Level Security
+filters classified rows independently of Python repository code. The server-injected
+demo `SecurityContext` is `demo-engineer` with `CONFIDENTIAL` clearance; there is no
+authentication yet. A future FastAPI JWT/OIDC adapter can construct the same context.
+
+Knowledge MCP reads only RLS-eligible catalog rows before Docling parses, chunks,
+embeds, or reranks documents. Classification propagates unchanged from catalog document
+to parsed document, chunk, MCP result, and the run's effective classification. That
+classification may rise but never silently fall; ADR-009 then rejects a public-cloud
+model for confidential or restricted context. MCP network traffic is not model egress.
+
+The named Hugging Face cache volume is intentionally outside the Knowledge image and is
+writable for an initial local model-cache population. No model artifact, document, query,
+chunk, embedding, or reranker input is baked into or sent outside the service. The
+standard Compose Knowledge service is CPU-capable; host in-process use may select CUDA.
+See [Persistent Factory Data](docs/learning/persistent-factory-data.md).
+
 With both MCP containers and local Ollama running, execute the sequential real smoke:
 
 ```powershell
@@ -142,9 +178,8 @@ Factory defaults to `0.0.0.0:8001` and Knowledge to `0.0.0.0:8002`; their SDK-ma
 endpoints are `http://127.0.0.1:8001/mcp` and `http://127.0.0.1:8002/mcp`. Both images
 run as non-root and contain neither `.env` nor secrets. The Knowledge image contains no
 model artifact: Compose uses the host Ollama endpoint for `qwen3-embedding:0.6b`, defaults
-the reranker to CPU, and mounts a pre-populated named Hugging Face cache read-only. Seed
-that cache before startup with `hf download BAAI/bge-reranker-v2-m3` in the volume; local
-in-process execution still selects CUDA when available. Docker deploys processes, while
+the reranker to CPU, and uses a persistent named Hugging Face cache volume for local
+model artifacts; local in-process execution still selects CUDA when available. Docker deploys processes, while
 MCP provides tool protocol and discovery. The unauthenticated HTTP endpoints are accepted
 only for this local demo; remote or production deployment requires MCP authentication and
 transport security. MCP network transport does not authorize model egress: confidential

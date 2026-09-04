@@ -6,11 +6,17 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
     InMemoryMachineStatusRepository,
 )
 from industrial_ai_agent.infrastructure.in_memory_product_history_repository import (
     InMemoryProductHistoryRepository,
+)
+from industrial_ai_agent.infrastructure.persistence.postgres import (
+    PostgreSqlMachineStatusRepository,
+    PostgreSqlProductHistoryRepository,
+    PostgreSqlSessionFactory,
 )
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
@@ -54,7 +60,22 @@ def create_factory_mcp_server(
 
 
 def create_default_factory_mcp_server() -> MCPServer:
-    """Build the local demo server at the Infrastructure composition root."""
+    """Build the persistent service when configured, retaining in-memory stdio tests."""
+    database_url = os.getenv("FACTORY_DATABASE_URL")
+    if database_url:
+        session_factory = PostgreSqlSessionFactory(database_url)
+        return create_factory_mcp_server(
+            product_history=ProductHistoryCapability(
+                PostgreSqlProductHistoryRepository(
+                    session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
+                )
+            ),
+            machine_status=MachineStatusCapability(
+                PostgreSqlMachineStatusRepository(
+                    session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
+                )
+            ),
+        )
     return create_factory_mcp_server(
         product_history=ProductHistoryCapability(InMemoryProductHistoryRepository()),
         machine_status=MachineStatusCapability(InMemoryMachineStatusRepository()),

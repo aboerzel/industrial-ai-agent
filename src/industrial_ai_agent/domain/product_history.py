@@ -3,6 +3,8 @@ from datetime import datetime
 from enum import StrEnum
 from itertools import pairwise
 
+from industrial_ai_agent.domain.security import DataClassification
+
 
 @dataclass(frozen=True, slots=True)
 class ProductId:
@@ -28,6 +30,7 @@ class StationId:
 
 class ProductionStepStatus(StrEnum):
     COMPLETED = "COMPLETED"
+    WARNING = "WARNING"
     FAILED = "FAILED"
 
 
@@ -43,6 +46,7 @@ class ProductionStep:
 class ProductHistory:
     product_id: ProductId
     steps: tuple[ProductionStep, ...]
+    classification: DataClassification = DataClassification.CONFIDENTIAL
 
     def __post_init__(self) -> None:
         normalized_steps = tuple(self.steps)
@@ -50,6 +54,9 @@ class ProductHistory:
 
         if any(step.timestamp.utcoffset() is None for step in normalized_steps):
             raise ValueError("Production step timestamps must be timezone-aware")
+
+        if not isinstance(self.classification, DataClassification):
+            raise TypeError("Unknown product history classification")
 
         if any(
             current.timestamp > following.timestamp

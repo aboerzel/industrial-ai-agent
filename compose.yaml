@@ -1,8 +1,40 @@
 services:
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-factory_demo}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-factory_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in .env}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-factory_app}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  factory-db-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.factory-mcp
+    command: ["python", "-m", "industrial_ai_agent.infrastructure.persistence.migrate"]
+    environment:
+      FACTORY_DATABASE_ADMIN_URL: postgresql+psycopg://${POSTGRES_ADMIN_USER:-factory_admin}:${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-factory_demo}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   factory-mcp:
     build:
       context: .
       dockerfile: Dockerfile.factory-mcp
+    environment:
+      FACTORY_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-factory_demo}
     ports:
       - "8001:8001"
     healthcheck:
@@ -11,6 +43,9 @@ services:
       timeout: 3s
       start_period: 5s
       retries: 3
+    depends_on:
+      factory-db-migrate:
+        condition: service_completed_successfully
 
   knowledge-mcp:
     build:
@@ -19,18 +54,27 @@ services:
     environment:
       KNOWLEDGE_MCP_OLLAMA_BASE_URL: http://host.docker.internal:11434
       KNOWLEDGE_MCP_RERANKER_DEVICE: cpu
+      KNOWLEDGE_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-factory_demo}
+      KNOWLEDGE_MCP_DEMO_FACTORY_ROOT: /app/demo_factory
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "8002:8002"
     volumes:
-      - hf-cache:/home/app/.cache/huggingface:ro
+      # Persist local Docling/reranker artifacts outside the image. First use may fetch
+      # model weights, but no factory document, chunk, query, or reranker input leaves
+      # this container.
+      - hf-cache:/home/app/.cache/huggingface
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8002), 2).close()"]
       interval: 10s
       timeout: 3s
       start_period: 60s
       retries: 3
+    depends_on:
+      factory-db-migrate:
+        condition: service_completed_successfully
 
 volumes:
   hf-cache:
+  postgres-data:

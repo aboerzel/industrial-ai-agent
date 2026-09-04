@@ -9,9 +9,16 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 
 COPY pyproject.toml ./
 COPY src ./src
+COPY alembic.ini ./
+COPY migrations ./migrations
+COPY demo_factory ./demo_factory
 
 # The container exposes only factory_mcp, so it avoids optional retrieval and LLM runtimes.
-RUN pip install --no-cache-dir "mcp>=2.0,<3.0" \
+RUN pip install --no-cache-dir \
+        "alembic>=1.19.1,<1.20" \
+        "mcp>=2.0,<3.0" \
+        "psycopg[binary]>=3.3.5,<3.4" \
+        "sqlalchemy>=2.0.52,<2.1" \
     && pip install --no-cache-dir --no-deps .
 
 USER app

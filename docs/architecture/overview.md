@@ -25,6 +25,16 @@ discovers and authorizes tools through the temporary LangChain bridge, executes 
 bounded sequential loop, then closes all sessions. Transport selection is made by an
 outer Composition Root.
 
+ADR-014 adds persistent classified factory data. PostgreSQL is the source of truth for
+structured factory records and document-catalog metadata. Local PDF, DOCX, PPTX, XLSX,
+and image assets remain files and are normalized by local Docling ingestion only after
+their catalog row passes clearance. Each classified row is protected by PostgreSQL RLS;
+the non-superuser application role receives a parameterized transaction-local
+`app.clearance` from the server-injected `SecurityContext`. The same `PUBLIC < INTERNAL
+< CONFIDENTIAL < RESTRICTED` value propagates unchanged to parsed documents, chunks,
+MCP results, and the LangGraph run's effective classification. It is separate from
+subject authorization and from ADR-009 model egress eligibility.
+
 FastAPI now provides the local/demo external Application Boundary. Its versioned
 `POST /api/v1/runs` endpoint creates a UUID, records local lifecycle state in a focused
 in-memory store, and awaits an injected troubleshooting run service. That service creates
@@ -51,6 +61,9 @@ flowchart LR
     Graph --> Provider["MCP Tool Provider"]
     Provider --> Factory["factory_mcp"]
     Provider --> Knowledge["knowledge_mcp"]
+    Factory --> PostgreSQL["PostgreSQL\nclassified factory records + RLS"]
+    Knowledge --> Catalog["PostgreSQL document_catalog + RLS"]
+    Knowledge --> Files["Local multi-format documents\nDocling -> chunks"]
     Graph --> Egress["EgressCheckedLLMClient"]
 
     classDef boundary fill:#e8f1ff,stroke:#2563eb,color:#172554
@@ -79,8 +92,11 @@ flowchart LR
     end
 
     subgraph Infrastructure["Infrastructure adapters"]
-        PHM["InMemoryProductHistoryRepository"]
-        MSM["InMemoryMachineStatusRepository"]
+        PHM["PostgreSqlProductHistoryRepository"]
+        MSM["PostgreSqlMachineStatusRepository"]
+        RLS["PostgreSQL RLS + app.clearance"]
+        DOCS["Document catalog + local multi-format files"]
+        DOCLING["Docling local ingestion"]
         LKR["InMemoryLexicalKnowledgeRetriever"]
         IDF["InMemoryIdfKnowledgeRetriever"]
         BM25["InMemoryBm25KnowledgeRetriever"]
@@ -104,6 +120,10 @@ flowchart LR
     DSC -->|"query + limit"| KR
     PHM -.->|"implements"| PHR
     MSM -.->|"implements"| MSR
+    RLS --> PHM
+    RLS --> MSM
+    DOCS --> DOCLING
+    DOCLING --> RER
     LKR -.->|"implements"| KR
     IDF -.->|"implements"| KR
     BM25 -.->|"implements"| KR
@@ -135,7 +155,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,KMCP,MCPCLIENT,MCPBRIDGE,LG adapter
+    class PHM,MSM,RLS,DOCS,DOCLING,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,KMCP,MCPCLIENT,MCPBRIDGE,LG adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value

@@ -83,6 +83,15 @@ The UUID and lifecycle model permit a later `POST /api/v1/runs/{run_id}/resume` 
 for ADR-011 approval flows. This slice does not implement resume, streaming, database
 persistence, or a durable checkpointer.
 
+## Auth-ready Classification Context
+
+ADR-014 introduces a provider-independent `SecurityContext` with `subject_id`, roles,
+clearance, and `authenticated`. The current API still injects the unauthenticated local
+`demo-engineer` context server-side; no request field can lower its clearance or choose
+a model. A future JWT/OIDC boundary belongs in FastAPI and must translate a verified
+identity into this existing structure before application, MCP, and PostgreSQL access.
+The LangGraph agent remains unaware of authentication mechanics.
+
 ## Error and Security Boundary
 
 FastAPI preserves deterministic inner policy decisions:

@@ -12,6 +12,7 @@ from industrial_ai_agent.agent.llm import (
     LLMToolCall,
     ModelProfile,
 )
+from industrial_ai_agent.domain.security import DataClassification
 
 
 class LangChainChatModel(Protocol):
@@ -21,6 +22,8 @@ class LangChainChatModel(Protocol):
     def bind_tools(self, tools: Sequence[BaseTool]) -> LangChainChatModel: ...
 
     def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage: ...
+
+    def raise_data_classification(self, classification: DataClassification) -> None: ...
 
 
 def to_llm_response(message: AIMessage) -> LLMResponse:

@@ -7,7 +7,6 @@ __pycache__/
 .coverage
 htmlcov/
 .env
-.env.example
 *.de.md
 dist/
 build/

@@ -3,6 +3,7 @@ from pydantic import BaseModel, ConfigDict
 from industrial_ai_agent.domain.machine_status import MachineState
 from industrial_ai_agent.domain.machine_status_repository import MachineStatusRepository
 from industrial_ai_agent.domain.product_history import StationId
+from industrial_ai_agent.domain.security import DataClassification
 
 
 class MachineStatusResult(BaseModel):
@@ -12,6 +13,7 @@ class MachineStatusResult(BaseModel):
     found: bool
     state: MachineState | None = None
     active_error_code: str | None = None
+    classification: DataClassification = DataClassification.CONFIDENTIAL
 
 
 class MachineStatusCapability:
@@ -33,4 +35,5 @@ class MachineStatusCapability:
             found=True,
             state=status.state,
             active_error_code=status.active_error_code,
+            classification=status.classification,
         )

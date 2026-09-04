@@ -274,6 +274,19 @@ when that compatibility exists.
 
 See `docs/decisions/ADR-012-mcp-integration-architecture.md`.
 
+## Persistent Factory Data and Classification
+
+Structured factory records and document metadata use PostgreSQL as their persistent
+source of truth; unstructured factory documents remain local cataloged files. Preserve
+the explicit `PUBLIC < INTERNAL < CONFIDENTIAL < RESTRICTED` classification on records,
+documents, chunks, and retrieval results. Classification, authorization, and model
+egress are separate boundaries: classify data monotonically, authorize subjects through
+`SecurityContext`, apply PostgreSQL RLS through a transaction-local clearance, and keep
+ADR-009 egress checks before every model call. Do not use an LLM or a Python-only filter
+as the sole access-control mechanism.
+
+See `docs/decisions/ADR-014-persistent-factory-data-and-classification-enforcement.md`.
+
 ---
 
 ## State and Context
@@ -709,6 +722,7 @@ ADR-010  LangGraph and LangChain orchestration migration
 ADR-011  Agent persistence and human-in-the-loop
 ADR-012  MCP integration architecture
 ADR-013  FastAPI application boundary
+ADR-014  Persistent factory data and classification enforcement
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

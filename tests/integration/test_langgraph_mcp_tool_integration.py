@@ -107,11 +107,44 @@ def _http_mcp_agent(
     )
 
 
+def test_confidential_mcp_observation_blocks_next_public_model_call() -> None:
+    llm_client = FakeLLMClient(
+        _tool_response("get_product_history", {"product_id": "P4711"}, "history")
+    )
+    checked_client = EgressCheckedLLMClient(
+        llm_client,
+        StaticExecutionZoneResolver(ExecutionZone.PUBLIC_CLOUD),
+        DataClassification.PUBLIC,
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(checked_client, PROFILE),
+        mcp_tool_provider=McpLangChainToolProvider(_factory_server_parameters()),
+    )
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        asyncio.run(agent.aanswer_via_mcp("Investigate P4711."))
+
+    assert any(
+        isinstance(error, ModelEgressDeniedError)
+        and str(error) == "Model egress denied by policy"
+        for error in _leaf_exceptions(raised.value)
+    )
+    assert len(llm_client.requests) == 1
+
+
 def _factory_server_parameters() -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
     )
+
+
+def _leaf_exceptions(error: BaseException) -> tuple[BaseException, ...]:
+    if isinstance(error, BaseExceptionGroup):
+        return tuple(
+            leaf for nested in error.exceptions for leaf in _leaf_exceptions(nested)
+        )
+    return (error,)
 
 
 def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schemas() -> (

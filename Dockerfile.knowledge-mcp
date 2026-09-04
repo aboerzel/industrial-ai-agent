@@ -7,27 +7,36 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN groupadd --system app && useradd --system --gid app --create-home app
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends libgl1 libglib2.0-0 libxcb1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system app \
+    && useradd --system --gid app --create-home app
 
 COPY pyproject.toml ./
 COPY src ./src
 COPY knowledge_base ./knowledge_base
+COPY demo_factory ./demo_factory
 
 # Keep the image independent from model artifacts and use a CPU-only Torch wheel.
 RUN pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
         "torch==2.7.1+cpu" \
-    && printf "torch==2.7.1+cpu\n" > /tmp/constraints.txt \
+        "torchvision==0.22.1+cpu" \
+    && printf "torch==2.7.1+cpu\ntorchvision==0.22.1+cpu\n" > /tmp/constraints.txt \
     && pip install --no-cache-dir --constraint /tmp/constraints.txt \
         "mcp>=2.0,<3.0" \
         "langchain-core>=1.2,<2.0" \
         "langchain-ollama>=1.0,<2.0" \
+        "docling>=2.125.0,<2.126" \
         "numpy>=2.0" \
         "pydantic>=2.0" \
+        "psycopg[binary]>=3.3.5,<3.4" \
         "sentence-transformers>=5.0,<6.0" \
+        "sqlalchemy>=2.0.52,<2.1" \
     && pip install --no-cache-dir --no-deps . \
     && mkdir -p "$HF_HOME" \
-    && chown -R app:app /app /home/app
+    && chown -R app:app /app /home/app /usr/local/lib/python3.12/site-packages/rapidocr/models
 
 USER app
 

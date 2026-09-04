@@ -9,6 +9,7 @@ from industrial_ai_agent.domain.product_history import (
 from industrial_ai_agent.domain.product_history_repository import (
     ProductHistoryRepository,
 )
+from industrial_ai_agent.domain.security import DataClassification
 
 
 class ProductionStepResult(BaseModel):
@@ -26,6 +27,7 @@ class ProductHistoryResult(BaseModel):
     product_id: str
     found: bool
     steps: tuple[ProductionStepResult, ...]
+    classification: DataClassification = DataClassification.CONFIDENTIAL
 
 
 class ProductHistoryCapability:
@@ -46,6 +48,7 @@ class ProductHistoryCapability:
         return ProductHistoryResult(
             product_id=history.product_id.value,
             found=True,
+            classification=history.classification,
             steps=tuple(
                 ProductionStepResult(
                     station_id=step.station_id.value,

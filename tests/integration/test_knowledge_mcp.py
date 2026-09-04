@@ -89,6 +89,7 @@ def test_knowledge_mcp_handler_delegates_and_preserves_structured_provenance() -
             "source": "error_codes.md",
             "chunk_id": "error_codes::chunk-002",
             "relevance_score": 0.9,
+            "classification": 0,
             "metadata": {"title": "E-STOP-17"},
         }
     ]
