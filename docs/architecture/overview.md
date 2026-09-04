@@ -389,6 +389,48 @@ directory unless deliberately curated.
 
 The architecture should evolve only when required by implemented capabilities.
 
+### Planned Task-Level Routing and Model Egress
+
+Task-level model routing and data-egress enforcement are planned boundaries, not
+current components. A future Application policy derives explicit Task Requirements and
+the effective Data Classification. Security first filters configured Model Profiles by
+their validated Execution Zone; deterministic routing then chooses only among eligible
+profiles. A final egress check runs immediately before the selected provider adapter is
+called.
+
+```mermaid
+flowchart LR
+    Task["Task / capability"] --> Requirements["Task Requirements<br/>planned"]
+    Context["Request + tool + retrieval context"] --> Classification["Effective Data Classification<br/>planned Application State"]
+    Requirements --> Eligibility["Security eligibility filter<br/>planned, deny by default"]
+    Classification --> Eligibility
+    Profiles["Configured Model Profiles<br/>capabilities + Execution Zone"] --> Eligibility
+    Eligibility --> Eligible["Eligible profiles only"]
+    Eligible --> Router["Deterministic task router<br/>planned"]
+    Requirements --> Router
+    Router --> Selected["Selected semantic profile"]
+    Selected --> FinalCheck["Final egress check<br/>planned"]
+    Classification --> FinalCheck
+    FinalCheck -->|"allow"| Client["LLMClient"]
+    FinalCheck -->|"deny"| Failure["Deterministic failure<br/>no adapter call"]
+    Client --> Adapter["Configured provider adapter"]
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    class Task,Requirements,Context,Classification,Client core
+    class Eligibility,FinalCheck,Failure security
+    class Profiles,Eligible,Router,Selected routing
+    class Adapter adapter
+```
+
+Cost, quality, latency, availability, and fallback preferences cannot override the
+security filter. If no allowed profile is available, selection fails closed instead of
+falling back to a disallowed zone. See
+[ADR-008](../decisions/ADR-008-task-level-model-routing.md) and
+[ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.md).
+
 ### Retrieval Evolution
 
 The lexical baselines may later be compared with BM25-like, embedding, hybrid, or

@@ -190,6 +190,23 @@ See `docs/decisions/ADR-002-provider-and-model-independent-llm-architecture.md`.
 
 ---
 
+## Model Routing and Egress
+
+Future task-level model routing must select semantic Model Profiles deterministically
+from explicit task requirements; agent and use-case code must not select concrete
+providers or model names.
+
+Data classification and model egress are deterministic Application policy boundaries,
+never LLM judgments. Apply security eligibility before routing and a final egress check
+before every provider-adapter call. Sensitive data must not reach a disallowed public
+model, and failure or fallback must never downgrade the permitted execution zone. Fail
+closed when classification, zone, or eligibility is unknown.
+
+See `docs/decisions/ADR-008-task-level-model-routing.md` and
+`docs/decisions/ADR-009-data-classification-and-model-egress-policy.md`.
+
+---
+
 ## Tool Design
 
 Agent-facing tools should represent meaningful domain capabilities.
@@ -659,6 +676,8 @@ ADR-004  Agent orchestration strategy
 ADR-005  Testing and evaluation strategy
 ADR-006  Knowledge retrieval and RAG architecture
 ADR-007  Embedding model abstraction
+ADR-008  Task-level model routing
+ADR-009  Data classification and model egress policy
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

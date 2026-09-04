@@ -397,6 +397,48 @@ Git ignorierte Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert 
 
 Die Architektur sollte nur dann weiterentwickelt werden, wenn implementierte Fähigkeiten dies erfordern.
 
+### Geplantes Task-Level Routing und Model Egress
+
+Task-Level Model Routing und Data-Egress-Enforcement sind geplante Grenzen und keine
+aktuellen Komponenten. Eine zukünftige Application Policy leitet explizite Task
+Requirements und die effektive Data Classification ab. Security filtert konfigurierte
+Model Profiles zuerst anhand ihrer validierten Execution Zone; deterministisches
+Routing wählt anschließend ausschließlich unter zulässigen Profiles. Ein abschließender
+Egress Check läuft unmittelbar vor dem Aufruf des ausgewählten Provider Adapters.
+
+```mermaid
+flowchart LR
+    Task["Task / Capability"] --> Requirements["Task Requirements<br/>geplant"]
+    Context["Request- + Tool- + Retrieval-Kontext"] --> Classification["Effektive Data Classification<br/>geplanter Application State"]
+    Requirements --> Eligibility["Security Eligibility Filter<br/>geplant, Deny-by-default"]
+    Classification --> Eligibility
+    Profiles["Konfigurierte Model Profiles<br/>Capabilities + Execution Zone"] --> Eligibility
+    Eligibility --> Eligible["Nur zulässige Profiles"]
+    Eligible --> Router["Deterministischer Task Router<br/>geplant"]
+    Requirements --> Router
+    Router --> Selected["Ausgewähltes semantisches Profile"]
+    Selected --> FinalCheck["Abschließender Egress Check<br/>geplant"]
+    Classification --> FinalCheck
+    FinalCheck -->|"erlaubt"| Client["LLMClient"]
+    FinalCheck -->|"abgelehnt"| Failure["Deterministischer Fehler<br/>kein Adapter-Aufruf"]
+    Client --> Adapter["Konfigurierter Provider Adapter"]
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    class Task,Requirements,Context,Classification,Client core
+    class Eligibility,FinalCheck,Failure security
+    class Profiles,Eligible,Router,Selected routing
+    class Adapter adapter
+```
+
+Kosten-, Qualitäts-, Latenz-, Verfügbarkeits- und Fallback-Präferenzen können den
+Security-Filter nicht überstimmen. Ist kein erlaubtes Profile verfügbar, schlägt die
+Auswahl geschlossen fehl, statt auf eine nicht erlaubte Zone zurückzufallen. Siehe
+[ADR-008](../decisions/ADR-008-task-level-model-routing.de.md) und
+[ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.de.md).
+
 ### Retrieval-Weiterentwicklung
 
 Die lexical Baselines können später mit BM25-artigem, Embedding-, Hybrid- oder reranktem
