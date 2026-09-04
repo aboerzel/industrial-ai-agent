@@ -1,5 +1,9 @@
 from pathlib import Path
 
+from industrial_ai_agent.agent.model_egress import (
+    DataClassification,
+    EgressCheckedLLMClient,
+)
 from industrial_ai_agent.agent.troubleshooting_agent import (
     AgentRunStatus,
     TroubleshootingAgent,
@@ -59,7 +63,12 @@ def main() -> None:
     product_repository = RecordingProductHistoryRepository()
     machine_repository = RecordingMachineStatusRepository()
 
-    with OpenAICompatibleLLMClient(configuration) as llm_client:
+    with OpenAICompatibleLLMClient(configuration) as adapter:
+        llm_client = EgressCheckedLLMClient(
+            adapter,
+            configuration,
+            DataClassification.CONFIDENTIAL,
+        )
         agent = TroubleshootingAgent(
             llm_client,
             ProductHistoryCapability(product_repository),

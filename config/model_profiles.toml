@@ -4,6 +4,7 @@ model = "qwen3.5:9b"
 base_url = "http://localhost:11434/v1"
 temperature = 0
 authentication = "none"
+execution_zone = "LOCAL"
 
 [profiles.local_fast]
 provider = "ollama"
@@ -11,6 +12,7 @@ model = "qwen3.5:4b"
 base_url = "http://localhost:11434/v1"
 temperature = 0
 authentication = "none"
+execution_zone = "LOCAL"
 
 [profiles.local_quality]
 provider = "ollama"
@@ -18,6 +20,7 @@ model = "qwen3.5:9b"
 base_url = "http://localhost:11434/v1"
 temperature = 0
 authentication = "none"
+execution_zone = "LOCAL"
 
 [profiles.public_fast]
 provider = "groq"
@@ -26,3 +29,4 @@ base_url = "https://api.groq.com/openai/v1"
 temperature = 0
 authentication = "api_key"
 api_key_env = "GROQ_API_KEY"
+execution_zone = "PUBLIC_CLOUD"

@@ -83,9 +83,10 @@ Konfiguration. Bereits gesetzte Prozess-Environment-Variables haben Vorrang und 
 niemals durch Werte aus `.env` überschrieben.
 
 Dieser Public-Cloud-Smoke-Pfad sendet ausschließlich den synthetischen Prompt
-`Reply exactly with PUBLIC_LLM_OK`. Bis ADR-009 implementiert ist, darf `public_fast`
-keinen Agent-, Tool-, Retrieval-, Produktions-, Maschinen-, Produkt- oder Kundenkontext
-erhalten. Es wird weder automatisch ausgewählt noch als Fallback Profile verwendet.
+`Reply exactly with PUBLIC_LLM_OK` und klassifiziert ihn explizit als `PUBLIC`. Der
+deterministische ADR-009-Egress-Check validiert die `PUBLIC_CLOUD` Execution Zone des
+Profiles, bevor der Provider Adapter aufgerufen wird. `public_fast` wird weder
+automatisch ausgewählt noch als Fallback Profile verwendet.
 
 ## Manueller Tool-Selection-Eval
 

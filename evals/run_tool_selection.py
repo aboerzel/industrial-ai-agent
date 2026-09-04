@@ -7,6 +7,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from industrial_ai_agent.agent.llm import LLMResponse, ModelProfile
+from industrial_ai_agent.agent.model_egress import (
+    DataClassification,
+    EgressCheckedLLMClient,
+)
 from industrial_ai_agent.agent.troubleshooting_agent import TroubleshootingAgent
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
     InMemoryMachineStatusRepository,
@@ -229,7 +233,12 @@ def main() -> None:
     configuration = load_llm_configuration(args.config)
     model_profile = ModelProfile(args.profile)
 
-    with OpenAICompatibleLLMClient(configuration) as llm_client:
+    with OpenAICompatibleLLMClient(configuration) as adapter:
+        llm_client = EgressCheckedLLMClient(
+            adapter,
+            configuration,
+            DataClassification.INTERNAL,
+        )
         agent = TroubleshootingAgent(
             llm_client,
             ProductHistoryCapability(InMemoryProductHistoryRepository()),

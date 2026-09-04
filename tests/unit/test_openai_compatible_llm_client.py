@@ -56,6 +56,7 @@ def create_configuration() -> LLMConfiguration:
                     "base_url": "http://localhost:11434/v1",
                     "temperature": 0,
                     "authentication": "none",
+                    "execution_zone": "LOCAL",
                 }
             }
         }
@@ -73,6 +74,7 @@ def create_authenticated_configuration() -> LLMConfiguration:
                     "temperature": 0,
                     "authentication": "api_key",
                     "api_key_env": "CLOUD_LLM_API_KEY",
+                    "execution_zone": "PUBLIC_CLOUD",
                 }
             }
         }

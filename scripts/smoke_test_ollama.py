@@ -2,10 +2,15 @@ import argparse
 from pathlib import Path
 
 from industrial_ai_agent.agent.llm import (
+    LLMClient,
     LLMMessage,
     LLMRequest,
     MessageRole,
     ModelProfile,
+)
+from industrial_ai_agent.agent.model_egress import (
+    DataClassification,
+    EgressCheckedLLMClient,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
@@ -34,7 +39,12 @@ def main() -> None:
         PROJECT_ROOT / "config" / "model_profiles.toml"
     )
 
-    with OpenAICompatibleLLMClient(configuration) as client:
+    with OpenAICompatibleLLMClient(configuration) as adapter:
+        client = EgressCheckedLLMClient(
+            adapter,
+            configuration,
+            DataClassification.PUBLIC,
+        )
         for profile_name in profile_names:
             run_profile_smoke_test(client, configuration, profile_name)
 
@@ -57,7 +67,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_profile_smoke_test(
-    client: OpenAICompatibleLLMClient,
+    client: LLMClient,
     configuration: LLMConfiguration,
     profile_name: str,
 ) -> None:

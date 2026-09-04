@@ -5,6 +5,8 @@ from typing import Self
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
+from industrial_ai_agent.agent.model_egress import ExecutionZone
+
 
 class AuthenticationMode(StrEnum):
     NONE = "none"
@@ -19,6 +21,7 @@ class ModelProfileConfig(BaseModel):
     base_url: AnyHttpUrl
     temperature: float = Field(ge=0, le=2)
     authentication: AuthenticationMode
+    execution_zone: ExecutionZone
     api_key_env: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
@@ -42,6 +45,9 @@ class LLMConfiguration(BaseModel):
             return self.profiles[profile]
         except KeyError as error:
             raise ValueError(f"Unknown model profile: {profile}") from error
+
+    def get_execution_zone(self, profile_name: str) -> ExecutionZone:
+        return self.get_profile(profile_name).execution_zone
 
 
 def load_llm_configuration(path: Path) -> LLMConfiguration:

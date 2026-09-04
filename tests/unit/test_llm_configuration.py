@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from industrial_ai_agent.agent.model_egress import ExecutionZone
 from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
     LLMConfiguration,
@@ -26,6 +27,7 @@ def test_loads_troubleshooting_profile() -> None:
     assert str(profile.base_url) == "http://localhost:11434/v1"
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.NONE
+    assert profile.execution_zone is ExecutionZone.LOCAL
     assert profile.api_key_env is None
 
 
@@ -37,6 +39,7 @@ def test_loads_local_fast_profile() -> None:
     assert str(profile.base_url) == "http://localhost:11434/v1"
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.NONE
+    assert profile.execution_zone is ExecutionZone.LOCAL
     assert profile.api_key_env is None
 
 
@@ -48,6 +51,7 @@ def test_loads_local_quality_profile() -> None:
     assert str(profile.base_url) == "http://localhost:11434/v1"
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.NONE
+    assert profile.execution_zone is ExecutionZone.LOCAL
     assert profile.api_key_env is None
 
 
@@ -59,6 +63,7 @@ def test_loads_public_fast_profile() -> None:
     assert str(profile.base_url) == "https://api.groq.com/openai/v1"
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.API_KEY
+    assert profile.execution_zone is ExecutionZone.PUBLIC_CLOUD
     assert profile.api_key_env == "GROQ_API_KEY"
 
 
@@ -98,6 +103,7 @@ def test_rejects_api_key_value_in_model_configuration() -> None:
                         "base_url": "http://localhost:11434/v1",
                         "temperature": 0,
                         "authentication": "none",
+                        "execution_zone": "LOCAL",
                         "api_key": "must-not-be-configured-here",
                     }
                 }
@@ -116,6 +122,7 @@ def test_requires_environment_variable_name_for_api_key_authentication() -> None
                         "base_url": "https://llm.example.com/v1",
                         "temperature": 0,
                         "authentication": "api_key",
+                        "execution_zone": "PUBLIC_CLOUD",
                     }
                 }
             }
@@ -133,7 +140,43 @@ def test_rejects_environment_variable_name_for_no_authentication() -> None:
                         "base_url": "http://localhost:11434/v1",
                         "temperature": 0,
                         "authentication": "none",
+                        "execution_zone": "LOCAL",
                         "api_key_env": "UNNECESSARY_API_KEY",
+                    }
+                }
+            }
+        )
+
+
+def test_requires_explicit_execution_zone() -> None:
+    with pytest.raises(ValidationError, match="execution_zone"):
+        LLMConfiguration.model_validate(
+            {
+                "profiles": {
+                    "troubleshooting": {
+                        "provider": "ollama",
+                        "model": "qwen3.5:9b",
+                        "base_url": "http://localhost:11434/v1",
+                        "temperature": 0,
+                        "authentication": "none",
+                    }
+                }
+            }
+        )
+
+
+def test_rejects_unknown_execution_zone() -> None:
+    with pytest.raises(ValidationError, match="execution_zone"):
+        LLMConfiguration.model_validate(
+            {
+                "profiles": {
+                    "troubleshooting": {
+                        "provider": "ollama",
+                        "model": "qwen3.5:9b",
+                        "base_url": "http://localhost:11434/v1",
+                        "temperature": 0,
+                        "authentication": "none",
+                        "execution_zone": "UNKNOWN",
                     }
                 }
             }

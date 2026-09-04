@@ -79,9 +79,10 @@ configuration. Existing process Environment Variables take precedence and are ne
 overridden by `.env` values.
 
 This public-cloud smoke path sends only the synthetic prompt
-`Reply exactly with PUBLIC_LLM_OK`. Until ADR-009 is implemented, `public_fast` must not
-receive agent, tool, retrieval, production, machine, product, or customer context. It is
-not selected automatically and is not a fallback profile.
+`Reply exactly with PUBLIC_LLM_OK` and explicitly classifies it as `PUBLIC`. The
+deterministic ADR-009 egress check validates the profile's `PUBLIC_CLOUD` Execution Zone
+before the provider adapter is called. `public_fast` is not selected automatically and
+is not a fallback profile.
 
 ## Manual Tool Selection Eval
 

@@ -7,7 +7,9 @@ retrieval, a provider-independent LLM integration boundary, and an explicit boun
 single-agent loop over two tools. Focused deterministic baselines evaluate the first
 LLM tool decision and complete bounded trajectories. Two isolated local lexical
 knowledge-retrieval strategies are implemented behind one inner port but are not yet
-integrated into the agent.
+integrated into the agent. A deterministic, deny-by-default model-egress decorator
+checks explicit request classification against each Model Profile's validated Execution
+Zone before invoking the provider adapter.
 There is no agent framework, dynamic tool registry, persistent agent memory, or general
 evaluation framework.
 
@@ -110,15 +112,26 @@ The implemented LLM boundary is:
 
 ```mermaid
 flowchart LR
-    A["Agent / Use Case"] -->|"semantic ModelProfile + LLMRequest"| P["LLMClient port"]
+    A["Agent / Use Case"] -->|"semantic ModelProfile + LLMRequest"| G["EgressCheckedLLMClient"]
+    P["LLMClient port"]
+    G -.->|"implements"| P
     C["OpenAICompatibleLLMClient"] -.->|"implements"| P
-    TOML["config/model_profiles.toml<br/>provider, model, base URL, temperature, auth mode"] --> C
+    CL["Explicit DataClassification"] --> G
+    POLICY["ModelEgressPolicy<br/>deny by default"] --> G
+    TOML["config/model_profiles.toml<br/>model settings + Execution Zone"] --> G
+    TOML --> C
     ENV["Environment variables<br/>API keys for authenticated profiles only"] -.-> C
+    G -->|"allowed only"| C
+    G -->|"denied"| F["ModelEgressDeniedError<br/>no adapter call"]
     C -->|"provider-specific request"| E["Configured OpenAI-compatible endpoint"]
 
     subgraph Core["Application Core"]
         A
         P
+        G
+        CL
+        POLICY
+        F
     end
 
     subgraph Infrastructure["Infrastructure"]
@@ -134,15 +147,18 @@ flowchart LR
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
-    class A,P core
+    class A,P,G,CL,POLICY,F core
     class C,TOML,ENV adapter
     class E external
 ```
 
-`config/model_profiles.toml` currently maps `troubleshooting` to Ollama,
-`qwen3.5:9b`, `http://localhost:11434/v1`, and temperature `0`. This is the first local
-configuration, not a commitment to that provider or model. The profile mapping can be
-changed without changing agent or use-case code.
+`config/model_profiles.toml` assigns every profile an explicit, validated Execution
+Zone independently from its provider. `troubleshooting`, `local_fast`, and
+`local_quality` use `LOCAL`; `public_fast` uses `PUBLIC_CLOUD`. Callers explicitly
+supply the request classification when constructing the controlled client. The current
+policy allows all four classifications locally and allows only `PUBLIC` data in
+`PUBLIC_CLOUD`. Missing or unknown classifications and zones fail closed without an
+adapter call.
 
 The implemented tool-calling flow is:
 
@@ -389,40 +405,41 @@ directory unless deliberately curated.
 
 The architecture should evolve only when required by implemented capabilities.
 
-### Planned Task-Level Routing and Model Egress
+### Model Egress and Planned Task-Level Routing
 
-Task-level model routing and data-egress enforcement are planned boundaries, not
-current components. A future Application policy derives explicit Task Requirements and
-the effective Data Classification. Security first filters configured Model Profiles by
-their validated Execution Zone; deterministic routing then chooses only among eligible
-profiles. A final egress check runs immediately before the selected provider adapter is
-called.
+Final data-egress enforcement is implemented as an inner `LLMClient` decorator around
+the provider adapter. It applies the deterministic ADR-009 policy to an explicit request
+classification and the selected profile's validated Execution Zone. Classification
+propagation into Application State, the pre-routing eligibility filter, Task
+Requirements, and deterministic task-level routing remain planned.
 
 ```mermaid
 flowchart LR
     Task["Task / capability"] --> Requirements["Task Requirements<br/>planned"]
-    Context["Request + tool + retrieval context"] --> Classification["Effective Data Classification<br/>planned Application State"]
+    Context["Request + tool + retrieval context"] -.-> Classification["Effective Data Classification<br/>planned Application State"]
     Requirements --> Eligibility["Security eligibility filter<br/>planned, deny by default"]
     Classification --> Eligibility
-    Profiles["Configured Model Profiles<br/>capabilities + Execution Zone"] --> Eligibility
+    Profiles["Configured Model Profiles<br/>validated Execution Zone"] --> Eligibility
     Eligibility --> Eligible["Eligible profiles only"]
     Eligible --> Router["Deterministic task router<br/>planned"]
     Requirements --> Router
     Router --> Selected["Selected semantic profile"]
-    Selected --> FinalCheck["Final egress check<br/>planned"]
-    Classification --> FinalCheck
-    FinalCheck -->|"allow"| Client["LLMClient"]
+    Caller["Current caller<br/>explicit classification"] --> FinalCheck["EgressCheckedLLMClient<br/>implemented final check"]
+    Selected -.-> FinalCheck
+    Profiles --> FinalCheck
+    Classification -.-> FinalCheck
+    FinalCheck -->|"allow"| Client["Provider LLMClient adapter"]
     FinalCheck -->|"deny"| Failure["Deterministic failure<br/>no adapter call"]
-    Client --> Adapter["Configured provider adapter"]
+    Client --> Endpoint["Configured model endpoint"]
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
     classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
-    class Task,Requirements,Context,Classification,Client core
+    class Task,Requirements,Context,Classification,Caller core
     class Eligibility,FinalCheck,Failure security
     class Profiles,Eligible,Router,Selected routing
-    class Adapter adapter
+    class Client,Endpoint adapter
 ```
 
 Cost, quality, latency, availability, and fallback preferences cannot override the

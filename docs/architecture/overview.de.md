@@ -7,7 +7,10 @@ Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen exp
 begrenzten Single-Agent Tool Loop über zwei Tools. Fokussierte deterministische
 Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige begrenzte
 Trajectories. Zwei isolierte lokale lexical Knowledge-Retrieval-Strategien sind hinter
-einem inneren Port implementiert, aber noch nicht in den Agenten integriert. Es
+einem inneren Port implementiert, aber noch nicht in den Agenten integriert. Ein
+deterministischer Model-Egress-Decorator mit Deny-by-default prüft die explizite
+Request-Klassifikation gegen die validierte Execution Zone jedes Model Profiles, bevor
+der Provider Adapter aufgerufen wird. Es
 existieren weder Agent-Framework, dynamische Tool Registry, persistentes Agent Memory
 noch allgemeines Eval-Framework.
 
@@ -112,15 +115,26 @@ Die implementierte LLM-Grenze ist:
 
 ```mermaid
 flowchart LR
-    A["Agent / Use Case"] -->|"semantisches ModelProfile + LLMRequest"| P["LLMClient port"]
+    A["Agent / Use Case"] -->|"semantisches ModelProfile + LLMRequest"| G["EgressCheckedLLMClient"]
+    P["LLMClient port"]
+    G -.->|"implementiert"| P
     C["OpenAICompatibleLLMClient"] -.->|"implementiert"| P
-    TOML["config/model_profiles.toml<br/>Provider, Modell, Base URL, Temperature, Auth-Modus"] --> C
+    CL["Explizite DataClassification"] --> G
+    POLICY["ModelEgressPolicy<br/>Deny-by-default"] --> G
+    TOML["config/model_profiles.toml<br/>Modelleinstellungen + Execution Zone"] --> G
+    TOML --> C
     ENV["Environment Variables<br/>API Keys nur für authentifizierte Profile"] -.-> C
+    G -->|"nur bei Allow"| C
+    G -->|"Deny"| F["ModelEgressDeniedError<br/>kein Adapter-Aufruf"]
     C -->|"providerspezifischer Request"| E["Konfigurierter OpenAI-compatible Endpoint"]
 
     subgraph Core["Application Core"]
         A
         P
+        G
+        CL
+        POLICY
+        F
     end
 
     subgraph Infrastructure["Infrastructure"]
@@ -136,15 +150,18 @@ flowchart LR
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
-    class A,P core
+    class A,P,G,CL,POLICY,F core
     class C,TOML,ENV adapter
     class E external
 ```
 
-`config/model_profiles.toml` ordnet `troubleshooting` derzeit Ollama,
-`qwen3.5:9b`, `http://localhost:11434/v1` und Temperature `0` zu. Dies ist die erste
-lokale Konfiguration und keine Festlegung auf diesen Provider oder dieses Modell. Die
-Profilzuordnung kann geändert werden, ohne Agent- oder Use-Case-Code anzupassen.
+`config/model_profiles.toml` weist jedem Profile unabhängig von seinem Provider eine
+explizite, validierte Execution Zone zu. `troubleshooting`, `local_fast` und
+`local_quality` verwenden `LOCAL`; `public_fast` verwendet `PUBLIC_CLOUD`. Aufrufer
+geben die Request-Klassifikation beim Erzeugen des kontrollierten Clients explizit an.
+Die aktuelle Policy erlaubt alle vier Klassifikationen lokal und nur `PUBLIC`-Daten in
+`PUBLIC_CLOUD`. Fehlende oder unbekannte Klassifikationen und Zonen schlagen geschlossen
+fehl, ohne den Adapter aufzurufen.
 
 Der implementierte Tool-Calling-Ablauf ist:
 
@@ -397,40 +414,42 @@ Git ignorierte Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert 
 
 Die Architektur sollte nur dann weiterentwickelt werden, wenn implementierte Fähigkeiten dies erfordern.
 
-### Geplantes Task-Level Routing und Model Egress
+### Model Egress und geplantes Task-Level Routing
 
-Task-Level Model Routing und Data-Egress-Enforcement sind geplante Grenzen und keine
-aktuellen Komponenten. Eine zukünftige Application Policy leitet explizite Task
-Requirements und die effektive Data Classification ab. Security filtert konfigurierte
-Model Profiles zuerst anhand ihrer validierten Execution Zone; deterministisches
-Routing wählt anschließend ausschließlich unter zulässigen Profiles. Ein abschließender
-Egress Check läuft unmittelbar vor dem Aufruf des ausgewählten Provider Adapters.
+Das abschließende Data-Egress-Enforcement ist als innerer `LLMClient`-Decorator um den
+Provider Adapter implementiert. Es wendet die deterministische ADR-009-Policy auf eine
+explizite Request-Klassifikation und die validierte Execution Zone des ausgewählten
+Profiles an. Classification Propagation in Application State, der Eligibility Filter
+vor dem Routing, Task Requirements und deterministisches Task-Level Routing bleiben
+geplant.
 
 ```mermaid
 flowchart LR
     Task["Task / Capability"] --> Requirements["Task Requirements<br/>geplant"]
-    Context["Request- + Tool- + Retrieval-Kontext"] --> Classification["Effektive Data Classification<br/>geplanter Application State"]
+    Context["Request- + Tool- + Retrieval-Kontext"] -.-> Classification["Effektive Data Classification<br/>geplanter Application State"]
     Requirements --> Eligibility["Security Eligibility Filter<br/>geplant, Deny-by-default"]
     Classification --> Eligibility
-    Profiles["Konfigurierte Model Profiles<br/>Capabilities + Execution Zone"] --> Eligibility
+    Profiles["Konfigurierte Model Profiles<br/>validierte Execution Zone"] --> Eligibility
     Eligibility --> Eligible["Nur zulässige Profiles"]
     Eligible --> Router["Deterministischer Task Router<br/>geplant"]
     Requirements --> Router
     Router --> Selected["Ausgewähltes semantisches Profile"]
-    Selected --> FinalCheck["Abschließender Egress Check<br/>geplant"]
-    Classification --> FinalCheck
-    FinalCheck -->|"erlaubt"| Client["LLMClient"]
+    Caller["Aktueller Aufrufer<br/>explizite Klassifikation"] --> FinalCheck["EgressCheckedLLMClient<br/>implementierter finaler Check"]
+    Selected -.-> FinalCheck
+    Profiles --> FinalCheck
+    Classification -.-> FinalCheck
+    FinalCheck -->|"erlaubt"| Client["Provider-LLMClient-Adapter"]
     FinalCheck -->|"abgelehnt"| Failure["Deterministischer Fehler<br/>kein Adapter-Aufruf"]
-    Client --> Adapter["Konfigurierter Provider Adapter"]
+    Client --> Endpoint["Konfigurierter Model Endpoint"]
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
     classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
-    class Task,Requirements,Context,Classification,Client core
+    class Task,Requirements,Context,Classification,Caller core
     class Eligibility,FinalCheck,Failure security
     class Profiles,Eligible,Router,Selected routing
-    class Adapter adapter
+    class Client,Endpoint adapter
 ```
 
 Kosten-, Qualitäts-, Latenz-, Verfügbarkeits- und Fallback-Präferenzen können den
