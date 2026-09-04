@@ -15,12 +15,6 @@ from industrial_ai_agent.agent.llm import (
     LLMToolCall,
     ModelProfile,
 )
-from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
-    InMemoryMachineStatusRepository,
-)
-from industrial_ai_agent.infrastructure.in_memory_product_history_repository import (
-    InMemoryProductHistoryRepository,
-)
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     DEFAULT_ALLOWED_FACTORY_TOOLS,
@@ -28,8 +22,6 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpLangChainToolProvider,
     McpServerConfiguration,
 )
-from industrial_ai_agent.tools.machine_status import MachineStatusCapability
-from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 PROFILE = ModelProfile("troubleshooting")
 _KNOWLEDGE_SERVER_SOURCE = """
@@ -122,8 +114,6 @@ def test_multi_mcp_langgraph_run_is_sequential_and_has_no_direct_retriever_acces
     )
     agent = LangGraphTroubleshootingAgent(
         LLMClientChatModel(llm, PROFILE),
-        ProductHistoryCapability(InMemoryProductHistoryRepository()),
-        MachineStatusCapability(InMemoryMachineStatusRepository()),
         mcp_tool_provider=_provider(),
     )
 
@@ -136,6 +126,8 @@ def test_multi_mcp_langgraph_run_is_sequential_and_has_no_direct_retriever_acces
     ]
     assert all(len(request.tools) == 3 for request in llm.requests)
     agent_source = inspect.getsource(LangGraphTroubleshootingAgent)
+    assert "ProductHistoryCapability" not in agent_source
+    assert "MachineStatusCapability" not in agent_source
     assert "KnowledgeRetriever" not in agent_source
     assert "DocumentationSearchCapability" not in agent_source
 

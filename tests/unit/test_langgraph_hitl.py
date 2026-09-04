@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
+from industrial_ai_agent.agent.agent_run import AgentRunStatus
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     CREATE_MAINTENANCE_TICKET_TOOL_NAME,
     LangGraphTroubleshootingAgent,
@@ -23,20 +24,11 @@ from industrial_ai_agent.agent.model_egress import (
     ExecutionZone,
     ModelEgressDeniedError,
 )
-from industrial_ai_agent.agent.troubleshooting_agent import AgentRunStatus
-from industrial_ai_agent.domain.machine_status import MachineStatus
-from industrial_ai_agent.domain.product_history import (
-    ProductHistory,
-    ProductId,
-    StationId,
-)
 from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository import (
     InMemoryMaintenanceTicketRepository,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
-from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
-from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 DEFAULT_PROFILE = ModelProfile("local_quality")
 
@@ -62,24 +54,6 @@ class StaticExecutionZoneResolver:
         return self.zone
 
 
-@dataclass
-class EmptyProductHistoryRepository:
-    requested_ids: list[ProductId] = field(default_factory=list)
-
-    def get_product_history(self, product_id: ProductId) -> ProductHistory | None:
-        self.requested_ids.append(product_id)
-        return None
-
-
-@dataclass
-class EmptyMachineStatusRepository:
-    requested_ids: list[StationId] = field(default_factory=list)
-
-    def get_machine_status(self, station_id: StationId) -> MachineStatus | None:
-        self.requested_ids.append(station_id)
-        return None
-
-
 def action_response(
     *,
     station_id: str = "S04",
@@ -103,20 +77,6 @@ def final_response(text: str = "Investigation complete.") -> LLMResponse:
     return LLMResponse(text=text, finish_reason=FinishReason.STOP)
 
 
-def product_history_response() -> LLMResponse:
-    return LLMResponse(
-        text=None,
-        tool_calls=(
-            LLMToolCall(
-                id="history-call-1",
-                name="get_product_history",
-                arguments={"product_id": "P4711"},
-            ),
-        ),
-        finish_reason=FinishReason.TOOL_CALLS,
-    )
-
-
 def create_hitl_agent(
     llm_client: FakeLLMClient,
     *,
@@ -127,9 +87,7 @@ def create_hitl_agent(
     ticket_repository = InMemoryMaintenanceTicketRepository()
     agent = LangGraphTroubleshootingAgent(
         LLMClientChatModel(llm_client, profile),
-        ProductHistoryCapability(EmptyProductHistoryRepository()),
-        MachineStatusCapability(EmptyMachineStatusRepository()),
-        MaintenanceTicketCapability(ticket_repository),
+        maintenance_ticket=MaintenanceTicketCapability(ticket_repository),
         checkpointer=checkpointer,
         run_classification=classification,
     )
@@ -209,7 +167,7 @@ def test_checkpoint_state_uses_serializer_safe_primitives() -> None:
     )
 
     agent.start("Create a maintenance ticket for S04.", thread_id="primitive-thread")
-    snapshot = agent._graph.get_state(
+    snapshot = agent._hitl_graph.get_state(
         {"configurable": {"thread_id": "primitive-thread"}}
     )
 
@@ -311,9 +269,7 @@ def test_confidential_checkpointed_run_is_blocked_before_public_adapter_call() -
     ticket_repository = InMemoryMaintenanceTicketRepository()
     agent = LangGraphTroubleshootingAgent(
         LLMClientChatModel(checked_client, ModelProfile("public_fast")),
-        ProductHistoryCapability(EmptyProductHistoryRepository()),
-        MachineStatusCapability(EmptyMachineStatusRepository()),
-        MaintenanceTicketCapability(ticket_repository),
+        maintenance_ticket=MaintenanceTicketCapability(ticket_repository),
         checkpointer=InMemorySaver(),
         run_classification=DataClassification.CONFIDENTIAL,
     )
@@ -322,22 +278,6 @@ def test_confidential_checkpointed_run_is_blocked_before_public_adapter_call() -
         agent.start("Create a maintenance ticket for S04.", thread_id="public-thread")
 
     assert adapter.requests == []
-    assert ticket_repository.tickets == ()
-
-
-def test_read_only_run_with_checkpoint_never_interrupts() -> None:
-    agent, ticket_repository = create_hitl_agent(
-        FakeLLMClient(product_history_response(), final_response()),
-        checkpointer=InMemorySaver(),
-    )
-
-    state = agent.start(
-        "Show the production history for P4711.", thread_id="read-thread"
-    )
-
-    assert state["run_status"] is AgentRunStatus.SUCCESS
-    assert state["executed_tool_count"] == 1
-    assert agent.get_interrupt_payload(thread_id="read-thread") is None
     assert ticket_repository.tickets == ()
 
 

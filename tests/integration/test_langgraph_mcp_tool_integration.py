@@ -6,11 +6,16 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import Any, cast
 
 import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from mcp.client.stdio import StdioServerParameters
+from pydantic import BaseModel, ConfigDict
 
+from industrial_ai_agent.agent.agent_run import (
+    AgentRunStatus,
+)
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     LangGraphTroubleshootingAgent,
 )
@@ -21,33 +26,20 @@ from industrial_ai_agent.agent.llm import (
     LLMToolCall,
     ModelProfile,
 )
-from industrial_ai_agent.agent.mcp_tool_provider import McpToolSession
+from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpToolSession
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     EgressCheckedLLMClient,
     ExecutionZone,
     ModelEgressDeniedError,
 )
-from industrial_ai_agent.agent.troubleshooting_agent import (
-    AgentRunStatus,
-    MachineStatusToolArguments,
-    ProductHistoryToolArguments,
-)
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     StreamableHttpServerParameters,
-)
-from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
-    InMemoryMachineStatusRepository,
-)
-from industrial_ai_agent.infrastructure.in_memory_product_history_repository import (
-    InMemoryProductHistoryRepository,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpLangChainToolProvider,
 )
-from industrial_ai_agent.tools.machine_status import MachineStatusCapability
-from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 PROFILE = ModelProfile("troubleshooting")
 
@@ -98,19 +90,9 @@ def _two_tool_responses() -> tuple[LLMResponse, ...]:
     )
 
 
-def _direct_agent(llm_client: FakeLLMClient) -> LangGraphTroubleshootingAgent:
-    return LangGraphTroubleshootingAgent(
-        LLMClientChatModel(llm_client, PROFILE),
-        ProductHistoryCapability(InMemoryProductHistoryRepository()),
-        MachineStatusCapability(InMemoryMachineStatusRepository()),
-    )
-
-
 def _mcp_agent(llm_client: FakeLLMClient) -> LangGraphTroubleshootingAgent:
     return LangGraphTroubleshootingAgent(
         LLMClientChatModel(llm_client, PROFILE),
-        ProductHistoryCapability(InMemoryProductHistoryRepository()),
-        MachineStatusCapability(InMemoryMachineStatusRepository()),
         mcp_tool_provider=McpLangChainToolProvider(_factory_server_parameters()),
     )
 
@@ -121,8 +103,6 @@ def _http_mcp_agent(
 ) -> LangGraphTroubleshootingAgent:
     return LangGraphTroubleshootingAgent(
         LLMClientChatModel(llm_client, PROFILE),
-        ProductHistoryCapability(InMemoryProductHistoryRepository()),
-        MachineStatusCapability(InMemoryMachineStatusRepository()),
         mcp_tool_provider=McpLangChainToolProvider(transport),
     )
 
@@ -140,8 +120,8 @@ def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schema
     provider = McpLangChainToolProvider(_factory_server_parameters())
 
     async def discover() -> McpToolSession:
-        async with provider.open_session() as discovered_session:
-            return discovered_session
+        async with provider.open_session() as opened_session:
+            return opened_session
 
     discovered_session = asyncio.run(discover())
     tools_by_name = {tool.name: tool for tool in discovered_session.tools}
@@ -164,25 +144,6 @@ def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schema
             "type"
         ]
         == "string"
-    )
-
-
-def test_langgraph_mcp_path_matches_direct_tool_sequence_arguments_and_results() -> (
-    None
-):
-    direct_llm = FakeLLMClient(*_two_tool_responses())
-    mcp_llm = FakeLLMClient(*_two_tool_responses())
-
-    direct_result = _direct_agent(direct_llm).answer("Investigate P4711.")
-    mcp_result = asyncio.run(_mcp_agent(mcp_llm).aanswer_via_mcp("Investigate P4711."))
-
-    assert mcp_result.status is direct_result.status is AgentRunStatus.SUCCESS
-    assert mcp_result.executed_tool_calls == direct_result.executed_tool_calls
-    assert mcp_result.tool_call_count == direct_result.tool_call_count == 2
-    assert mcp_result.final_answer == direct_result.final_answer
-    assert _tool_contents(mcp_llm) == _tool_contents(direct_llm)
-    assert _tool_definitions(mcp_llm.requests[0]) == _tool_definitions(
-        direct_llm.requests[0]
     )
 
 
@@ -215,9 +176,7 @@ def test_mcp_run_opens_one_session_for_multiple_sequential_tool_calls() -> None:
     provider = _CountingMcpToolProvider()
     agent = LangGraphTroubleshootingAgent(
         LLMClientChatModel(FakeLLMClient(*_two_tool_responses()), PROFILE),
-        ProductHistoryCapability(InMemoryProductHistoryRepository()),
-        MachineStatusCapability(InMemoryMachineStatusRepository()),
-        mcp_tool_provider=provider,
+        mcp_tool_provider=cast(McpToolProvider, cast(object, provider)),
     )
 
     result = asyncio.run(agent.aanswer_via_mcp("Investigate P4711."))
@@ -252,9 +211,7 @@ def _mcp_agent_with_client(
 ) -> LangGraphTroubleshootingAgent:
     return LangGraphTroubleshootingAgent(
         LLMClientChatModel(llm_client, PROFILE),
-        ProductHistoryCapability(InMemoryProductHistoryRepository()),
-        MachineStatusCapability(InMemoryMachineStatusRepository()),
-        mcp_tool_provider=provider,
+        mcp_tool_provider=cast(McpToolProvider, cast(object, provider)),
     )
 
 
@@ -267,9 +224,10 @@ def _tool_contents(llm_client: FakeLLMClient) -> tuple[dict[str, object], ...]:
     return tuple(contents)
 
 
-def _input_schema(tool: BaseTool) -> dict[str, object]:
-    schema_factory = tool.get_input_schema().model_json_schema
-    return schema_factory()
+def _input_schema(tool: BaseTool) -> dict[str, Any]:
+    schema_type = tool.get_input_schema()
+    # noinspection PyUnresolvedReferences
+    return cast(dict[str, Any], schema_type.model_json_schema())
 
 
 def _tool_definitions(request: LLMRequest) -> tuple[tuple[str, dict[str, object]], ...]:
@@ -303,13 +261,13 @@ class _CountingMcpToolProvider:
                         coroutine=product_history,
                         name="get_product_history",
                         description="Get product history.",
-                        args_schema=ProductHistoryToolArguments,
+                        args_schema=ProductHistoryArguments,
                     ),
                     StructuredTool.from_function(
                         coroutine=machine_status,
                         name="get_machine_status",
                         description="Get machine status.",
-                        args_schema=MachineStatusToolArguments,
+                        args_schema=MachineStatusArguments,
                     ),
                 ),
                 discovered_tool_names=(
@@ -322,3 +280,15 @@ class _CountingMcpToolProvider:
             )
         finally:
             self.closed_count += 1
+
+
+class ProductHistoryArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: str
+
+
+class MachineStatusArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    station_id: str

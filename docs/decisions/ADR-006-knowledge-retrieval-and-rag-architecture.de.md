@@ -6,7 +6,7 @@ Akzeptiert
 
 ## Kontext
 
-`TroubleshootingAgent` bezieht derzeit strukturierte operative Evidenz über
+Der LangGraph-MCP-Agent bezieht derzeit strukturierte operative Evidenz über
 `get_product_history(product_id)` und `get_machine_status(station_id)`. Eine zukünftige
 Capability `search_documentation(query)` muss technische Dokumentation ergänzen, ohne
 die Agent-Orchestrierung an Dokumentformate, Indizes, Vector Databases, Embedding
@@ -39,7 +39,7 @@ implementiert.
 ```mermaid
 flowchart LR
     subgraph Core["Application Core"]
-        Agent["TroubleshootingAgent"]
+        Agent["LangGraph-MCP-Agent"]
         Capability["search_documentation(query)<br/>agent-facing Capability"]
         Port["Knowledge-Retrieval-Port<br/>provider- und storage-unabhängig"]
         Result["Strukturierte Retrieval Results<br/>Content + Provenance"]
@@ -109,7 +109,7 @@ persistenter oder extern erstellter Index den initialen Mechanismus ersetzen kan
 
 ### Agent-Grenze
 
-`TroubleshootingAgent` entscheidet, ob Dokumentationsevidenz benötigt wird, und
+Der LangGraph-MCP-Agent entscheidet, ob Dokumentationsevidenz benötigt wird, und
 formuliert die an `search_documentation` übergebene Query. Das Retrieval-Subsystem
 entscheidet, welche Passagen für diese Query relevant sind. Der Agent implementiert
 kein Ranking, und das Retrieval-Subsystem entscheidet nicht über die
@@ -238,10 +238,9 @@ Dokumentzugriff, Index Storage, Embedding Provider, externe Retrieval Services u
 andere technische Details. Infrastructure darf vom Core abhängen; der Core darf nicht
 von Infrastructure abhängen.
 
-Knowledge Retrieval darf später als Knowledge MCP Service exponiert werden. MCP wäre
-eine Transport- oder Service-Grenze um die Capability und keine Voraussetzung für den
-Retrieval Core. Diese Entscheidung führt keinen MCP-Code ein und wählt keine zukünftige
-MCP-Service-Topologie.
+Knowledge Retrieval wird unter ADR-012 als `knowledge_mcp` exponiert. MCP ist eine
+Transport- und Service-Grenze um die Capability und keine Voraussetzung für den Retrieval
+Core. Die Retrieval-Pipeline bleibt unabhängig von MCP, Docker und LangGraph.
 
 ### Umfang und Nicht-Entscheidungen
 

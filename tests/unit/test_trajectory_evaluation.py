@@ -10,7 +10,7 @@ from evals.run_trajectory import (
     run_trajectory_eval,
     score_trajectory,
 )
-from industrial_ai_agent.agent.troubleshooting_agent import (
+from industrial_ai_agent.agent.agent_run import (
     AgentRunResult,
     AgentRunStatus,
     ExecutedToolCall,

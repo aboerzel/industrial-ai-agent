@@ -2,8 +2,8 @@
 
 ## Purpose and Separation
 
-The trajectory evaluation measures complete real runs of the bounded
-`TroubleshootingAgent`. It complements, but does not replace, the existing
+The trajectory evaluation measures complete real runs of the bounded LangGraph MCP
+agent. It complements, but does not replace, the existing
 first-decision evaluation:
 
 * The first-decision evaluation asks whether the model initially selected the expected
@@ -65,7 +65,7 @@ Start the endpoint configured for the selected Model Profile. For the initial lo
 `troubleshooting` profile, start Ollama and ensure `qwen3.5:9b` is available. Then run:
 
 ```powershell
-python -m evals.run_trajectory --profile troubleshooting
+python -m evals.run_trajectory --profile troubleshooting --mcp-transport stdio
 ```
 
 To retain a local JSON report explicitly:
@@ -73,6 +73,7 @@ To retain a local JSON report explicitly:
 ```powershell
 python -m evals.run_trajectory `
   --profile troubleshooting `
+  --mcp-transport stdio `
   --output evals/results/troubleshooting-trajectory.json
 ```
 

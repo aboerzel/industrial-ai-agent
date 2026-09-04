@@ -164,11 +164,11 @@ For the bounded loop:
 
 See `docs/decisions/ADR-004-agent-orchestration-strategy.md`.
 
-The parallel LangGraph migration is governed by ADR-010. Keep the handwritten agent as
-the reference path until deterministic tests and unchanged evaluations establish
-sufficient equivalence. LangGraph/LangChain may own orchestration, message, and tool
-integration mechanics, but framework defaults must not bypass the bounded sequential
-loop, injected Model Profile, deterministic routing, or final egress enforcement.
+The LangGraph migration is governed by ADR-010. `LangGraphTroubleshootingAgent` is the
+sole troubleshooting agent loop; do not introduce a second handwritten reference loop.
+LangGraph/LangChain may own orchestration, message, and tool integration mechanics, but
+framework defaults must not bypass the bounded sequential loop, injected Model Profile,
+deterministic routing, or final egress enforcement.
 LangChain tool adapters must delegate to existing capabilities rather than own Domain or
 Infrastructure logic.
 

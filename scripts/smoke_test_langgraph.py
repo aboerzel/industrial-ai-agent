@@ -27,12 +27,6 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
     FactoryMcpTransport,
     StreamableHttpServerParameters,
 )
-from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
-    InMemoryMachineStatusRepository,
-)
-from industrial_ai_agent.infrastructure.in_memory_product_history_repository import (
-    InMemoryProductHistoryRepository,
-)
 from industrial_ai_agent.infrastructure.llm.configuration import (
     LLMConfiguration,
     load_llm_configuration,
@@ -48,8 +42,6 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpLangChainToolProvider,
     McpServerConfiguration,
 )
-from industrial_ai_agent.tools.machine_status import MachineStatusCapability
-from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config" / "model_profiles.toml"
@@ -112,34 +104,25 @@ def main() -> None:
         )
         agent = LangGraphTroubleshootingAgent(
             LLMClientChatModel(checked_client, selected_profile),
-            ProductHistoryCapability(InMemoryProductHistoryRepository()),
-            MachineStatusCapability(InMemoryMachineStatusRepository()),
-            mcp_tool_provider=(
-                McpLangChainToolProvider(_mcp_servers_from_args(args))
-                if args.mcp
-                else None
-            ),
+            mcp_tool_provider=McpLangChainToolProvider(_mcp_servers_from_args(args)),
         )
         session_lines: list[str] = []
-        if args.mcp:
-            result = asyncio.run(
-                agent.aanswer_via_mcp(
-                    prompt,
-                    session_observer=lambda session: session_lines.extend(
-                        (
-                            "mcp_session_initialized=true",
-                            *(
-                                f"mcp_server={server.server_id}:"
-                                f"{server.server_name} {server.server_version}"
-                                for server in session.servers
-                            ),
-                            f"mcp_discovered_tools={','.join(session.discovered_tool_names)}",
-                        )
-                    ),
-                )
+        result = asyncio.run(
+            agent.aanswer_via_mcp(
+                prompt,
+                session_observer=lambda session: session_lines.extend(
+                    (
+                        "mcp_session_initialized=true",
+                        *(
+                            f"mcp_server={server.server_id}:"
+                            f"{server.server_name} {server.server_version}"
+                            for server in session.servers
+                        ),
+                        f"mcp_discovered_tools={','.join(session.discovered_tool_names)}",
+                    )
+                ),
             )
-        else:
-            result = agent.answer(prompt)
+        )
 
     if result.final_answer is None:
         raise RuntimeError("LangGraph smoke did not return a final answer")
@@ -148,7 +131,7 @@ def main() -> None:
         and result.final_answer != "LANGGRAPH_LLM_OK"
     ):
         raise RuntimeError("Synthetic LangGraph response did not match expected text")
-    if args.mcp and args.confidential_troubleshooting:
+    if args.confidential_troubleshooting:
         actual_tools = [call.tool for call in result.executed_tool_calls]
         expected_tools = [
             "get_product_history",
@@ -188,11 +171,6 @@ def _parse_args() -> argparse.Namespace:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--profile")
     selection.add_argument("--confidential-troubleshooting", action="store_true")
-    parser.add_argument(
-        "--mcp",
-        action="store_true",
-        help="Discover and execute read-only tools through factory and knowledge MCP.",
-    )
     parser.add_argument(
         "--mcp-transport",
         choices=("stdio", "http"),

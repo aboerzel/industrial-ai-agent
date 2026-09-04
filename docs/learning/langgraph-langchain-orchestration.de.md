@@ -1,5 +1,12 @@
 # LangGraph- und LangChain-Orchestrierung
 
+## Historischer Migrationshinweis
+
+Der unten beschriebene handgeschriebene `TroubleshootingAgent` war eine temporaere Lern-
+und Migrationsreferenz. Das Removal Gate aus ADR-010 ist erfüllt: Die Implementierung
+wurde entfernt, ihre versionierten Eval-Datasets bleiben Regressionsevidenz für den
+aktuellen LangGraph-MCP-Pfad.
+
 ## Warum die Frameworks jetzt eingeführt werden
 
 Der handgeschriebene `TroubleshootingAgent` hat die wesentlichen Mechanismen sichtbar
@@ -9,9 +16,9 @@ Standard-Orchestrierungsinfrastruktur selbst zu implementieren, bietet inzwische
 weniger Wert als das Erlernen eines produktionsrelevanten Graphmodells.
 
 [ADR-010](../decisions/ADR-010-langgraph-and-langchain-orchestration-migration.de.md)
-führt deshalb einen parallelen `LangGraphTroubleshootingAgent` ein. Der handgeschriebene
-Agent bleibt die Verhaltensreferenz, bis deterministische Tests, unveränderte
-Eval-Datasets und Live-Smokes ausreichende Äquivalenz zeigen.
+hat deshalb nach ausreichender Äquivalenz durch deterministische Tests, unveränderte
+Eval-Datasets und Live-Smokes `LangGraphTroubleshootingAgent` als finalen
+Orchestrierungspfad gewählt.
 
 ## Graph State
 
@@ -34,7 +41,7 @@ lokale Tests und Demonstrationen verwendet zusätzlich LangGraphs nativen
 Der Read-Only-Pfad besitzt zwei Nodes:
 
 1. Der **Model Node** ruft das bereits ausgewählte Modell über den kontrollierten Client auf.
-2. Der **Tool Node** validiert einen angeforderten Call, ruft eine bestehende Capability
+2. Der **Tool Node** validiert einen angeforderten Call, ruft ein entdecktes MCP Tool
    auf und hängt eine strukturierte Observation an.
 
 `START` führt in den Model Node. Eine Conditional Edge leitet eine finale Antwort, einen
@@ -51,12 +58,11 @@ Run ohne Ausführung der Action.
 
 ## Tool Execution und Termination
 
-LangChain-`StructuredTool`-Instanzen beschreiben `get_product_history` und
-`get_machine_status`. Sie sind Adapter um bestehende Projekt-Capabilities, keine neuen
-Orte für Domain-Logik. Ein eigener Tool Node erhält bewusst die One-Call-Validierung und
-den sequenziellen Dispatch.
+LangChain-`StructuredTool`-Instanzen entstehen aus entdeckten, explizit autorisierten
+MCP-Schemas. Sie sind Transportadapter und keine neuen Orte für Domain-Logik. Ein eigener
+Tool Node erhält bewusst die One-Call-Validierung und den sequenziellen Dispatch.
 
-`MAX_TOOL_CALLS = 3` hat in beiden Agents dieselbe Bedeutung. Drei Tools dürfen
+`MAX_TOOL_CALLS = 3` gilt für den verbleibenden LangGraph-Agenten. Drei Tools dürfen
 ausgeführt werden. Der folgende Modellschritt darf eine finale Antwort liefern; ein
 vierter Request erzeugt `LIMIT_REACHED`, wird nicht ausgeführt und verursacht keinen
 weiteren Model Call. Unbekannte Tools, ungültige Argumente und mehrere Calls bleiben
@@ -122,16 +128,16 @@ Classification. Ein Resume routet nicht erneut, ändert keine Classification und
 keinen Cloud-Fallback ein. Derselbe finale `EgressCheckedLLMClient` bleibt die
 Model-Grenze.
 
-## Manueller Loop im Vergleich zum Graphen
+## Historischer manueller Loop im Vergleich zum Graphen
 
-Der manuelle Pfad drückt Progression durch einen Python Loop und explizite Updates der
-Message-Liste aus. Der Graph-Pfad repräsentiert Progression durch typisierten State,
-Nodes, Edges und eine Conditional Route. Ihre internen Message-Strukturen unterscheiden
-sich, daher vergleichen Äquivalenztests beobachtbares Verhalten: Status, ausgeführte
-Tools und Argumente, Tool Count und Vorhandensein der finalen Antwort.
+Der entfernte manuelle Pfad drückte Progression durch einen Python Loop und explizite
+Updates der Message-Liste aus. Der Graph-Pfad repräsentiert Progression durch typisierten
+State, Nodes, Edges und eine Conditional Route. Ihre internen Message-Strukturen
+unterschieden sich, daher verwendete der Migrationsvergleich beobachtbares Verhalten:
+Status, ausgeführte Tools und Argumente, Tool Count und Vorhandensein der finalen Antwort.
 
-Dieselben First-Decision- und Trajectory-Datasets laufen gegen beide Pfade. Die
-Framework-Migration rechtfertigt keine Änderung ihrer Ground Truth.
+Dieselben First-Decision- und Trajectory-Datasets laufen nun gegen den LangGraph-MCP-
+Pfad. Die Framework-Migration rechtfertigt keine Änderung ihrer Ground Truth.
 
 ## Bewusst zurückgestellt
 

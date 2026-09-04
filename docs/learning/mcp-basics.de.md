@@ -4,8 +4,8 @@
 
 Die MCP-Slices exponieren zwei schreibgeschuetzte Capability-Bereiche: `factory_mcp` fuer
 Factory-Evidenz und `knowledge_mcp` fuer Documentation Retrieval. Der LangGraph
-Read-Only-Pfad verwendet beide ueber echte Protokoll-Clients; der manuelle direkte Pfad
-bleibt eine fachliche Referenz.
+Read-Only-Pfad verwendet beide ueber echte Protokoll-Clients; es gibt keinen direkten
+Read-Only-Agent-Pfad.
 
 ## Rollen
 
@@ -81,8 +81,8 @@ Structured Result. Es muss geprueft und entfernt werden, sobald stabiles
 
 MCP Discovery und Agent Authorization sind getrennt: Discovery beobachtet alles, was der
 Server anbietet, während der Troubleshooting Agent nur seine autorisierten
-Read-Only-Factory- und Knowledge-Tools erhält. Das bestehende
-`create_maintenance_ticket`-HITL bleibt auf dem direkten Pfad und ist kein MCP Tool.
+Read-Only-Factory- und Knowledge-Tools erhält. Die separate
+`create_maintenance_ticket`-HITL-Demonstration ist action-only und kein MCP Tool.
 
 ## Security Boundary
 
@@ -102,17 +102,15 @@ Remote- oder Production-Exponierung.
 
 ## OBSOLETE CANDIDATES AFTER MCP MIGRATION
 
-Diese Einträge noch nicht entfernen. Die aktuelle Klassifikation ist:
+Die Cleanup-Klassifikation ist:
 
-* **KEEP TEMPORARILY:** direkte Factory Closures und der direkte Read-Only-Zweig; der
-  direkte Pfad bleibt Referenz, solange Äquivalenz-Evidenz erhalten bleibt.
-* **KEEP TEMPORARILY:** direkte Factory-Capability-Konstruktion in LangGraph
-  Composition Roots; der direkte Pfad bleibt unterstützt.
-* **REMOVE NOW:** direkte Knowledge Tool Closures und direkte Retriever-Injection in
-  LangGraph Composition Roots; kein aktiver MCP-Pfad nutzt sie nach diesem Slice.
+* **REMOVED:** handgeschriebener `TroubleshootingAgent`, direkte Factory Closures, der
+  direkte Read-Only-LangGraph-Zweig sowie zugehörige Composition Roots, Tests,
+  Eval-Switches und Smoke-Script. Der LangGraph-MCP-Pfad ersetzt sie.
+* **REMOVED:** direkte Knowledge Tool Closures und direkte Retriever-Injection in
+  LangGraph Composition Roots. Knowledge Retrieval bleibt hinter `knowledge_mcp`.
 * **KEEP TEMPORARILY:** stdio-only Helpers; stdio ist bewusster Entwicklungs-/Test-
   Transport und kein historischer Code.
-* **KEEP TEMPORARILY:** `TroubleshootingAgent`; ADR-010 behält ihn als Referenz.
 * **BLOCKED BY FRAMEWORK:** `mcp_langchain_tool_provider.py`; es ist die einzelne
   temporäre MCP-SDK-v2-zu-LangChain-Bridge bis ein stabiles kompatibles Adapter-Release
   existiert.
@@ -121,9 +119,9 @@ Diese Einträge noch nicht entfernen. Die aktuelle Klassifikation ist:
 
 MCP ist kein LangChain Tool. Ein MCP Server exponiert Tools auf Protokollebene; ein
 LangChain Adapter kann entdeckte Tools spaeter in LangChain Contracts uebersetzen. Das
-aktuelle stabile Release von `langchain-mcp-adapters` ist `0.3.2` und besitzt weiterhin
-keine veröffentlichte MCP-SDK-v2-Unterstützung. Upstream-v2-Support ist in Arbeit; das
-Projekt behält seine eine schmale Bridge bis sich dies ändert.
+aktuelle stabile Release von `langchain-mcp-adapters` ist `0.3.2` und verlangt
+`mcp<2.0.0`. Das Projekt verwendet MCP SDK v2 und behält deshalb eine schmale
+Compatibility Bridge.
 
 MCP ist nicht REST. REST exponiert ueblicherweise Application Resources ueber HTTP
 Paths, waehrend MCP AI-orientierte Capability Discovery, Tool Schemas und mehrere

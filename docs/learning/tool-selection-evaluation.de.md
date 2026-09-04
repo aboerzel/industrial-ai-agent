@@ -2,7 +2,7 @@
 
 ## Zweck
 
-Die Baseline misst die erste LLM-Entscheidung des `TroubleshootingAgent` anhand des
+Die Baseline misst die erste LLM-Entscheidung des LangGraph-MCP-Pfads anhand des
 versionierten Datasets
 `evals/datasets/troubleshooting_tool_selection_v1.jsonl`. Jeder Fall wird mit einem
 frischen Message Context ausgewertet und enthält eine stabile `case_id`, einen
@@ -38,7 +38,7 @@ lokale `troubleshooting`-Profil muss Ollama laufen und `qwen3.5:9b` verfügbar s
 Führe anschließend aus:
 
 ```powershell
-python -m evals.run_tool_selection --profile troubleshooting
+python -m evals.run_tool_selection --profile troubleshooting --mcp-transport stdio
 ```
 
 Der Report wird als JSON auf Standard Output geschrieben. Um ein lokales Ergebnis
@@ -47,6 +47,7 @@ explizit zu speichern:
 ```powershell
 python -m evals.run_tool_selection `
   --profile troubleshooting `
+  --mcp-transport stdio `
   --output evals/results/troubleshooting.json
 ```
 

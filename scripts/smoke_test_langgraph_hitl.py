@@ -21,14 +21,8 @@ from industrial_ai_agent.agent.model_routing import (
     TaskRequirements,
     TaskRole,
 )
-from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
-    InMemoryMachineStatusRepository,
-)
 from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository import (
     InMemoryMaintenanceTicketRepository,
-)
-from industrial_ai_agent.infrastructure.in_memory_product_history_repository import (
-    InMemoryProductHistoryRepository,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
     load_llm_configuration,
@@ -38,17 +32,12 @@ from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
 )
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
-from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
-from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config" / "model_profiles.toml"
 THREAD_ID = "langgraph-hitl-smoke"
-PROMPT = (
-    "Investigate product P4711, check the relevant station, and create a maintenance "
-    "ticket for that station."
-)
+PROMPT = "Create a maintenance ticket for station S04 due to E-STOP-17."
 
 
 def main() -> None:
@@ -85,9 +74,7 @@ def main() -> None:
         )
         agent = LangGraphTroubleshootingAgent(
             LLMClientChatModel(checked_client, selected_profile),
-            ProductHistoryCapability(InMemoryProductHistoryRepository()),
-            MachineStatusCapability(InMemoryMachineStatusRepository()),
-            MaintenanceTicketCapability(ticket_repository),
+            maintenance_ticket=MaintenanceTicketCapability(ticket_repository),
             checkpointer=InMemorySaver(),
             run_classification=requirements.data_classification,
         )

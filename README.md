@@ -21,17 +21,16 @@ through `MachineStatusCapability.get_machine_status(station_id)`. Both use inner
 repository ports with deterministic in-memory adapters. A provider-independent
 `LLMClient` port and one OpenAI-compatible infrastructure adapter are also available.
 Model selection uses explicit task requirements and the deterministic model router.
-The handwritten `TroubleshootingAgent` reference and the parallel
-`LangGraphTroubleshootingAgent` offer exactly the same two known tools. Both preserve
-the bounded sequential semantics: one validated and dispatched call per LLM decision,
-preserve structured observations in the current conversation context, and allow at
-most three successfully executed tools per run. A final model answer returns structured
-`SUCCESS`; a further tool request after the third result returns `LIMIT_REACHED` without
-executing that call or invoking the LLM again. The LangGraph path uses LangChain Core
-messages and tool contracts through a narrow adapter to the existing security-checked
-`LLMClient`. Its local/test HITL demonstration uses an injected in-memory checkpointer;
-there is no dynamic tool registry, durable persistence backend, LangSmith integration,
-or context compression.
+`LangGraphTroubleshootingAgent` is the sole troubleshooting loop. It receives only
+runtime-discovered, authorized MCP tools and preserves the bounded sequential semantics:
+one validated and dispatched call per LLM decision, structured observations in the
+current conversation context, and at most three successfully executed tools per run. A
+final model answer returns structured `SUCCESS`; a further tool request after the third
+result returns `LIMIT_REACHED` without executing that call or invoking the LLM again.
+LangGraph uses LangChain Core messages and tool contracts through a narrow adapter to
+the existing security-checked `LLMClient`. Its local/test HITL demonstration remains an
+action-only graph with an injected in-memory checkpointer; there is no dynamic tool
+registry, durable persistence backend, LangSmith integration, or context compression.
 
 Two deterministic evaluation baselines are available. The first measures the agent's
 initial LLM tool selection and argument extraction against twelve versioned cases
@@ -51,8 +50,8 @@ Two read-only MCP services adapt existing capabilities through the official MCP 
 exposes `search_documentation`. Both support process-coupled stdio for development/tests
 and Streamable HTTP at `/mcp` for deployment. The asynchronous LangGraph path discovers
 and authorizes all configured server tools, rejects duplicate tool names, opens one
-session per server for the run, and calls tools sequentially. The direct LangChain tool
-path remains a reference; there is no generalized MCP router or MCP write action.
+session per server for the run, and calls tools sequentially. There is no generalized
+MCP router or MCP write action.
 
 ## Manual MCP Smoke Test
 
@@ -61,7 +60,7 @@ Run the local stdio client and server without an LLM or external service:
 ```powershell
 python scripts/smoke_test_factory_mcp.py
 python scripts/smoke_test_knowledge_mcp.py
-python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp
+python scripts/smoke_test_langgraph.py --confidential-troubleshooting
 ```
 
 The server smokes print discovery and structured results. The LangGraph smoke uses only
@@ -74,7 +73,7 @@ To run the networked deployment path, build and start both local services:
 docker compose up --build -d factory-mcp knowledge-mcp
 python scripts/smoke_test_factory_mcp.py --transport http
 python scripts/smoke_test_knowledge_mcp.py --transport http
-python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp --mcp-transport http
+python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp-transport http
 ```
 
 Factory defaults to `0.0.0.0:8001` and Knowledge to `0.0.0.0:8002`; their SDK-managed
@@ -90,8 +89,8 @@ transport security. MCP network transport does not authorize model egress: confi
 troubleshooting uses the local profile under ADR-009, and Knowledge queries, chunks,
 embeddings, and reranker inputs never reach `public_fast` or a public provider.
 
-The current stable `langchain-mcp-adapters` release (`0.3.2`) still lacks published MCP
-SDK v2 support, so the temporary project-owned bridge is intentionally retained.
+The current stable `langchain-mcp-adapters` release (`0.3.2`) still requires `mcp<2.0.0`,
+so the temporary project-owned MCP SDK v2 compatibility bridge is intentionally retained.
 
 ## Manual Model Profile Smoke Tests
 
@@ -106,7 +105,6 @@ python scripts/smoke_test_ollama.py
 python scripts/smoke_test_ollama.py --profile local_fast
 python scripts/smoke_test_ollama.py --profile local_quality
 python scripts/smoke_test_model_routing.py
-python scripts/smoke_test_troubleshooting_agent.py
 python scripts/smoke_test_langgraph.py --profile local_fast
 python scripts/smoke_test_langgraph.py --profile local_quality
 python scripts/smoke_test_langgraph.py --confidential-troubleshooting
@@ -149,14 +147,12 @@ deterministic ADR-009 egress check validates the profile's `PUBLIC_CLOUD` Execut
 before the provider adapter is called. `public_fast` is not selected automatically and
 is not a fallback profile.
 
-## Manual Tool Selection Eval
+## Tool Selection Eval
 
-Run the unchanged versioned tool-selection dataset against either orchestration path:
+Run the unchanged versioned tool-selection dataset through the LangGraph MCP path:
 
 ```powershell
-python -m evals.run_tool_selection --agent-path manual --profile troubleshooting
-python -m evals.run_tool_selection --agent-path langgraph --profile troubleshooting
-python -m evals.run_tool_selection --agent-path langgraph --tool-transport mcp --profile troubleshooting
+python -m evals.run_tool_selection --profile troubleshooting --mcp-transport stdio
 ```
 
 The command prints a structured JSON report with per-case results, Tool Selection
@@ -164,14 +160,12 @@ Accuracy, and Argument Accuracy. See
 [Tool Selection Evaluation Baseline](docs/learning/tool-selection-evaluation.md) for
 metric definitions, interpretation, and optional local result output.
 
-## Manual Trajectory Eval
+## Trajectory Eval
 
-Run the unchanged versioned multi-step dataset through either complete bounded agent path:
+Run the unchanged versioned multi-step dataset through the LangGraph MCP path:
 
 ```powershell
-python -m evals.run_trajectory --agent-path manual --profile troubleshooting
-python -m evals.run_trajectory --agent-path langgraph --profile troubleshooting
-python -m evals.run_trajectory --agent-path langgraph --tool-transport mcp --profile troubleshooting
+python -m evals.run_trajectory --profile troubleshooting --mcp-transport stdio
 ```
 
 The JSON report contains per-case expected and actual trajectories, tool-call counts,

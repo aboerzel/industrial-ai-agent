@@ -9,6 +9,11 @@ from typing import Any
 from mcp.client.stdio import StdioServerParameters
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from industrial_ai_agent.agent.agent_run import (
+    AgentRunResult,
+    AgentRunStatus,
+    ExecutedToolCall,
+)
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     LangGraphTroubleshootingAgent,
 )
@@ -24,21 +29,9 @@ from industrial_ai_agent.agent.model_routing import (
     TaskRequirements,
     TaskRole,
 )
-from industrial_ai_agent.agent.troubleshooting_agent import (
-    AgentRunResult,
-    AgentRunStatus,
-    ExecutedToolCall,
-    TroubleshootingAgent,
-)
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     FactoryMcpTransport,
     StreamableHttpServerParameters,
-)
-from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
-    InMemoryMachineStatusRepository,
-)
-from industrial_ai_agent.infrastructure.in_memory_product_history_repository import (
-    InMemoryProductHistoryRepository,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
     LLMConfiguration,
@@ -57,8 +50,6 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpLangChainToolProvider,
     McpServerConfiguration,
 )
-from industrial_ai_agent.tools.machine_status import MachineStatusCapability
-from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_PATH = (
@@ -109,7 +100,7 @@ class TrajectoryEvalReport(BaseModel):
 
     dataset: str
     model_profile: str
-    orchestration_path: str = "manual"
+    orchestration_path: str = "langgraph-mcp"
     total_cases: int
     successful_tasks: int
     exact_trajectories: int
@@ -196,7 +187,7 @@ def aggregate_results(
     *,
     dataset: str,
     model_profile: str,
-    orchestration_path: str = "manual",
+    orchestration_path: str = "langgraph-mcp",
     results: Sequence[TrajectoryEvalResult],
 ) -> TrajectoryEvalReport:
     if not results:
@@ -323,17 +314,6 @@ def _parse_args() -> argparse.Namespace:
         description="Evaluate complete bounded troubleshooting-agent trajectories."
     )
     parser.add_argument("--profile", default="troubleshooting")
-    parser.add_argument(
-        "--agent-path",
-        choices=("manual", "langgraph"),
-        default="manual",
-    )
-    parser.add_argument(
-        "--tool-transport",
-        choices=("direct", "mcp"),
-        default="direct",
-        help="Use MCP only with the LangGraph path.",
-    )
     parser.add_argument("--mcp-transport", choices=("stdio", "http"), default="stdio")
     parser.add_argument("--mcp-url", default="http://127.0.0.1:8001/mcp")
     parser.add_argument("--knowledge-mcp", action="store_true")
@@ -355,62 +335,31 @@ def main() -> None:
     configuration = load_llm_configuration(args.config)
     requested_profile = ModelProfile(args.profile)
     request_classification = DataClassification.INTERNAL
-    if args.tool_transport == "mcp" and args.agent_path != "langgraph":
-        raise ValueError("MCP tool transport requires --agent-path langgraph")
-
     with OpenAICompatibleLLMClient(configuration) as adapter:
         llm_client = EgressCheckedLLMClient(
             adapter,
             configuration,
             request_classification,
         )
-        product_history = ProductHistoryCapability(InMemoryProductHistoryRepository())
-        machine_status = MachineStatusCapability(InMemoryMachineStatusRepository())
-        if args.agent_path == "langgraph":
-            model_profile = _route_requested_profile(
-                configuration,
-                requested_profile,
-                TaskRole.TROUBLESHOOTING,
-                request_classification,
-            )
-            agent = LangGraphTroubleshootingAgent(
-                LLMClientChatModel(llm_client, model_profile),
-                product_history,
-                machine_status,
-                mcp_tool_provider=(
-                    McpLangChainToolProvider(_mcp_servers_from_args(args))
-                    if args.tool_transport == "mcp"
-                    else None
-                ),
-            )
-        else:
-            model_profile = requested_profile
-            agent = TroubleshootingAgent(
-                llm_client,
-                product_history,
-                machine_status,
-                model_profile=model_profile,
-            )
-        if args.tool_transport == "mcp":
-            if not isinstance(agent, LangGraphTroubleshootingAgent):
-                raise RuntimeError("MCP tool transport requires a LangGraph agent")
-            report = asyncio.run(
-                run_trajectory_eval_async(
-                    cases=cases,
-                    run_agent=agent.aanswer_via_mcp,
-                    dataset=args.dataset.name,
-                    model_profile=model_profile.name,
-                    orchestration_path="langgraph-mcp",
-                )
-            )
-        else:
-            report = run_trajectory_eval(
+        model_profile = _route_requested_profile(
+            configuration,
+            requested_profile,
+            TaskRole.TROUBLESHOOTING,
+            request_classification,
+        )
+        agent = LangGraphTroubleshootingAgent(
+            LLMClientChatModel(llm_client, model_profile),
+            mcp_tool_provider=McpLangChainToolProvider(_mcp_servers_from_args(args)),
+        )
+        report = asyncio.run(
+            run_trajectory_eval_async(
                 cases=cases,
-                run_agent=agent.answer,
+                run_agent=agent.aanswer_via_mcp,
                 dataset=args.dataset.name,
                 model_profile=model_profile.name,
-                orchestration_path=args.agent_path,
+                orchestration_path="langgraph-mcp",
             )
+        )
 
     serialized_report = report.model_dump_json(indent=2)
     print(serialized_report)

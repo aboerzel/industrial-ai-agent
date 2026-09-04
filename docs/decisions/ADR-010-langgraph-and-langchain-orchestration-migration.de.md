@@ -25,13 +25,14 @@ ADR-003, ADR-005, ADR-008 und ADR-009 erhalten.
 
 ## Entscheidung
 
-### Inkrementelle parallele Migration
+### Abgeschlossene Migration
 
-Die Troubleshooting-Orchestrierung wird schrittweise zu LangGraph migriert. Der
-bestehende handgeschriebene `TroubleshootingAgent` bleibt als manueller Referenzpfad
-verfügbar, während parallel ein `LangGraphTroubleshootingAgent` eingeführt wird. Der
-manuelle Pfad wird erst entfernt, wenn deterministische Tests und modellabhängige Evals
-eine ausreichende funktionale Äquivalenz zeigen.
+Die Troubleshooting-Orchestrierung verwendet `LangGraphTroubleshootingAgent` als
+einzigen Agent Loop. Der temporaere handgeschriebene `TroubleshootingAgent` blieb nur
+als Migrationsreferenz erhalten und wird entfernt, nachdem das unten beschriebene
+Removal Gate erfuellt ist. Die versionierten Eval-Datasets bleiben als
+Regressionsevidenz fuer den LangGraph-Pfad erhalten; sie gehoeren nicht zur entfernten
+Implementierung.
 
 ADR-010 supersediert nur die Entscheidung aus ADR-004, den Orchestrierungsmechanismus
 vollständig handgeschrieben zu halten, sowie die damalige Zurückstellung eines Agent
@@ -42,7 +43,7 @@ Ausführung eines angeforderten vierten Tools.
 
 ### Verantwortlichkeiten von LangGraph
 
-LangGraph darf die Orchestrierungsmechanismen des parallelen Pfads übernehmen:
+LangGraph besitzt die Orchestrierungsmechanismen:
 
 * typisierter Graph State
 * Model- und Tool-Nodes
@@ -107,15 +108,13 @@ konstruiert keinen Router und wählt weder konkreten Provider noch konkretes Mod
 
 ### Tool-Grenze
 
-Der initiale Graph exponiert genau die bestehenden Capabilities:
-
-* `get_product_history`
-* `get_machine_status`
-
-LangChain-Tool-Objekte sind Adapter über diesen Capabilities. Sie besitzen keine
-Domain-Logik, Repositories, Provider-Konfiguration oder Security-Entscheidungen.
-Tool-Argumente bleiben vor dem Capability-Aufruf deterministisch validiert, und der
-initiale Graph führt pro Modellschritt höchstens ein angefordertes Tool aus.
+Der schreibgeschuetzte Graph erhaelt nur zur Laufzeit entdeckte, explizit autorisierte
+MCP-Tools. `factory_mcp` bietet derzeit `get_product_history` und
+`get_machine_status`; `knowledge_mcp` bietet `search_documentation`. LangChain-
+Tool-Objekte sind Transportadapter ueber diese entdeckten MCP-Contracts. Sie besitzen
+keine Domain-Logik, Repositories, Provider-Konfiguration oder
+Security-Entscheidungen. Tool-Argumente bleiben vor der Invocation deterministisch
+validiert, und der Graph fuehrt pro Modellschritt hoechstens ein angefordertes Tool aus.
 
 ### State-Grenze
 
@@ -140,9 +139,11 @@ Policy, kein paralleles Framework-spezifisches Konfigurationssystem.
 
 ### Evaluation und Removal Gate
 
-ADR-005 gilt. Beide Pfade verwenden dieselben versionierten First-Decision- und
-Trajectory-Datasets sowie dieselben deterministischen Scorer. Die Identität interner
-Framework Messages ist nicht Teil der Äquivalenz. Relevante Vergleiche sind:
+ADR-005 gilt. Der Migrationsvergleich verwendete dieselben versionierten
+First-Decision- und Trajectory-Datasets sowie deterministische Scorer. Das Gate ist
+nun erfuellt und der handgeschriebene Loop wird entfernt. Die Identitaet interner
+Framework Messages ist nicht Teil der Äquivalenz. Die erhaltenen Regression-Checks
+pruefen:
 
 * ausgewähltes Tool und Argumente
 * ausgeführte Tool-Sequenz
@@ -151,14 +152,14 @@ Framework Messages ist nicht Teil der Äquivalenz. Relevante Vergleiche sind:
 * Vorhandensein einer finalen Antwort
 * identisches Security- und Egress-Enforcement
 
-Die manuelle Orchestrierung darf erst in einer separaten Änderung entfernt werden,
-nachdem:
+Das abgeschlossene Removal Gate erforderte:
 
-* deterministische Unit Tests für beide Pfade bestehen
+* deterministische Unit Tests fuer den manuellen und den LangGraph-Pfad vor der
+  Entfernung bestehen
 * First-Decision-Evals keine inakzeptable Regression zeigen
 * Trajectory-Evals keine inakzeptable Regression zeigen
 * relevante lokale und explizite öffentliche Smoke Tests bestehen
-* ein abgelehnter Model Request in keinem Pfad den Provider Adapter erreicht
+* ein abgelehnter Model Request den Provider Adapter nicht erreicht
 * Tool-Sequenzen, Limits und Terminierung ausreichend äquivalent sind
 
 ### Scope und Nicht-Entscheidungen
@@ -217,13 +218,11 @@ Positiv:
   gemessenen Use Case
 * Graph State und Control Flow werden explizite Framework-Konzepte, ohne Project Security
   oder Domain-Semantik zu verdecken
-* Manual- und Graph-Pfad können mit unveränderten Evals verglichen werden
 * zukünftiges Checkpointing und Interruption Support erhalten eine kompatible Basis
 * Provider-, Routing- und Egress-Grenzen bleiben wiederverwendbar
 
 Negativ:
 
-* beide Orchestrierungspfade müssen vorübergehend gepflegt werden
 * LangGraph und LangChain Core werden Runtime Dependencies
 * Message- und Tool-Konvertierung führt eine zusätzliche Adaptergrenze ein
 * Framework-Upgrades können Orchestrierungsverhalten beeinflussen und erfordern
@@ -239,7 +238,6 @@ Roots injiziert. ADR-005 liefert Tests und unveränderte Eval-Baselines. ADR-008
 deterministisches Model Routing. ADR-009 besitzt Security Eligibility und finales
 Pre-Adapter-Egress-Enforcement.
 
-ADR-010 supersediert ADR-004 nur teilweise bezüglich der gewählten
-Orchestrierungstechnologie. Das begrenzte sequenzielle Verhalten und die
-deterministischen Garantien aus ADR-004 bleiben während der Migration der verbindliche
-Vertrag.
+ADR-010 supersediert ADR-004 nur fuer die gewaehlte Orchestrierungstechnologie. Das
+begrenzte sequenzielle Verhalten und die deterministischen Garantien aus ADR-004 bleiben
+der verbindliche Vertrag.

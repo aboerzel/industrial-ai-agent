@@ -22,18 +22,18 @@ des aktuellen Maschinenstatus über
 Repository-Ports mit deterministischen In-Memory-Adaptern. Zusätzlich stehen ein
 provider-unabhängiger `LLMClient`-Port und ein OpenAI-compatible Infrastructure Adapter
 bereit. Die Modellwahl verwendet explizite Task Requirements und den deterministischen
-Model Router. Der handgeschriebene `TroubleshootingAgent` als Referenz und der parallele
-`LangGraphTroubleshootingAgent` bieten genau dieselben zwei bekannten Tools an. Beide
-erhalten die begrenzte sequenzielle Semantik: ein validierter und dispatchter Call pro
-LLM-Entscheidung, erhalten strukturierte Observations im aktuellen Conversation Context
-und erlauben höchstens drei erfolgreich ausgeführte Tools pro Run.
-Eine finale Modellantwort liefert strukturiertes `SUCCESS`; ein weiterer Tool-Wunsch
-nach dem dritten Result liefert `LIMIT_REACHED`, ohne diesen Call auszuführen oder das
-LLM erneut aufzurufen. Der LangGraph-Pfad verwendet LangChain-Core-Messages und
-Tool-Verträge über einen schmalen Adapter zum bestehenden Security-geprüften
-`LLMClient`. Seine lokale/Test-HITL-Demonstration verwendet einen injizierten
-In-Memory-Checkpointer; es existieren weder dynamische Tool Registry, dauerhaftes
-Persistenz-Backend, LangSmith-Integration noch Context Compression.
+Model Router. `LangGraphTroubleshootingAgent` ist der einzige Troubleshooting Loop. Er
+erhaelt nur zur Laufzeit entdeckte, autorisierte MCP-Tools und bewahrt die begrenzte
+sequenzielle Semantik: ein validierter und dispatchter Call pro LLM-Entscheidung,
+strukturierte Observations im aktuellen Conversation Context und höchstens drei
+erfolgreich ausgeführte Tools pro Run. Eine finale Modellantwort liefert strukturiertes
+`SUCCESS`; ein weiterer Tool-Wunsch nach dem dritten Result liefert `LIMIT_REACHED`,
+ohne diesen Call auszuführen oder das LLM erneut aufzurufen. LangGraph verwendet
+LangChain-Core-Messages und Tool-Verträge über einen schmalen Adapter zum bestehenden
+Security-geprüften `LLMClient`. Seine lokale/Test-HITL-Demonstration bleibt ein
+action-only Graph mit injiziertem In-Memory-Checkpointer; es existieren weder dynamische
+Tool Registry, dauerhaftes Persistenz-Backend, LangSmith-Integration noch Context
+Compression.
 
 Es stehen zwei deterministische Eval-Baselines bereit. Die erste misst anhand von zwölf
 versionierten Fällen die initiale LLM-Tool-Auswahl und Argumentextraktion des Agenten,
@@ -55,8 +55,8 @@ offizielle MCP SDK v2. `factory_mcp` exponiert `get_product_history` und
 unterstützen prozessgekoppeltes stdio für Entwicklung/Tests und Streamable HTTP an `/mcp`
 für das Deployment. Der asynchrone LangGraph-Pfad entdeckt und autorisiert Tools aller
 konfigurierten Server, weist doppelte Toolnamen zurück, öffnet pro Server eine Session
-für den Run und ruft Tools sequenziell auf. Der direkte LangChain-Tool-Pfad bleibt
-Referenz; es gibt keinen allgemeinen MCP Router und keine MCP Write Action.
+für den Run und ruft Tools sequenziell auf. Es gibt keinen allgemeinen MCP Router und
+keine MCP Write Action.
 
 ## Manueller MCP-Smoke-Test
 
@@ -65,7 +65,7 @@ Fuehre den lokalen stdio-Client und -Server ohne LLM oder externen Service aus:
 ```powershell
 python scripts/smoke_test_factory_mcp.py
 python scripts/smoke_test_knowledge_mcp.py
-python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp
+python scripts/smoke_test_langgraph.py --confidential-troubleshooting
 ```
 
 Die Server-Smokes geben Discovery und strukturierte Results aus. Der LangGraph-Smoke
@@ -78,7 +78,7 @@ Um den Netzwerk-Deployment-Pfad auszuführen, baue und starte beide lokalen Serv
 docker compose up --build -d factory-mcp knowledge-mcp
 python scripts/smoke_test_factory_mcp.py --transport http
 python scripts/smoke_test_knowledge_mcp.py --transport http
-python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp --mcp-transport http
+python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp-transport http
 ```
 
 Factory startet standardmäßig an `0.0.0.0:8001` und Knowledge an `0.0.0.0:8002`; ihre
@@ -96,9 +96,9 @@ Egress: Vertrauliches Troubleshooting nutzt unter ADR-009 das lokale Profile; Kn
 Queries, Chunks, Embeddings und Reranker-Inputs erreichen nie `public_fast` oder einen
 Public Provider.
 
-Das aktuelle stabile Release von `langchain-mcp-adapters` (`0.3.2`) besitzt weiterhin
-keine veröffentlichte MCP-SDK-v2-Unterstützung, deshalb bleibt die temporäre
-projekteeigene Bridge bewusst erhalten.
+Das aktuelle stabile Release von `langchain-mcp-adapters` (`0.3.2`) verlangt weiterhin
+`mcp<2.0.0`, deshalb bleibt die temporäre projekteeigene MCP-SDK-v2-Compatibility Bridge
+bewusst erhalten.
 
 ## Manuelle Model-Profile-Smoke-Tests
 
@@ -113,7 +113,6 @@ python scripts/smoke_test_ollama.py
 python scripts/smoke_test_ollama.py --profile local_fast
 python scripts/smoke_test_ollama.py --profile local_quality
 python scripts/smoke_test_model_routing.py
-python scripts/smoke_test_troubleshooting_agent.py
 python scripts/smoke_test_langgraph.py --profile local_fast
 python scripts/smoke_test_langgraph.py --profile local_quality
 python scripts/smoke_test_langgraph.py --confidential-troubleshooting
@@ -157,15 +156,13 @@ deterministische ADR-009-Egress-Check validiert die `PUBLIC_CLOUD` Execution Zon
 Profiles, bevor der Provider Adapter aufgerufen wird. `public_fast` wird weder
 automatisch ausgewählt noch als Fallback Profile verwendet.
 
-## Manueller Tool-Selection-Eval
+## Tool-Selection-Eval
 
-Führe das unveränderte versionierte Tool-Selection-Dataset gegen beide
-Orchestrierungspfade aus:
+Führe das unveränderte versionierte Tool-Selection-Dataset über den LangGraph-MCP-Pfad
+aus:
 
 ```powershell
-python -m evals.run_tool_selection --agent-path manual --profile troubleshooting
-python -m evals.run_tool_selection --agent-path langgraph --profile troubleshooting
-python -m evals.run_tool_selection --agent-path langgraph --tool-transport mcp --profile troubleshooting
+python -m evals.run_tool_selection --profile troubleshooting --mcp-transport stdio
 ```
 
 Der Befehl gibt einen strukturierten JSON Report mit Einzelergebnissen, Tool Selection
@@ -173,15 +170,12 @@ Accuracy und Argument Accuracy aus. Definitionen und Interpretation der Metriken
 die optionale lokale Ergebnisausgabe beschreibt die
 [Baseline für die Tool-Selection-Evaluation](docs/learning/tool-selection-evaluation.de.md).
 
-## Manueller Trajectory-Eval
+## Trajectory-Eval
 
-Führe das unveränderte versionierte Multi-Step-Dataset durch beide vollständigen
-begrenzten Agent-Pfade aus:
+Führe das unveränderte versionierte Multi-Step-Dataset über den LangGraph-MCP-Pfad aus:
 
 ```powershell
-python -m evals.run_trajectory --agent-path manual --profile troubleshooting
-python -m evals.run_trajectory --agent-path langgraph --profile troubleshooting
-python -m evals.run_trajectory --agent-path langgraph --tool-transport mcp --profile troubleshooting
+python -m evals.run_trajectory --profile troubleshooting --mcp-transport stdio
 ```
 
 Der JSON Report enthält pro Fall erwartete und tatsächliche Trajectories,

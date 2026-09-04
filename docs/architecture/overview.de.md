@@ -3,32 +3,29 @@
 ## Aktuelle Architektur
 
 Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des aktuellen
-Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und zwei parallele
-begrenzte Single-Agent-Pfade über dieselben zwei Read-Only-Tools: den handgeschriebenen
-`TroubleshootingAgent` als Referenz und `LangGraphTroubleshootingAgent`. Der Graph-Pfad
-kann zusätzlich eine explizit injizierte Demonstrations-Action-Capability erhalten, die
-für Human Approval pausiert. Fokussierte
-deterministische Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige
-begrenzte Trajectories für beide Pfade. Lokale lexical, semantische, hybride und rerankte
+Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen begrenzten
+`LangGraphTroubleshootingAgent`-Pfad über zur Laufzeit entdeckte Read-Only-MCP-Tools. Ein
+separater action-only Graph kann eine explizit injizierte Demonstrations-Action-Capability
+erhalten, die für Human Approval pausiert. Fokussierte deterministische Baselines
+evaluieren die erste LLM-Tool-Entscheidung und vollständige begrenzte Trajectories über
+den LangGraph-MCP-Pfad. Lokale lexical, semantische, hybride und rerankte
 Knowledge-Retrieval-Strategien sind hinter einem inneren Port implementiert und werden
-dem LangGraph-MCP-Pfad nur über `knowledge_mcp` bereitgestellt. Ein
-deterministischer Model-Egress-Decorator mit Deny-by-default prüft die explizite
-Request-Klassifikation gegen die validierte Execution Zone jedes Model Profiles, bevor
-der Provider Adapter aufgerufen wird. LangGraph und LangChain Core werden nun gezielt
-für den parallelen Orchestrierungspfad verwendet. Ein explizit injizierter
-`InMemorySaver` unterstützt lokale/Test-Checkpoint- und HITL-Demonstrationen, ist aber
-keine dauerhafte Persistenz. Es existieren weder dynamische Tool Registry, produktives
-Persistenz-Backend, LangSmith-Integration noch allgemeines Eval-Framework.
-Zwei schreibgeschuetzte MCP-Services exponieren bestehende Capabilities ueber das
-offizielle MCP SDK v2. `factory_mcp` liefert Produktionshistorie und Maschinenstatus;
-`knowledge_mcp` liefert Documentation Search. Beide behalten stdio fuer
-prozessgekoppelte Entwicklung und deterministische Tests und laufen als getrennte
-Streamable-HTTP-`/mcp`-Docker-Services. Der parallele
+LangGraph nur über `knowledge_mcp` bereitgestellt. Ein deterministischer
+Model-Egress-Decorator mit Deny-by-default prüft die explizite Request-Klassifikation
+gegen die validierte Execution Zone jedes Model Profiles, bevor der Provider Adapter
+aufgerufen wird. LangGraph und LangChain Core werden gezielt für die Orchestrierung
+verwendet. Ein explizit injizierter `InMemorySaver` unterstützt lokale/Test-Checkpoint-
+und HITL-Demonstrationen, ist aber keine dauerhafte Persistenz. Es existieren weder
+dynamische Tool Registry, produktives Persistenz-Backend, LangSmith-Integration noch
+allgemeines Eval-Framework. Zwei schreibgeschuetzte MCP-Services exponieren bestehende
+Capabilities ueber das offizielle MCP SDK v2. `factory_mcp` liefert
+Produktionshistorie und Maschinenstatus; `knowledge_mcp` liefert Documentation Search.
+Beide behalten stdio fuer prozessgekoppelte Entwicklung und deterministische Tests und
+laufen als getrennte Streamable-HTTP-`/mcp`-Docker-Services.
 `LangGraphTroubleshootingAgent` oeffnet pro explizit konfiguriertem Server eine Session,
 entdeckt und autorisiert Tools ueber die temporaere LangChain-Bridge, fuehrt den
 begrenzten sequenziellen Loop aus und schliesst danach alle Sessions. Die
-Transportauswahl erfolgt an einer aeusseren Composition Root; handgeschriebener Pfad und
-direkter LangChain-Tool-Pfad bleiben Referenzpfade.
+Transportauswahl erfolgt an einer aeusseren Composition Root.
 
 Der implementierte Request Flow ist:
 
@@ -271,15 +268,15 @@ Der implementierte Tool-Calling-Ablauf ist:
 
 ```mermaid
 flowchart TD
-    Start["Benutzeranfrage + genau zwei Tool-Definitionen"] --> Decide["LLM-Entscheidung<br/>troubleshooting Model Profile"]
+    Start["Benutzeranfrage + entdeckte MCP-Tool-Definitionen"] --> Decide["LLM-Entscheidung<br/>troubleshooting Model Profile"]
     Decide --> Shape{"Form der Response"}
     Shape -->|"finaler Text"| Success["AgentRunResult<br/>SUCCESS + finale Antwort"]
     Shape -->|"mehrere oder ungültige Calls"| Invalid["Deterministischer Fehler"]
     Shape -->|"genau ein Tool Call"| Budget{"Bereits 3 Tools ausgeführt?"}
     Budget -->|"ja"| Limit["AgentRunResult<br/>LIMIT_REACHED<br/>Call nicht ausgeführt"]
-    Budget -->|"nein"| Validate["Bekannten Namen und<br/>toolspezifische Argumente validieren"]
+    Budget -->|"nein"| Validate["Entdeckten Namen und<br/>toolspezifische Argumente validieren"]
     Validate -->|"ungültig"| Invalid
-    Validate -->|"gültig"| Dispatch["Fester Dispatch<br/>eine Capability ausführen"]
+    Validate -->|"gültig"| Dispatch["MCP-Tool-Dispatch<br/>einen Call ausführen"]
     Dispatch --> Observe["Assistant Tool Call und<br/>strukturiertes Tool Result anhängen"]
     Observe --> Count["Zähler ausgeführter Tools erhöhen"]
     Count --> Decide
@@ -294,12 +291,12 @@ flowchart TD
     class Invalid,Limit failure
 ```
 
-Das LLM entscheidet, ob es `get_product_history` oder `get_machine_status` anfordert
-oder direkt antwortet, und formuliert die finale Antwort. Deterministischer Python-Code
-validiert einen ausgewählten Call pro Response, validiert die toolspezifische
-`product_id` oder `station_id`, verwendet einen festen Dispatch, serialisiert jedes
-strukturierte Result und erhält den vollständigen Message Context des aktuellen Runs.
-Beide Tools bleiben bei jedem Entscheidungsschritt verfügbar.
+Das LLM entscheidet, ob es ein entdecktes Tool anfordert oder direkt antwortet, und
+formuliert die finale Antwort. Deterministischer Python-Code validiert einen ausgewählten
+Call pro Response, validiert das entdeckte Tool-Schema, dispatcht über die geöffnete
+MCP-Session, serialisiert jedes strukturierte Result und erhält den vollständigen Message
+Context des aktuellen Runs. Die autorisierten Factory- und Knowledge-Tools bleiben bei
+jedem Entscheidungsschritt verfügbar.
 
 `MAX_TOOL_CALLS = 3` zählt erfolgreich ausgeführte Tools statt LLM Requests. Nach der
 dritten Observation ist genau eine finale LLM-Entscheidung erlaubt. Finaler Text ergibt
@@ -307,8 +304,7 @@ dritten Observation ist genau eine finale LLM-Entscheidung erlaubt. Finaler Text
 und führt zu keinem weiteren LLM Request. Unbekannte Tools, ungültige Argumente und
 mehrere Calls in einer Response bleiben deterministische Fehler.
 
-Der parallele LangGraph-Pfad erhält dieses Verhalten, verschiebt aber die
-Orchestrierungsmechanik in einen expliziten Graphen:
+Der LangGraph-MCP-Pfad erhält dieses Verhalten in einem expliziten Graphen:
 
 ```mermaid
 flowchart LR
@@ -318,39 +314,35 @@ flowchart LR
     Adapter --> Model["Model Node"]
     Model --> Route{"Conditional Route"}
     Route -->|"final / ungültig / Limit"| End["END"]
-    Route -->|"Read Request"| Tool["Tool Node"]
-    Route -->|"Write Request"| Prepare["Action vorbereiten"]
+    Route -->|"Read Request"| Tool["MCP Tool Node"]
     Tool -->|"strukturierte Observation"| Model
-    Tool --> Product["ProductHistoryCapability"]
-    Tool --> Machine["MachineStatusCapability"]
-    Prepare --> Approval["Approval Node<br/>interrupt(payload)"]
-    Approval -->|"approve"| Execute["Action ausführen"]
-    Approval -->|"reject"| Cancel["Action abbrechen -> END"]
-    Execute -->|"strukturierte Observation"| Model
-    Execute --> Ticket["MaintenanceTicketCapability"]
+    Tool --> Provider["MCP Tool Provider"]
+    Provider --> Factory["factory_mcp"]
+    Provider --> Knowledge["knowledge_mcp"]
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    class CR,Router,Product,Machine,Ticket core
-    class Adapter,Model,Route,Tool,Prepare,Approval,Execute,Cancel,End framework
+    class CR,Router,Provider,Factory,Knowledge core
+    class Adapter,Model,Route,Tool,End framework
     class Security security
 ```
 
 `TroubleshootingGraphState` enthält LangChain Messages, die Anzahl ausgeführter Tools,
 normalisierte ausgeführte Calls, Run Status, finale Antwort, eine Pending Action,
-Approval Result und minimalen gebundenen Run Context. Ein eigener Tool Node adaptiert die
-bestehenden Capabilities über LangChain-`StructuredTool`-Verträge. Dadurch bleiben
+Approval Result und minimalen gebundenen Run Context. Ein eigener Tool Node adaptiert
+entdeckte MCP-Contracts über LangChain-`StructuredTool`-Verträge. Dadurch bleiben
 Argumentvalidierung und sequenzieller One-Call-Dispatch explizit, statt einen Framework-
 Default zu übernehmen, der das ADR-004-Verhalten verändern könnte. Der Graph wählt kein
 Modell: Der Composition Root injiziert ein bereits geroutetes Profile und einen Client,
 dessen finaler ADR-009-Egress-Check aktiv bleibt.
 
-Für einen fortsetzbaren Run wird der Graph mit einem nativen `InMemorySaver` kompiliert
+Für den separaten action-only fortsetzbaren Run wird der Graph mit einem nativen `InMemorySaver` kompiliert
 und mit `configurable.thread_id` aufgerufen. Der Approval Node erzeugt einen
 JSON-serialisierbaren `action_approval`-Interrupt und wird über
-`Command(resume="approve" | "reject")` mit derselben Thread-ID fortgesetzt. Read Tools
-unterbrechen nie. `create_maintenance_ticket` ist eine In-Memory-Demonstrations-Action:
+`Command(resume="approve" | "reject")` mit derselben Thread-ID fortgesetzt. Der
+Read-Only-MCP-Graph exponiert keine Write Tools. `create_maintenance_ticket` ist eine
+In-Memory-Demonstrations-Action:
 Sie wird vor dem Interrupt nur vorbereitet, erst nach Approval ausgeführt und verwendet
 ihre Tool-Call-ID als In-Memory-Idempotenzschlüssel. Nodes vor einem Interrupt bleiben
 side-effect-free, weil LangGraph den Node beim Resume von Anfang an erneut startet.
@@ -360,8 +352,8 @@ zurückgestellt.
 
 ## Baseline für die Tool-Selection-Evaluation
 
-Der Repository-lokale Eval misst ausschließlich die von einem der beiden
-Troubleshooting-Pfade exponierte erste Entscheidung. Jeder
+Der Repository-lokale Eval misst ausschließlich die vom LangGraph-MCP-Pfad exponierte
+erste Entscheidung. Jeder
 versionierte JSONL-Fall startet mit einem frischen Message Context. Der Runner verwendet
 ein konfigurierbares semantisches Model Profile und übergibt die provider-unabhängige
 `LLMResponse` an ein deterministisches Exact-Match-Scoring.
@@ -370,7 +362,7 @@ ein konfigurierbares semantisches Model Profile und übergibt die provider-unabh
 flowchart LR
     D["Versioniertes JSONL-Dataset<br/>12 unabhängige Fälle"]
     R["Tool-Selection-Eval-Runner"]
-    A["TroubleshootingAgent<br/>request_tool_selection()"]
+    A["LangGraph MCP<br/>request_tool_selection_via_mcp()"]
     L["LLMClient<br/>konfigurierbares Model Profile"]
     S["Deterministisches Exact-Match-Scoring"]
     O["Strukturierter JSON Report<br/>Einzelergebnisse + aggregierte Metriken"]
@@ -412,7 +404,7 @@ natürlichsprachliche finale Antwort wird aufgezeichnet, aber nicht bewertet.
 flowchart LR
     D["Versioniertes Trajectory-Dataset<br/>10 unabhängige Fälle"]
     R["Trajectory-Eval-Runner"]
-    A["TroubleshootingAgent<br/>vollständiger begrenzter Run"]
+    A["LangGraph MCP<br/>vollständiger begrenzter Run"]
     L["LLMClient<br/>konfigurierbares Model Profile"]
     AR["AgentRunResult<br/>Status + ausgeführte Calls + finale Antwort"]
     S["Deterministisches Scoring<br/>Trajectory + Terminierung"]
@@ -512,23 +504,22 @@ einschließlich strukturierter Not-found-Ergebnisse. Die isolierte
 `DocumentationSearchCapability.search_documentation(query, top_k=3)` gibt strukturierte
 `DocumentationSearchResult`-Daten zurück. LangGraph erhält sie ausschließlich über
 entdeckte und autorisierte `knowledge_mcp`-Tools, nie durch direkte Retriever-Injection.
-`MaintenanceTicketCapability.create_maintenance_ticket(...)` ist eine optionale
-LangGraph-only Demonstrations-Action. Ihre deterministische Approval-Grenze führt sie
-erst nach expliziter Genehmigung aus; der handgeschriebene Referenzpfad exponiert sie
-nicht.
+`MaintenanceTicketCapability.create_maintenance_ticket(...)` ist eine optionale,
+action-only LangGraph-Demonstrations-Capability. Ihre deterministische Approval-Grenze
+führt sie erst nach expliziter Genehmigung aus; sie wird nicht über MCP exponiert.
 
 ### `agent`
 
 Enthält provider-unabhängige LLM-Verträge und Agenten-Orchestrierungslogik.
 
 Die aktuelle Implementierung definiert `LLMClient`, die Auswahl über semantische
-`ModelProfile`, kleine Request- und Response-Modelle, den handgeschriebenen
-`TroubleshootingAgent` und den parallelen `LangGraphTroubleshootingAgent`. Sie
-stellt außerdem explizite `TaskRequirements`, validierte Routing-Metadata und
+`ModelProfile`, kleine Request- und Response-Modelle,
+`LangGraphTroubleshootingAgent` und projekteeigene Run-Result-Contracts. Sie stellt
+außerdem explizite `TaskRequirements`, validierte Routing-Metadata und
 `DeterministicModelRouter` bereit. Der Router verwendet `ModelEgressPolicy`, filtert nach
 erforderlichen Capabilities und Minimum Quality und wendet anschließend eine stabile
-Cost/Quality-Sortierung an. Beide Agent-Pfade erhalten den begrenzten sequenziellen
-Loop und den festen Zwei-Tool-Dispatch. `AgentRunResult` unterscheidet `SUCCESS` von
+Cost/Quality-Sortierung an. Der Agent erhält den begrenzten sequenziellen Loop über
+entdeckte MCP-Tools. `AgentRunResult` unterscheidet `SUCCESS` von
 `LIMIT_REACHED` und gibt die Anzahl ausgeführter Tools sowie die normalisierte
 ausgeführte Trajectory an. Der Agent konstruiert den Router nicht, importiert weder das
 OpenAI-SDK noch benennt er einen konkreten Provider oder ein konkretes Modell. Seine

@@ -25,13 +25,13 @@ established by ADR-002, ADR-003, ADR-005, ADR-008, and ADR-009.
 
 ## Decision
 
-### Incremental Parallel Migration
+### Completed Migration
 
-Troubleshooting orchestration will migrate incrementally to LangGraph. The existing
-handwritten `TroubleshootingAgent` remains available as the manual reference path while
-a parallel `LangGraphTroubleshootingAgent` is introduced. The manual path is not removed
-until deterministic tests and model-dependent evaluations demonstrate sufficient
-functional equivalence.
+Troubleshooting orchestration uses `LangGraphTroubleshootingAgent` as its sole agent
+loop. The temporary handwritten `TroubleshootingAgent` was retained only as a migration
+reference and is removed after the removal gate below has been satisfied. The versioned
+evaluation datasets remain as regression evidence for the LangGraph path; they are not
+owned by the removed implementation.
 
 ADR-010 supersedes only ADR-004's choice to keep the orchestration mechanism entirely
 handwritten and its deferral of an agent framework. ADR-004's behavioral guarantees
@@ -41,7 +41,7 @@ execution of a requested fourth tool.
 
 ### LangGraph Responsibilities
 
-LangGraph may own the parallel path's orchestration mechanics:
+LangGraph owns the orchestration mechanics:
 
 * typed graph state
 * model and tool nodes
@@ -104,15 +104,13 @@ choose a concrete provider or model.
 
 ### Tool Boundary
 
-The initial graph exposes exactly the existing capabilities:
-
-* `get_product_history`
-* `get_machine_status`
-
-LangChain tool objects are adapters over these capabilities. They own no Domain logic,
-repositories, provider configuration, or security decisions. Tool arguments remain
-validated deterministically before a capability is invoked, and the initial graph
-executes at most one requested tool per model step.
+The read-only graph receives only runtime-discovered, explicitly authorized MCP tools.
+`factory_mcp` currently advertises `get_product_history` and `get_machine_status`;
+`knowledge_mcp` advertises `search_documentation`. LangChain tool objects are transport
+adapters over those discovered MCP contracts. They own no Domain logic, repositories,
+provider configuration, or security decisions. Tool arguments remain validated
+deterministically before invocation, and the graph executes at most one requested tool
+per model step.
 
 ### State Boundary
 
@@ -135,9 +133,10 @@ parallel framework-specific configuration system.
 
 ### Evaluation and Removal Gate
 
-ADR-005 applies. Both paths use the same versioned first-decision and trajectory
-datasets and the same deterministic scorers. Internal framework message identity is not
-part of equivalence. Relevant comparisons are:
+ADR-005 applies. The migration comparison used the same versioned first-decision and
+trajectory datasets and deterministic scorers. The gate is now satisfied and the
+handwritten loop is removed. Internal framework message identity is not part of
+equivalence. The retained regression checks cover:
 
 * selected tool and arguments
 * executed-tool sequence
@@ -146,13 +145,13 @@ part of equivalence. Relevant comparisons are:
 * presence of a final answer
 * identical security and egress enforcement
 
-The manual orchestration may be removed only in a separate change after:
+The completed removal gate required:
 
-* deterministic unit tests pass for both paths
+* deterministic unit tests pass for the manual and LangGraph paths before removal
 * first-decision evaluations show no unacceptable regression
 * trajectory evaluations show no unacceptable regression
 * relevant local and explicitly public smoke tests pass
-* a denied model request cannot reach the provider adapter in either path
+* a denied model request cannot reach the provider adapter
 * tool sequences, limits, and termination are sufficiently equivalent
 
 ### Scope and Non-Decisions
@@ -210,13 +209,11 @@ Positive:
   use case
 * graph state and control flow become explicit framework concepts without obscuring
   project security or domain semantics
-* manual and graph paths can be compared using unchanged evaluations
 * future checkpointing and interruption support have a compatible orchestration base
 * provider, routing, and egress boundaries remain reusable
 
 Negative:
 
-* both orchestration paths must be maintained temporarily
 * LangGraph and LangChain Core become runtime dependencies
 * message and tool conversion introduces an additional adapter boundary
 * framework upgrades can affect orchestration behavior and require regression testing
@@ -230,6 +227,6 @@ Domain and Infrastructure is injected at Composition Roots. ADR-005 supplies the
 and unchanged evaluation baselines. ADR-008 owns deterministic model routing. ADR-009
 owns security eligibility and final pre-adapter egress enforcement.
 
-ADR-010 partially supersedes ADR-004 only for the chosen orchestration technology. The
-bounded sequential behavior and deterministic guarantees of ADR-004 remain the required
-contract during migration.
+ADR-010 supersedes ADR-004 only for the chosen orchestration technology. The bounded
+sequential behavior and deterministic guarantees of ADR-004 remain the required
+contract.

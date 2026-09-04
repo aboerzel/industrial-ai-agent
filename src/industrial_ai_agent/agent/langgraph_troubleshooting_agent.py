@@ -21,6 +21,16 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel, ValidationError
 from typing_extensions import TypedDict
 
+from industrial_ai_agent.agent.agent_run import (
+    MAX_TOOL_CALLS,
+    AgentRunResult,
+    AgentRunStatus,
+    ExecutedToolCall,
+    InvalidToolArgumentsError,
+    MissingLLMResponseTextError,
+    ToolCallLimitExceededError,
+    UnknownToolError,
+)
 from industrial_ai_agent.agent.langchain_model import (
     LangChainChatModel,
     to_llm_response,
@@ -28,27 +38,10 @@ from industrial_ai_agent.agent.langchain_model import (
 from industrial_ai_agent.agent.llm import LLMResponse
 from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpToolSession
 from industrial_ai_agent.agent.model_egress import DataClassification
-from industrial_ai_agent.agent.troubleshooting_agent import (
-    GET_MACHINE_STATUS_TOOL,
-    GET_PRODUCT_HISTORY_TOOL,
-    MAX_TOOL_CALLS,
-    TROUBLESHOOTING_SYSTEM_MESSAGE,
-    AgentRunResult,
-    AgentRunStatus,
-    ExecutedToolCall,
-    InvalidToolArgumentsError,
-    MachineStatusToolArguments,
-    MissingLLMResponseTextError,
-    ProductHistoryToolArguments,
-    ToolCallLimitExceededError,
-    UnknownToolError,
-)
-from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.maintenance_ticket import (
     CreateMaintenanceTicketArguments,
     MaintenanceTicketCapability,
 )
-from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 CREATE_MAINTENANCE_TICKET_TOOL_NAME = "create_maintenance_ticket"
 MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
@@ -56,6 +49,12 @@ MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "tools when their evidence is necessary to answer the explicit user request. Call "
     "one tool at a time, do not repeat available evidence, and base the final answer on "
     "the collected tool results without inventing industrial data."
+)
+HITL_TROUBLESHOOTING_SYSTEM_MESSAGE = (
+    "You are an industrial troubleshooting assistant. Use only the provided action "
+    "tool when the user explicitly requests a maintenance ticket. A human must approve "
+    "the proposal before a ticket is created. Call one tool at a time and do not invent "
+    "industrial data."
 )
 
 
@@ -103,28 +102,23 @@ class LangGraphTroubleshootingAgent:
     def __init__(
         self,
         chat_model: LangChainChatModel,
-        product_history: ProductHistoryCapability,
-        machine_status: MachineStatusCapability,
-        maintenance_ticket: MaintenanceTicketCapability | None = None,
         *,
+        mcp_tool_provider: McpToolProvider | None = None,
+        maintenance_ticket: MaintenanceTicketCapability | None = None,
         checkpointer: BaseCheckpointSaver[str] | None = None,
         run_classification: DataClassification | None = None,
-        mcp_tool_provider: McpToolProvider | None = None,
     ) -> None:
-        self._product_history = product_history
-        self._machine_status = machine_status
         self._maintenance_ticket = maintenance_ticket
         self._checkpointer = checkpointer
         self._run_classification = run_classification
         self._mcp_tool_provider = mcp_tool_provider
-        self._tools = self._create_direct_tools()
-        self._tools_by_name = {tool.name: tool for tool in self._tools}
-        self._chat_model = chat_model.bind_tools(self._tools)
-        self._graph = self._build_graph(self._chat_model, self._tools_by_name)
-
-    def request_tool_selection(self, user_request: str) -> LLMResponse:
-        response = self._chat_model.invoke(self._initial_messages(user_request))
-        return to_llm_response(response)
+        self._chat_model = chat_model
+        self._action_tools = self._create_action_tools()
+        self._action_tools_by_name = {tool.name: tool for tool in self._action_tools}
+        self._hitl_graph = self._build_hitl_graph(
+            chat_model.bind_tools(self._action_tools),
+            self._action_tools_by_name,
+        )
 
     async def request_tool_selection_via_mcp(
         self,
@@ -133,19 +127,12 @@ class LangGraphTroubleshootingAgent:
         """Bind runtime-discovered MCP tools for one first-decision run."""
         async with self._open_mcp_session() as session:
             response = self._chat_model.bind_tools(session.tools).invoke(
-                self._initial_messages(user_request, use_mcp_tools=True)
+                self._initial_messages(
+                    user_request,
+                    system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+                )
             )
         return to_llm_response(response)
-
-    def invoke(self, user_request: str) -> TroubleshootingGraphState:
-        config: RunnableConfig = {"recursion_limit": 12}
-        state = self._graph.invoke(
-            self._initial_state(user_request),
-            config=config,
-        )
-        return self._restore_public_state(
-            cast(CheckpointedTroubleshootingGraphState, state)
-        )
 
     async def ainvoke_via_mcp(
         self,
@@ -166,7 +153,10 @@ class LangGraphTroubleshootingAgent:
             graph = self._build_async_graph(chat_model, tools_by_name)
             config: RunnableConfig = {"recursion_limit": 12}
             state = await graph.ainvoke(
-                self._initial_state(user_request, use_mcp_tools=True),
+                self._initial_state(
+                    user_request,
+                    system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+                ),
                 config=config,
             )
         return self._restore_public_state(
@@ -176,7 +166,13 @@ class LangGraphTroubleshootingAgent:
     def start(self, user_request: str, *, thread_id: str) -> TroubleshootingGraphState:
         self._require_resumable_run_context()
         config = self._checkpoint_config(thread_id)
-        self._graph.invoke(self._initial_state(user_request), config=config)
+        self._hitl_graph.invoke(
+            self._initial_state(
+                user_request,
+                system_content=HITL_TROUBLESHOOTING_SYSTEM_MESSAGE,
+            ),
+            config=config,
+        )
         return self.get_checkpointed_state(thread_id=thread_id)
 
     def resume(
@@ -189,12 +185,12 @@ class LangGraphTroubleshootingAgent:
         config = self._checkpoint_config(thread_id)
         state = self.get_checkpointed_state(thread_id=thread_id)
         self._require_matching_run_context(state)
-        self._graph.invoke(Command(resume=approval), config=config)
+        self._hitl_graph.invoke(Command(resume=approval), config=config)
         return self.get_checkpointed_state(thread_id=thread_id)
 
     def get_checkpointed_state(self, *, thread_id: str) -> TroubleshootingGraphState:
         self._require_resumable_run_context()
-        snapshot = self._graph.get_state(self._checkpoint_config(thread_id))
+        snapshot = self._hitl_graph.get_state(self._checkpoint_config(thread_id))
         if not snapshot.values:
             raise ValueError(f"No checkpointed run found for thread_id: {thread_id}")
         return self._restore_public_state(
@@ -203,25 +199,13 @@ class LangGraphTroubleshootingAgent:
 
     def get_interrupt_payload(self, *, thread_id: str) -> dict[str, object] | None:
         self._require_resumable_run_context()
-        snapshot = self._graph.get_state(self._checkpoint_config(thread_id))
+        snapshot = self._hitl_graph.get_state(self._checkpoint_config(thread_id))
         if not snapshot.interrupts:
             return None
         payload = snapshot.interrupts[0].value
         if not isinstance(payload, dict):
             raise TypeError("Approval interrupt payload must be a dictionary")
         return dict(payload)
-
-    def answer(self, user_request: str) -> AgentRunResult:
-        state = self.invoke(user_request)
-        run_status = state["run_status"]
-        if run_status is None:
-            raise RuntimeError("LangGraph run terminated without a status")
-        return AgentRunResult(
-            status=run_status,
-            final_answer=state["final_answer"],
-            tool_call_count=state["executed_tool_count"],
-            executed_tool_calls=state["executed_tool_calls"],
-        )
 
     async def aanswer_via_mcp(
         self,
@@ -243,7 +227,7 @@ class LangGraphTroubleshootingAgent:
             executed_tool_calls=state["executed_tool_calls"],
         )
 
-    def _build_graph(
+    def _build_hitl_graph(
         self,
         chat_model: LangChainChatModel,
         tools_by_name: dict[str, BaseTool],
@@ -287,23 +271,9 @@ class LangGraphTroubleshootingAgent:
         builder.add_node("model", lambda state: self._model_node(chat_model, state))
         # noinspection PyTypeChecker
         builder.add_node("tool", tool_node)
-        # The read-only MCP path never advertises this action, but preserving the
-        # existing branches keeps a malicious or malformed tool call fail-closed.
-        # noinspection PyTypeChecker
-        builder.add_node("prepare_action", self._prepare_action_node)
-        # noinspection PyTypeChecker
-        builder.add_node("approval", self._approval_node)
-        # noinspection PyTypeChecker
-        builder.add_node("execute_action", self._execute_action_node)
-        # noinspection PyTypeChecker
-        builder.add_node("cancel_action", self._cancel_action_node)
         builder.add_edge(START, "model")
-        builder.add_conditional_edges("model", self._route_after_model)
+        builder.add_conditional_edges("model", self._route_after_read_only_model)
         builder.add_edge("tool", "model")
-        builder.add_edge("prepare_action", "approval")
-        builder.add_conditional_edges("approval", self._route_after_approval)
-        builder.add_edge("execute_action", "model")
-        builder.add_edge("cancel_action", END)
         return builder.compile()
 
     @staticmethod
@@ -344,6 +314,17 @@ class LangGraphTroubleshootingAgent:
             raise RuntimeError("Model route requires exactly one AI tool call")
         if message.tool_calls[0]["name"] == CREATE_MAINTENANCE_TICKET_TOOL_NAME:
             return "prepare_action"
+        return "tool"
+
+    @staticmethod
+    def _route_after_read_only_model(
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> Literal["tool", "__end__"]:
+        if state["run_status"] is not None:
+            return END
+        message = state["messages"][-1]
+        if not isinstance(message, AIMessage) or len(message.tool_calls) != 1:
+            raise RuntimeError("Model route requires exactly one AI tool call")
         return "tool"
 
     @staticmethod
@@ -529,29 +510,8 @@ class LangGraphTroubleshootingAgent:
                 f"Invalid arguments for {tool.name}"
             ) from error
 
-    def _create_direct_tools(self) -> tuple[BaseTool, ...]:
-        def get_product_history(product_id: str) -> str:
-            result = self._product_history.get_product_history(product_id)
-            return result.model_dump_json()
-
-        def get_machine_status(station_id: str) -> str:
-            result = self._machine_status.get_machine_status(station_id)
-            return result.model_dump_json()
-
-        tools: list[BaseTool] = [
-            StructuredTool.from_function(
-                func=get_product_history,
-                name=GET_PRODUCT_HISTORY_TOOL.name,
-                description=GET_PRODUCT_HISTORY_TOOL.description,
-                args_schema=ProductHistoryToolArguments,
-            ),
-            StructuredTool.from_function(
-                func=get_machine_status,
-                name=GET_MACHINE_STATUS_TOOL.name,
-                description=GET_MACHINE_STATUS_TOOL.description,
-                args_schema=MachineStatusToolArguments,
-            ),
-        ]
+    def _create_action_tools(self) -> tuple[BaseTool, ...]:
+        tools: list[BaseTool] = []
         if self._maintenance_ticket is not None:
             tools.append(
                 StructuredTool.from_function(
@@ -579,12 +539,12 @@ class LangGraphTroubleshootingAgent:
         self,
         user_request: str,
         *,
-        use_mcp_tools: bool = False,
+        system_content: str,
     ) -> CheckpointedTroubleshootingGraphState:
         return {
             "messages": self._initial_messages(
                 user_request,
-                use_mcp_tools=use_mcp_tools,
+                system_content=system_content,
             ),
             "executed_tool_count": 0,
             "executed_tool_calls": (),
@@ -600,36 +560,19 @@ class LangGraphTroubleshootingAgent:
             ),
         }
 
+    @staticmethod
     def _initial_messages(
-        self,
         user_request: str,
         *,
-        use_mcp_tools: bool = False,
+        system_content: str,
     ) -> list[AnyMessage]:
         normalized_request = user_request.strip()
         if not normalized_request:
             raise ValueError("User request must not be empty")
-        system_content = (
-            MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
-            if use_mcp_tools
-            else TROUBLESHOOTING_SYSTEM_MESSAGE.content
-        )
-        if system_content is None:
-            raise RuntimeError("Troubleshooting system message must contain text")
         messages: list[AnyMessage] = [
             SystemMessage(content=system_content),
             HumanMessage(content=normalized_request),
         ]
-        if self._maintenance_ticket is not None:
-            messages[0] = SystemMessage(
-                content=(
-                    f"{system_content} You may propose "
-                    f"{CREATE_MAINTENANCE_TICKET_TOOL_NAME} only when the user "
-                    "explicitly requests a maintenance ticket or it is necessary to "
-                    "complete the requested troubleshooting action. The system requires "
-                    "human approval before it creates any ticket."
-                )
-            )
         return messages
 
     def _require_resumable_run_context(self) -> None:

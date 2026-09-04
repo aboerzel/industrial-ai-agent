@@ -4,7 +4,7 @@
 
 The MCP slices expose two read-only capability areas: `factory_mcp` for factory evidence
 and `knowledge_mcp` for documentation retrieval. The LangGraph read-only path uses both
-through real protocol clients; the manual direct path remains a behavioral reference.
+through real protocol clients; there is no direct read-only agent path.
 
 ## Roles
 
@@ -75,7 +75,7 @@ structured result. It must be reviewed and removed when stable
 MCP discovery and agent authorization are separate: discovery observes everything the
 server advertises, while the troubleshooting agent receives only its authorized
 read-only factory and knowledge tools. Existing `create_maintenance_ticket` HITL behavior
-remains on the direct path and is not an MCP tool.
+is action-only and is not an MCP tool.
 
 ## Security Boundary
 
@@ -93,17 +93,15 @@ and transport security are required design work before any remote or production 
 
 ## OBSOLETE CANDIDATES AFTER MCP MIGRATION
 
-Do not remove these yet. The current classification is:
+The cleanup classification is:
 
-* **KEEP TEMPORARILY:** direct Factory closures and the direct read-only branch; the
-  direct path remains the reference while equivalence evidence is retained.
-* **KEEP TEMPORARILY:** direct Factory capability construction in LangGraph composition
-  roots; that direct path remains supported.
-* **REMOVE NOW:** direct Knowledge tool closures and direct retriever injection in
-  LangGraph composition roots; no active MCP path uses either after this slice.
+* **REMOVED:** the handwritten `TroubleshootingAgent`, direct Factory closures, the
+  direct read-only LangGraph branch, and their composition roots, tests, eval switches,
+  and smoke script. The LangGraph MCP path replaces them.
+* **REMOVED:** direct Knowledge tool closures and direct retriever injection in
+  LangGraph composition roots. Knowledge retrieval remains behind `knowledge_mcp`.
 * **KEEP TEMPORARILY:** stdio-only helpers; stdio remains an intentional development/test
   transport, not historical code.
-* **KEEP TEMPORARILY:** `TroubleshootingAgent`; ADR-010 retains it as a reference.
 * **BLOCKED BY FRAMEWORK:** `mcp_langchain_tool_provider.py`; it is the single temporary
   MCP SDK v2 to LangChain bridge until a stable compatible adapter exists.
 
@@ -111,8 +109,8 @@ Do not remove these yet. The current classification is:
 
 MCP is not a LangChain tool. An MCP server exposes protocol-level tools; a LangChain
 adapter can later translate discovered tools into LangChain contracts. The current stable
-`langchain-mcp-adapters` release is `0.3.2` and still has no published MCP SDK v2 support.
-Upstream v2-support work remains in progress, so the project retains its one narrow bridge.
+`langchain-mcp-adapters` release is `0.3.2` and requires `mcp<2.0.0`. The project uses
+MCP SDK v2, so it retains one narrow compatibility bridge.
 
 MCP is not REST. REST commonly exposes application resources over HTTP paths, while MCP
 standardizes AI-oriented capability discovery, tool schemas, and multiple transports.

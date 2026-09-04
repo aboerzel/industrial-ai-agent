@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-`TroubleshootingAgent` currently obtains structured operational evidence through
+The LangGraph MCP agent currently obtains structured operational evidence through
 `get_product_history(product_id)` and `get_machine_status(station_id)`. A future
 `search_documentation(query)` capability must add technical documentation without
 coupling agent orchestration to document formats, indexes, vector databases, embedding
@@ -37,7 +37,7 @@ ports in accordance with ADR-003.
 ```mermaid
 flowchart LR
     subgraph Core["Application Core"]
-        Agent["TroubleshootingAgent"]
+        Agent["LangGraph MCP agent"]
         Capability["search_documentation(query)<br/>agent-facing capability"]
         Port["Knowledge retrieval port<br/>provider- and storage-independent"]
         Result["Structured retrieval results<br/>content + provenance"]
@@ -106,7 +106,7 @@ the initial mechanism later.
 
 ### Agent Boundary
 
-`TroubleshootingAgent` decides whether documentation evidence is needed and formulates
+The LangGraph MCP agent decides whether documentation evidence is needed and formulates
 the query passed to `search_documentation`. The retrieval subsystem decides which
 passages are relevant to that query. The agent does not implement ranking and the
 retrieval subsystem does not decide the troubleshooting trajectory.
@@ -229,10 +229,9 @@ ports, and internal retrieval models. Infrastructure implements document access,
 storage, embedding providers, external retrieval services, and other technical details.
 Infrastructure may depend on the Core; the Core must not depend on Infrastructure.
 
-Knowledge retrieval may later be exposed as a Knowledge MCP service. MCP would be a
-transport or service boundary around the capability, not a prerequisite for the
-retrieval core. This decision introduces no MCP code and does not choose a future MCP
-service topology.
+Knowledge retrieval is exposed as `knowledge_mcp` under ADR-012. MCP is a transport and
+service boundary around the capability, not a prerequisite for the retrieval core.
+The retrieval pipeline remains independent of MCP, Docker, and LangGraph.
 
 ### Scope and Non-Decisions
 

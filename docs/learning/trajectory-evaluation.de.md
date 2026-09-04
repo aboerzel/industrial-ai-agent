@@ -2,8 +2,8 @@
 
 ## Zweck und Abgrenzung
 
-Die Trajectory-Evaluation misst vollständige reale Runs des begrenzten
-`TroubleshootingAgent`. Sie ergänzt die bestehende First-Decision-Evaluation, ersetzt
+Die Trajectory-Evaluation misst vollständige reale Runs des begrenzten LangGraph-MCP-
+Agenten. Sie ergänzt die bestehende First-Decision-Evaluation, ersetzt
 sie aber nicht:
 
 * Die First-Decision-Evaluation fragt, ob das Modell initial das erwartete Tool mit den
@@ -73,7 +73,7 @@ lokale `troubleshooting`-Profil muss Ollama laufen und `qwen3.5:9b` verfügbar s
 Führe anschließend aus:
 
 ```powershell
-python -m evals.run_trajectory --profile troubleshooting
+python -m evals.run_trajectory --profile troubleshooting --mcp-transport stdio
 ```
 
 Um einen lokalen JSON Report explizit zu speichern:
@@ -81,6 +81,7 @@ Um einen lokalen JSON Report explizit zu speichern:
 ```powershell
 python -m evals.run_trajectory `
   --profile troubleshooting `
+  --mcp-transport stdio `
   --output evals/results/troubleshooting-trajectory.json
 ```
 

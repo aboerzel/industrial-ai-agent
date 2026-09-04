@@ -1,5 +1,12 @@
 # LangGraph and LangChain Orchestration
 
+## Historical Migration Note
+
+The handwritten `TroubleshootingAgent` described below was a temporary learning and
+migration reference. ADR-010's removal gate is complete: the implementation has been
+removed, while its versioned evaluation datasets remain regression evidence for the
+current LangGraph MCP path.
+
 ## Why Introduce the Frameworks Now?
 
 The handwritten `TroubleshootingAgent` made the essential mechanics visible: model tool
@@ -8,9 +15,9 @@ termination, and trajectory evaluation. Reimplementing more standard orchestrati
 infrastructure would now add less value than learning a production-relevant graph model.
 
 [ADR-010](../decisions/ADR-010-langgraph-and-langchain-orchestration-migration.md)
-therefore introduces a parallel `LangGraphTroubleshootingAgent`. The handwritten agent
-remains the behavioral reference until deterministic tests, unchanged eval datasets, and
-live smokes demonstrate sufficient equivalence.
+therefore selected `LangGraphTroubleshootingAgent` as the final orchestration path after
+deterministic tests, unchanged eval datasets, and live smokes demonstrated sufficient
+equivalence.
 
 ## Graph State
 
@@ -32,7 +39,7 @@ run additionally uses LangGraph's native `InMemorySaver`; it is not durable pers
 The read-only path uses two nodes:
 
 1. The **model node** invokes the already selected model through the controlled client.
-2. The **tool node** validates one requested call, invokes one existing capability, and
+2. The **tool node** validates one requested call, invokes one discovered MCP tool, and
    appends a structured observation.
 
 `START` enters the model node. A conditional edge routes a final answer, deterministic
@@ -48,12 +55,11 @@ executing the action.
 
 ## Tool Execution and Termination
 
-LangChain `StructuredTool` instances describe `get_product_history` and
-`get_machine_status`. They are adapters around existing project capabilities, not new
-homes for Domain logic. A custom tool node is intentionally used to retain one-call
-validation and sequential dispatch.
+LangChain `StructuredTool` instances are created from discovered, explicitly authorized
+MCP schemas. They are transport adapters, not new homes for Domain logic. A custom tool
+node is intentionally used to retain one-call validation and sequential dispatch.
 
-`MAX_TOOL_CALLS = 3` has the same meaning in both agents. Three tools may execute. The
+`MAX_TOOL_CALLS = 3` applies to the remaining LangGraph agent. Three tools may execute. The
 next model step may return a final answer; a fourth request produces `LIMIT_REACHED`, is
 not executed, and causes no further model call. Unknown tools, invalid arguments, and
 multiple calls remain deterministic errors.
