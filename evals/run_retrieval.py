@@ -7,7 +7,9 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
+from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
 from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
+    InMemoryBm25KnowledgeRetriever,
     InMemoryIdfKnowledgeRetriever,
     InMemoryLexicalKnowledgeRetriever,
     load_markdown_chunks,
@@ -19,7 +21,7 @@ DEFAULT_DATASET_PATH = (
 )
 DEFAULT_KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
 DEFAULT_K = 3
-RetrievalStrategy = Literal["simple", "idf"]
+RetrievalStrategy = Literal["simple", "idf", "bm25"]
 RetrievalCategory = Literal[
     "exact_identifier",
     "natural_language",
@@ -335,7 +337,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=DEFAULT_K)
     parser.add_argument(
         "--strategy",
-        choices=("simple", "idf"),
+        choices=("simple", "idf", "bm25"),
         default="simple",
         help="Retrieval implementation to evaluate.",
     )
@@ -379,10 +381,12 @@ def _resolve_path(path: Path) -> Path:
 def _create_retriever(
     strategy: RetrievalStrategy,
     chunks: tuple[KnowledgeRetrievalResult, ...],
-) -> InMemoryLexicalKnowledgeRetriever | InMemoryIdfKnowledgeRetriever:
+) -> KnowledgeRetriever:
     if strategy == "simple":
         return InMemoryLexicalKnowledgeRetriever(chunks)
-    return InMemoryIdfKnowledgeRetriever(chunks)
+    if strategy == "idf":
+        return InMemoryIdfKnowledgeRetriever(chunks)
+    return InMemoryBm25KnowledgeRetriever(chunks)
 
 
 if __name__ == "__main__":

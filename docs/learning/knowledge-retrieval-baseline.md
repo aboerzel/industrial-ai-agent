@@ -2,12 +2,12 @@
 
 ## Purpose
 
-The retrieval slice implements two measurable lexical baselines from ADR-006: simple
-term overlap and rarity-aware IDF overlap. Version 2 expands the corpus and evaluation
-set before any BM25 implementation so a later strategy comparison cannot shape its own
-benchmark. Both existing retrievers remain unchanged and run without an LLM,
-embeddings, a vector database, reranking, MCP, query rewriting, or an external
-retrieval library. Retrieval remains isolated from `TroubleshootingAgent`.
+The retrieval slice implements three measurable lexical baselines from ADR-006: simple
+term overlap, rarity-aware IDF overlap, and BM25. Version 2 expanded and froze the
+corpus and evaluation set before BM25 was implemented, so the new strategy could not
+shape its own benchmark. All retrievers run without an LLM, embeddings, a vector
+database, reranking, MCP, query rewriting, or an external retrieval library. Retrieval
+remains isolated from `TroubleshootingAgent`.
 
 ## Knowledge Base and Ingestion
 
@@ -46,7 +46,7 @@ ranking remain in Infrastructure.
 
 ## Lexical Strategies
 
-Both unchanged strategies use the same tokenizer. It case-folds text and extracts
+All three strategies use the same tokenizer. It case-folds text and extracts
 alphanumeric terms while preserving hyphenated identifiers. Consequently,
 `E-STOP-17`, `e-stop-17`, and `E-STOP-17!!!` produce the same identifier token.
 
@@ -81,6 +81,30 @@ score(query, chunk) = sum(idf(t) for t in Q intersect C)
 
 This implementation adds no stemming, synonyms, field boosting, query expansion, term
 frequency, or semantic signal.
+
+### BM25
+
+BM25 retains the full document token sequence so repeated terms contribute term
+frequency `tf(t,d)` and chunk length `|d|`. For corpus size `N`, chunk document
+frequency `df(t)`, and average chunk length `avgdl`, this implementation uses:
+
+```text
+idf_bm25(t) = ln(1 + (N - df(t) + 0.5) / (df(t) + 0.5))
+
+score(q, d) = sum(
+    idf_bm25(t)
+    * (tf(t,d) * (k1 + 1))
+      / (tf(t,d) + k1 * (1 - b + b * |d| / avgdl))
+    for each distinct t in q
+)
+```
+
+`tf(t,d)` rewards repeated evidence with diminishing returns. `idf_bm25(t)` gives rare
+terms more influence. `k1` controls term-frequency saturation, while `b` controls
+chunk-length normalization relative to `avgdl`. The fixed baseline parameters are
+`k1 = 1.5` and `b = 0.75`; they were selected before the first v2 run and were not
+tuned against its results. Zero-score chunks are omitted, and equal scores are ordered
+by ascending `chunk_id`.
 
 ## Retrieval Evaluation Datasets
 
@@ -124,6 +148,7 @@ Run the frozen v2 baseline with:
 ```powershell
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy simple
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy idf
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
 ```
 
 The original v1 dataset remains selectable with `--dataset
@@ -145,60 +170,87 @@ silently rewriting v2.
 The v1 values are the historical three-document baseline recorded before corpus
 expansion. The v2 values use the frozen seven-document, 25-chunk corpus.
 
-| Dataset | Metric | Simple overlap | Rarity-aware IDF |
-| --- | --- | ---: | ---: |
-| v1 (10 cases) | Hit@1 | 0.9000 | 1.0000 |
-| v1 (10 cases) | Hit@3 | 1.0000 | 1.0000 |
-| v1 (10 cases) | Mean Recall@3 | 0.9500 | 0.9500 |
-| v2 (28 cases) | Hit@1 | 0.7857 | 0.8571 |
-| v2 (28 cases) | Hit@3 | 0.8929 | 0.9286 |
-| v2 (28 cases) | Mean Recall@3 | 0.8155 | 0.8452 |
+| Dataset | Metric | Simple overlap | Rarity-aware IDF | BM25 |
+| --- | --- | ---: | ---: | ---: |
+| v1 (10 cases) | Hit@1 | 0.9000 | 1.0000 | 0.9000 |
+| v1 (10 cases) | Hit@3 | 1.0000 | 1.0000 | 1.0000 |
+| v1 (10 cases) | Mean Recall@3 | 0.9500 | 0.9500 | 0.9500 |
+| v2 (28 cases) | Hit@1 | 0.7857 | 0.8571 | 0.7857 |
+| v2 (28 cases) | Hit@3 | 0.8929 | 0.9286 | 0.9643 |
+| v2 (28 cases) | Mean Recall@3 | 0.8155 | 0.8452 | 0.8810 |
 
-An optional v1 regression run against the expanded 25-chunk corpus reproduced the same
-v1 metrics and failure lists for both strategies.
+The v1 regression against the expanded 25-chunk corpus reproduced the existing simple
+and IDF values. BM25 reached `0.9000 / 1.0000 / 0.9500`; its only Hit@1 miss was
+`error_code_exact`, and `product_failure_context_multiple` retained incomplete
+Recall@3.
 
 The v2 failure lists are:
 
-| Failure | Simple overlap | Rarity-aware IDF |
-| --- | --- | --- |
-| Hit@1 misses | `station_quality_role`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_invalid_after_work`, `calibration_procedure`, `qv1_role_short` | `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` |
-| Hit@3 misses | `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `s02_recovery_verification`, `calibration_procedure` |
-| Incomplete Recall@3 | `product_failure_context_multiple`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `calibration_procedure`, `service_evidence_multiple`, `vision_recovery_multiple` |
+| Failure | Simple overlap | Rarity-aware IDF | BM25 |
+| --- | --- | --- | --- |
+| Hit@1 misses | `station_quality_role`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_invalid_after_work`, `calibration_procedure`, `qv1_role_short` | `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `error_code_exact`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple` |
+| Hit@3 misses | `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `s02_recovery_verification`, `calibration_procedure` | `s02_recovery_verification` |
+| Incomplete Recall@3 | `product_failure_context_multiple`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `calibration_procedure`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `service_evidence_multiple`, `vision_recovery_multiple` |
 
 ## v2 Results by Category
 
-| Category (n) | Simple H@1 | Simple H@3 | Simple MR@3 | IDF H@1 | IDF H@3 | IDF MR@3 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Exact identifiers (15) | 0.8667 | 0.8667 | 0.7889 | 0.8667 | 0.9333 | 0.8444 |
-| Natural language (17) | 0.7059 | 0.8824 | 0.8235 | 0.8235 | 0.8824 | 0.8235 |
-| Rare terms (7) | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 1.0000 | 0.9286 |
-| Common-term ambiguity (14) | 0.7143 | 0.7857 | 0.7857 | 0.7857 | 0.8571 | 0.8571 |
-| Multi-relevance (9) | 0.8889 | 1.0000 | 0.7593 | 0.8889 | 1.0000 | 0.7407 |
-| Short queries (5) | 0.8000 | 0.8000 | 0.8000 | 0.8000 | 1.0000 | 0.9000 |
-| Longer technical queries (5) | 1.0000 | 1.0000 | 0.6667 | 1.0000 | 1.0000 | 0.7333 |
-| Cross-document ambiguity (20) | 0.7500 | 0.9000 | 0.7917 | 0.8500 | 0.9500 | 0.8333 |
-| Term-frequency-sensitive (4) | 0.5000 | 0.7500 | 0.6250 | 0.5000 | 0.7500 | 0.6250 |
-| Length-sensitive (6) | 0.8333 | 1.0000 | 0.7222 | 0.8333 | 1.0000 | 0.7778 |
+| Category (n) | Simple H@1/H@3/MR@3 | IDF H@1/H@3/MR@3 | BM25 H@1/H@3/MR@3 |
+| --- | --- | --- | --- |
+| Exact identifiers (15) | 0.8667 / 0.8667 / 0.7889 | 0.8667 / 0.9333 / 0.8444 | 0.8000 / 1.0000 / 0.9111 |
+| Natural language (17) | 0.7059 / 0.8824 / 0.8235 | 0.8235 / 0.8824 / 0.8235 | 0.7647 / 0.9412 / 0.8824 |
+| Rare terms (7) | 1.0000 / 1.0000 / 1.0000 | 1.0000 / 1.0000 / 0.9286 | 0.8571 / 1.0000 / 0.9286 |
+| Common-term ambiguity (14) | 0.7143 / 0.7857 / 0.7857 | 0.7857 / 0.8571 / 0.8571 | 0.7857 / 0.9286 / 0.9286 |
+| Multi-relevance (9) | 0.8889 / 1.0000 / 0.7593 | 0.8889 / 1.0000 / 0.7407 | 0.7778 / 1.0000 / 0.7407 |
+| Short queries (5) | 0.8000 / 0.8000 / 0.8000 | 0.8000 / 1.0000 / 0.9000 | 0.8000 / 1.0000 / 0.9000 |
+| Longer technical queries (5) | 1.0000 / 1.0000 / 0.6667 | 1.0000 / 1.0000 / 0.7333 | 0.8000 / 1.0000 / 0.7333 |
+| Cross-document ambiguity (20) | 0.7500 / 0.9000 / 0.7917 | 0.8500 / 0.9500 / 0.8333 | 0.8000 / 0.9500 / 0.8333 |
+| Term-frequency-sensitive (4) | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 1.0000 / 0.8750 |
+| Length-sensitive (6) | 0.8333 / 1.0000 / 0.7222 | 0.8333 / 1.0000 / 0.7778 | 0.6667 / 1.0000 / 0.7778 |
 
-## Known Failure Patterns
+## Ranking Differences and Interpretation
 
-Both strategies miss paraphrases and morphological variants because they have no
-stemming or semantic signal. This is visible in `s02_recovery_verification` and
-`calibration_procedure`. Common vocabulary and deterministic chunk-ID tie-breaking can
-outrank the intended passage, especially for short queries such as `qv1_role_short`.
-Multi-relevance cases often retrieve one correct chunk but lose a complementary passage
-to a partially matching competitor; IDF improves aggregate v2 scores but slightly
-reduces Mean Recall@3 for the multi-relevance category. Both strategies reduce chunks
-to term sets, so repeated central terms provide no term-frequency signal. Neither score
-normalizes for chunk length.
+Selected BM25 Top-3 rankings show where the new signals help and where lexical overlap
+still dominates incorrectly:
 
-These measured gaps make BM25 a useful next comparison: it can add term-frequency
-saturation and length normalization without changing the established lexical boundary.
-That comparison must use the frozen v2 corpus and ground truth unchanged.
+| Case | BM25 rank 1 | BM25 rank 2 | BM25 rank 3 |
+| --- | --- | --- | --- |
+| `error_code_exact` | `station_s04::chunk-002` (6.2842) | `error_codes::chunk-002` (5.5117) | `error_codes::chunk-001` (3.9496) |
+| `positioning_causes_natural` | `station_s02::chunk-001` (8.5921) | `station_s02::chunk-002` (5.6584) | `maintenance::chunk-002` (2.7372) |
+| `s02_recovery_verification` | `station_s02::chunk-003` (4.7327) | `troubleshooting_service::chunk-002` (4.5982) | `maintenance::chunk-002` (4.4223) |
+| `calibration_procedure` | `vision_calibration::chunk-002` (5.7888) | `vision_calibration::chunk-003` (4.8377) | `vision_calibration::chunk-004` (4.5653) |
+| `qv1_role_short` | `production_quality::chunk-002` (3.1451) | `vision_calibration::chunk-001` (2.3338) | `station_s04::chunk-001` (1.5720) |
+| `service_evidence_multiple` | `troubleshooting_service::chunk-002` (8.5692) | `production_quality::chunk-003` (8.3476) | `maintenance::chunk-003` (5.4675) |
+| `vision_recovery_multiple` | `troubleshooting_service::chunk-003` (13.0595) | `vision_calibration::chunk-001` (9.4296) | `vision_calibration::chunk-004` (8.8271) |
+
+BM25's main gain is recall depth. `calibration_procedure` moves from a Hit@3 miss under
+simple and IDF to rank 2 because repeated matching terms and length normalization make
+the procedure passage competitive. `qv1_role_short` remains wrong at rank 1 but is a
+Hit@3, as under IDF. `vision_recovery_multiple` retains IDF's two of three relevant
+chunks, improving over simple's one. The term-frequency-sensitive category improves
+strongly at Hit@3 and Mean Recall@3, consistent with the intended TF saturation and
+length normalization signals.
+
+The trade-off is weaker rank-1 precision. `error_code_exact` changes from a correct IDF
+rank 1 to rank 2 because the shorter station passage repeats the matching identifier
+and receives a stronger normalized contribution. `service_evidence_multiple` keeps
+Recall@3 at 0.5 but loses Hit@1 when the recurring-failure passage accumulates more
+matching terms than the expected evidence passages. BM25 does not improve aggregate
+Multi-Relevance recall over IDF and reduces its Hit@1.
+
+`positioning_causes_natural` and `s02_recovery_verification` are fundamentally hard for
+these lexical strategies: phrases such as "commanded location" versus "target
+position", and "prove ... ready after repair" versus "confirm homing, run one dry
+cycle, and inspect", share too little discriminating vocabulary. BM25 cannot create
+missing synonym or semantic relationships. `qv1_role_short` is also lexically
+underspecified, so a more specific outcome passage matches better than the intended
+overview. Several remaining incomplete Multi-Relevance cases express multiple intents
+whose complementary passages compete for only three result positions.
 
 ## Known Limits
 
 The corpus remains intentionally small and manually inspectable rather than production
-scale. Section-position IDs can shift after structural document edits, and there is no
-index persistence or freshness management. Final-answer grounding and agent query
-quality are not evaluated by this retrieval baseline.
+scale. BM25 still has no stemming, synonyms, phrase model, query expansion, or semantic
+understanding. Its fixed parameters have not been tested across a larger corpus.
+Section-position IDs can shift after structural document edits, and there is no index
+persistence or freshness management. Final-answer grounding and agent query quality
+are not evaluated by this retrieval baseline.

@@ -37,10 +37,10 @@ Neither baseline evaluates natural-language final-answer quality.
 
 An isolated `DocumentationSearchCapability.search_documentation(query)` now searches a
 small versioned local technical knowledge base through an inner `KnowledgeRetriever`
-port. Two deterministic in-memory lexical adapters provide simple term-overlap and
-rarity-aware IDF ranking. Results retain document, source, chunk, score, and metadata
-provenance. Retrieval is intentionally not yet exposed as a `TroubleshootingAgent`
-tool.
+port. Three deterministic in-memory lexical adapters provide simple term-overlap,
+rarity-aware IDF, and BM25 ranking. Results retain document, source, chunk, score, and
+metadata provenance. Retrieval is intentionally not yet exposed as a
+`TroubleshootingAgent` tool.
 
 No LLM framework, MCP server, vector database, or multi-agent framework is introduced yet.
 
@@ -89,11 +89,12 @@ exact scoring formulas and interpretation.
 
 ## Manual Retrieval Eval
 
-Run the frozen v2 retrieval baseline against both unchanged local strategies:
+Run the frozen v2 retrieval baseline against all three local strategies:
 
 ```powershell
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy simple
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy idf
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
 ```
 
 The JSON report contains Hit@1, Hit@3, Mean Recall@3, per-case expected and actual

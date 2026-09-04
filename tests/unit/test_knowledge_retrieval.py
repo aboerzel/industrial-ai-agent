@@ -7,8 +7,13 @@ import pytest
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
 from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
+    DEFAULT_BM25_B,
+    DEFAULT_BM25_K1,
+    InMemoryBm25KnowledgeRetriever,
     InMemoryIdfKnowledgeRetriever,
     InMemoryLexicalKnowledgeRetriever,
+    bm25_inverse_document_frequency,
+    bm25_term_frequency_weight,
     load_markdown_chunks,
     smoothed_inverse_document_frequency,
 )
@@ -300,9 +305,130 @@ def test_idf_retriever_enforces_top_k_and_preserves_provenance() -> None:
         assert result.relevance_score is not None
 
 
+def test_bm25_retriever_counts_term_and_document_frequency() -> None:
+    retriever = InMemoryBm25KnowledgeRetriever(
+        (
+            knowledge_chunk("a::chunk-001", "target target common"),
+            knowledge_chunk("b::chunk-001", "target common common"),
+            knowledge_chunk("c::chunk-001", "common only"),
+        )
+    )
+
+    assert retriever.term_frequency("a::chunk-001", "TARGET!!!") == 2
+    assert retriever.term_frequency("b::chunk-001", "target") == 1
+    assert retriever.document_frequency("target") == 2
+    assert retriever.document_frequency("missing") == 0
+
+
+def test_bm25_idf_uses_robertson_sparck_jones_formula() -> None:
+    actual = bm25_inverse_document_frequency(
+        total_chunks=3,
+        document_frequency=1,
+    )
+
+    assert actual == pytest.approx(log(1 + (3 - 1 + 0.5) / (1 + 0.5)))
+
+
+def test_bm25_calculates_average_chunk_length() -> None:
+    retriever = InMemoryBm25KnowledgeRetriever(
+        (
+            knowledge_chunk("a::chunk-001", "one two"),
+            knowledge_chunk("b::chunk-001", "one two three four"),
+        )
+    )
+
+    assert retriever.average_chunk_length == 3.0
+
+
+def test_bm25_term_frequency_saturates() -> None:
+    weights = tuple(
+        bm25_term_frequency_weight(
+            term_frequency=term_frequency,
+            chunk_length=10,
+            average_chunk_length=10,
+        )
+        for term_frequency in (1, 2, 3)
+    )
+
+    assert weights[0] < weights[1] < weights[2]
+    assert weights[1] - weights[0] > weights[2] - weights[1]
+
+
+def test_bm25_length_normalization_favors_shorter_equal_tf_chunk() -> None:
+    short_weight = bm25_term_frequency_weight(
+        term_frequency=2,
+        chunk_length=4,
+        average_chunk_length=8,
+    )
+    long_weight = bm25_term_frequency_weight(
+        term_frequency=2,
+        chunk_length=12,
+        average_chunk_length=8,
+    )
+
+    assert short_weight > long_weight
+    assert DEFAULT_BM25_K1 == 1.5
+    assert DEFAULT_BM25_B == 0.75
+
+
+def test_bm25_term_frequency_affects_ranking_at_equal_length() -> None:
+    retriever = InMemoryBm25KnowledgeRetriever(
+        (
+            knowledge_chunk("once::chunk-001", "target filler filler"),
+            knowledge_chunk("twice::chunk-001", "target target filler"),
+        )
+    )
+
+    results = retriever.search("target", limit=2)
+
+    assert [result.chunk_id for result in results] == [
+        "twice::chunk-001",
+        "once::chunk-001",
+    ]
+
+
+def test_bm25_ranking_is_deterministic_and_breaks_ties_by_chunk_id() -> None:
+    retriever = InMemoryBm25KnowledgeRetriever(
+        (
+            knowledge_chunk("b::chunk-001", "shared term"),
+            knowledge_chunk("a::chunk-001", "shared term"),
+        )
+    )
+
+    first_results = retriever.search("shared", limit=2)
+    second_results = retriever.search("shared", limit=2)
+
+    assert first_results == second_results
+    assert [result.chunk_id for result in first_results] == [
+        "a::chunk-001",
+        "b::chunk-001",
+    ]
+
+
+def test_bm25_preserves_identifiers_top_k_and_provenance() -> None:
+    chunks = load_markdown_chunks(KNOWLEDGE_BASE_PATH)
+    original_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    results = InMemoryBm25KnowledgeRetriever(chunks).search("E-STOP-17 S04", limit=2)
+
+    assert len(results) == 2
+    assert results[0].chunk_id == "station_s04::chunk-002"
+    for result in results:
+        original = original_by_id[result.chunk_id]
+        assert result.content == original.content
+        assert result.document_id == original.document_id
+        assert result.source == original.source
+        assert result.metadata == original.metadata
+        assert result.relevance_score is not None
+        assert result.relevance_score > 0
+
+
 @pytest.mark.parametrize(
     "retriever_factory",
-    [InMemoryLexicalKnowledgeRetriever, InMemoryIdfKnowledgeRetriever],
+    [
+        InMemoryLexicalKnowledgeRetriever,
+        InMemoryIdfKnowledgeRetriever,
+        InMemoryBm25KnowledgeRetriever,
+    ],
 )
 def test_retrieval_implementations_fulfill_same_port_contract(
     retriever_factory: RetrieverFactory,
@@ -317,4 +443,5 @@ def test_retrieval_implementations_fulfill_same_port_contract(
 
     assert len(results) == 1
     assert results[0].chunk_id == "a::chunk-001"
-    assert results[0].relevance_score == 1.0
+    assert results[0].relevance_score is not None
+    assert results[0].relevance_score > 0
