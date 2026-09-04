@@ -42,20 +42,21 @@ die tatsächlichen begrenzten Trajectories und Termination Status mit strukturie
 Ground Truth. Keine der beiden Baselines bewertet die natürlichsprachliche Qualität der
 finalen Antwort.
 
-Eine isolierte `DocumentationSearchCapability.search_documentation(query)` durchsucht
+Eine isolierte `DocumentationSearchCapability.search_documentation(query, top_k=3)` durchsucht
 jetzt eine kleine versionierte lokale technische Knowledge Base über einen inneren
 `KnowledgeRetriever`-Port. Drei deterministische lexical In-Memory-Adapter bieten
 einfaches Term-Overlap-, rarity-aware IDF- und BM25-Ranking. Die Results erhalten
-Document-, Source-, Chunk-, Score- und Metadata-Provenance. Retrieval ist bewusst noch
-nicht als Tool des `TroubleshootingAgent` exponiert.
+Document-, Source-, Chunk-, Score- und Metadata-Provenance. LangGraph erhält Retrieval
+ausschließlich über `knowledge_mcp`, nie durch direkte Retriever-Injection.
 
-Ein erster schreibgeschuetzter `factory_mcp`-Server adaptiert die zwei bestehenden
-Capabilities ueber das offizielle MCP SDK v2. stdio bleibt fuer prozessgekoppelte
-Entwicklung und Tests erhalten; derselbe Server laeuft ueber Streamable HTTP an `/mcp`
-als lokaler Docker-Service. Der asynchrone Read-Only-LangGraph-Pfad entdeckt seine zwei
-autorisierten Tools und ruft sie ueber eine stdio- oder HTTP-Session pro Agent Run auf.
-Der direkte LangChain-Tool-Pfad bleibt als Referenz erhalten; es gibt weder MCP-Routing,
-Knowledge MCP noch MCP Write Actions.
+Zwei schreibgeschuetzte MCP-Services adaptieren bestehende Capabilities über das
+offizielle MCP SDK v2. `factory_mcp` exponiert `get_product_history` und
+`get_machine_status`; `knowledge_mcp` exponiert `search_documentation`. Beide
+unterstützen prozessgekoppeltes stdio für Entwicklung/Tests und Streamable HTTP an `/mcp`
+für das Deployment. Der asynchrone LangGraph-Pfad entdeckt und autorisiert Tools aller
+konfigurierten Server, weist doppelte Toolnamen zurück, öffnet pro Server eine Session
+für den Run und ruft Tools sequenziell auf. Der direkte LangChain-Tool-Pfad bleibt
+Referenz; es gibt keinen allgemeinen MCP Router und keine MCP Write Action.
 
 ## Manueller MCP-Smoke-Test
 
@@ -63,37 +64,41 @@ Fuehre den lokalen stdio-Client und -Server ohne LLM oder externen Service aus:
 
 ```powershell
 python scripts/smoke_test_factory_mcp.py
+python scripts/smoke_test_knowledge_mcp.py
 python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp
 ```
 
-Der Smoke gibt Server-Identitaet, die ausgehandelte Protokollversion, die entdeckten
-Tool-Namen und strukturierte Results fuer `get_product_history(P4711)` und
-`get_machine_status(S04)` aus. Der LangGraph-Smoke verwendet fuer seinen vertraulichen
-MCP Run ausschliesslich `local_quality` und gibt MCP Session Discovery sowie die finale
-Trajectory aus.
+Die Server-Smokes geben Discovery und strukturierte Results aus. Der LangGraph-Smoke
+verwendet für seinen vertraulichen Run ausschließlich `local_quality` und prüft
+`get_product_history(P4711) -> get_machine_status(S04) -> search_documentation(...)`.
 
-Um den Netzwerk-Deployment-Pfad auszufuehren, baue und starte nur den lokalen Factory
-Service:
+Um den Netzwerk-Deployment-Pfad auszuführen, baue und starte beide lokalen Services:
 
 ```powershell
-docker compose up --build -d factory-mcp
+docker compose up --build -d factory-mcp knowledge-mcp
 python scripts/smoke_test_factory_mcp.py --transport http
+python scripts/smoke_test_knowledge_mcp.py --transport http
 python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp --mcp-transport http
 ```
 
-Der Container startet standardmaessig an `0.0.0.0:8001`; sein vom SDK verwalteter
-Endpunkt ist `http://127.0.0.1:8001/mcp`. Er enthaelt keine `.env`, Secrets, LLMs oder
-Embedding Models und laeuft als Non-Root User. Eine HTTP-MCP-Session umfasst Discovery
-und alle sequenziellen Tool Calls eines Agent Runs und wird danach geschlossen. Docker
-stellt reproduzierbares Service Deployment bereit, MCP das Tool-Protokoll und die
-Discovery. Der nicht authentifizierte HTTP Endpunkt ist nur fuer diese lokale Demo
-akzeptiert; Remote- oder Production-Deployment benoetigt explizite MCP Authentication
-und Transport Security. MCP Network Transport autorisiert keinen Model Egress: Das
-vertrauliche Troubleshooting verwendet unter ADR-009 weiter das lokale Profile und
-sendet Factory Results nie an `public_fast`.
+Factory startet standardmäßig an `0.0.0.0:8001` und Knowledge an `0.0.0.0:8002`; ihre
+SDK-verwalteten Endpunkte sind `http://127.0.0.1:8001/mcp` und
+`http://127.0.0.1:8002/mcp`. Beide Images laufen als Non-Root-User und enthalten weder
+`.env` noch Secrets. Das Knowledge-Image enthält keine Modellartefakte: Compose nutzt den
+Host-Ollama-Endpunkt für `qwen3-embedding:0.6b`, verwendet standardmäßig CPU für den
+Reranker und mountet einen vorab gefüllten benannten Hugging-Face-Cache read-only. Fülle
+ihn vor dem Start mit `hf download BAAI/bge-reranker-v2-m3` im Volume; lokale
+In-Process-Ausführung wählt weiterhin CUDA, falls verfügbar. Docker deployt Prozesse,
+MCP liefert Tool-Protokoll und Discovery. Die nicht authentifizierten HTTP-Endpunkte sind
+nur für diese lokale Demo akzeptiert; Remote- oder Production-Deployment benötigt MCP
+Authentication und Transport Security. MCP-Netzwerktransport autorisiert keinen Model
+Egress: Vertrauliches Troubleshooting nutzt unter ADR-009 das lokale Profile; Knowledge-
+Queries, Chunks, Embeddings und Reranker-Inputs erreichen nie `public_fast` oder einen
+Public Provider.
 
-Das aktuelle stabile Release von `langchain-mcp-adapters` bleibt mit MCP SDK v2
-inkompatibel, deshalb wird die temporaere projekteeigene Bridge bewusst beibehalten.
+Das aktuelle stabile Release von `langchain-mcp-adapters` (`0.3.2`) besitzt weiterhin
+keine veröffentlichte MCP-SDK-v2-Unterstützung, deshalb bleibt die temporäre
+projekteeigene Bridge bewusst erhalten.
 
 ## Manuelle Model-Profile-Smoke-Tests
 

@@ -756,6 +756,13 @@ Do not leave architecture diagrams stale when the surrounding prose is updated.
 
 ---
 
+## Docker Deployment
+
+Project-specific Dockerfiles must be named `Dockerfile.<deployable-service-name>`,
+for example `Dockerfile.factory-mcp`, `Dockerfile.knowledge-mcp`,
+`Dockerfile.vision-mcp`, or `Dockerfile.agent-api`. Third-party service images do not
+require a project Dockerfile unless the project actually builds a custom image for them.
+
 ## Git
 
 Keep commits focused.

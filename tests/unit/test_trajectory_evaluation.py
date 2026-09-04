@@ -20,6 +20,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATASET_PATH = (
     PROJECT_ROOT / "evals" / "datasets" / "troubleshooting_trajectory_v1.jsonl"
 )
+KNOWLEDGE_MCP_DATASET_PATH = (
+    PROJECT_ROOT
+    / "evals"
+    / "datasets"
+    / "troubleshooting_mcp_knowledge_trajectory_v1.jsonl"
+)
 
 
 def product_call(product_id: str = "P4711") -> ExecutedToolCall:
@@ -129,6 +135,21 @@ def test_versioned_dataset_contains_representative_trajectory_types() -> None:
     assert 1 in trajectory_lengths
     assert 2 in trajectory_lengths
     assert all(case.expected_status is AgentRunStatus.SUCCESS for case in cases)
+
+
+def test_knowledge_mcp_dataset_has_an_explicit_three_tool_trajectory() -> None:
+    cases = load_eval_cases(KNOWLEDGE_MCP_DATASET_PATH)
+
+    assert len(cases) == 1
+    assert [call.tool for call in cases[0].expected_trajectory] == [
+        "get_product_history",
+        "get_machine_status",
+        "search_documentation",
+    ]
+    assert cases[0].expected_trajectory[-1].arguments == {
+        "query": "E-STOP-17 at S04",
+        "top_k": 3,
+    }
 
 
 def test_exact_two_tool_trajectory_is_fully_correct() -> None:

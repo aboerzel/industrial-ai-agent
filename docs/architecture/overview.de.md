@@ -10,8 +10,8 @@ kann zusätzlich eine explizit injizierte Demonstrations-Action-Capability erhal
 für Human Approval pausiert. Fokussierte
 deterministische Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige
 begrenzte Trajectories für beide Pfade. Lokale lexical, semantische, hybride und rerankte
-Knowledge-Retrieval-Strategien sind hinter einem inneren Port implementiert, aber noch
-nicht in den Agenten integriert. Ein
+Knowledge-Retrieval-Strategien sind hinter einem inneren Port implementiert und werden
+dem LangGraph-MCP-Pfad nur über `knowledge_mcp` bereitgestellt. Ein
 deterministischer Model-Egress-Decorator mit Deny-by-default prüft die explizite
 Request-Klassifikation gegen die validierte Execution Zone jedes Model Profiles, bevor
 der Provider Adapter aufgerufen wird. LangGraph und LangChain Core werden nun gezielt
@@ -19,16 +19,16 @@ für den parallelen Orchestrierungspfad verwendet. Ein explizit injizierter
 `InMemorySaver` unterstützt lokale/Test-Checkpoint- und HITL-Demonstrationen, ist aber
 keine dauerhafte Persistenz. Es existieren weder dynamische Tool Registry, produktives
 Persistenz-Backend, LangSmith-Integration noch allgemeines Eval-Framework.
-Ein schreibgeschuetzter `factory_mcp`-Server exponiert nun die bestehenden
-Produktionshistorie- und Maschinenstatus-Capabilities ueber das offizielle MCP SDK v2.
-Er behaelt stdio fuer prozessgekoppelte Entwicklung und deterministische Tests und laeuft
-in der lokalen Docker-Demo als eigenstaendig deploybarer Streamable-HTTP-`/mcp`-Service.
-Der parallele `LangGraphTroubleshootingAgent` besitzt einen expliziten asynchronen
-MCP-Pfad: Eine Session entdeckt autorisierte Tools, uebersetzt sie ueber eine temporaere
-LangChain-Bridge und fuehrt den sequenziellen Read-Only-Loop aus, bevor die Session
-geschlossen wird. Die Transportauswahl erfolgt an einer aeusseren Composition Root; der
-handgeschriebene Pfad und der urspruengliche direkte LangChain-Tool-Pfad bleiben als
-Referenz erhalten.
+Zwei schreibgeschuetzte MCP-Services exponieren bestehende Capabilities ueber das
+offizielle MCP SDK v2. `factory_mcp` liefert Produktionshistorie und Maschinenstatus;
+`knowledge_mcp` liefert Documentation Search. Beide behalten stdio fuer
+prozessgekoppelte Entwicklung und deterministische Tests und laufen als getrennte
+Streamable-HTTP-`/mcp`-Docker-Services. Der parallele
+`LangGraphTroubleshootingAgent` oeffnet pro explizit konfiguriertem Server eine Session,
+entdeckt und autorisiert Tools ueber die temporaere LangChain-Bridge, fuehrt den
+begrenzten sequenziellen Loop aus und schliesst danach alle Sessions. Die
+Transportauswahl erfolgt an einer aeusseren Composition Root; handgeschriebener Pfad und
+direkter LangChain-Tool-Pfad bleiben Referenzpfade.
 
 Der implementierte Request Flow ist:
 
@@ -62,6 +62,7 @@ flowchart LR
         KB["Versionierte lokale Markdown Knowledge Base"]
         OLLAMA["Lokales Ollama qwen3-embedding:0.6b"]
         FMCP["factory_mcp MCP Server"]
+        KMCP["knowledge_mcp MCP Server"]
         MCPCLIENT["Offizieller MCP stdio / Streamable-HTTP Client"]
         MCPBRIDGE["Temporaere MCP v2 zu LangChain Bridge"]
         LG["LangGraph MCP Read-Only Path"]
@@ -92,7 +93,9 @@ flowchart LR
     OEC --> OLLAMA
     FMCP --> PHC
     FMCP --> MSC
+    KMCP --> DSC
     MCPCLIENT --> FMCP
+    MCPCLIENT --> KMCP
     LG --> MCPBRIDGE
     MCPBRIDGE --> MCPCLIENT
 
@@ -101,7 +104,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,MCPCLIENT,MCPBRIDGE,LG adapter
+    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,KMCP,MCPCLIENT,MCPBRIDGE,LG adapter
 ```
 
 Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
@@ -116,26 +119,31 @@ verwenden ihre vorbereiteten In-Memory-Indizes. Der semantische Adapter erhält 
 separaten inneren `EmbeddingClient`-Port, baut Dokumentvektoren in LangChains
 `InMemoryVectorStore` und embedded zur Runtime nur die Query über lokales Ollama.
 
-`factory_mcp` ist ein Infrastructure-Transportadapter und keine weitere Source of Truth
-fuer Factory-Semantik. Seine zwei Handler delegieren an injizierte Capabilities und
-geben MCP Structured Content zurueck. stdio bleibt der prozessgekoppelte Entwicklungs-
-und Testtransport. Streamable HTTP ist der Deployment-Transport: Derselbe SDK Server
-laeuft in einem Non-Root-Python-3.12-Docker-Container und Compose mappt seinen lokalen
-Host-Port auf `/mcp`. Docker isoliert und deployt den Service, implementiert oder ersetzt
-aber nicht MCP. Fuer einen MCP-LangGraph-Run initialisiert der Client genau einmal,
-entdeckt Server Tools, autorisiert nur die zwei schreibgeschuetzten Factory Tools, ruft
-sie sequenziell auf und schliesst nach Abschluss des Graphen. Die Bridge erstellt
-LangChain-`StructuredTool`-Objekte aus den entdeckten MCP Schemas und erwartet ihren
-Aufruf; sie enthaelt keine Fachlogik. Sie ist ein **TEMPORARY COMPATIBILITY ADAPTER**,
-bis ein stabiles `langchain-mcp-adapters`-Release MCP SDK v2 unterstuetzt.
+`factory_mcp` und `knowledge_mcp` sind Infrastructure-Transportadapter und keine Quellen
+fuer Factory- oder Retrieval-Semantik. Factory delegiert an seine zwei injizierten
+Capabilities; Knowledge delegiert `search_documentation(query, top_k=3)` an die
+bestehende Documentation-Search-Capability. Seine Default-Composition ist die
+eingefrorene lokale Pipeline: BM25- plus Semantic-Candidates, RRF und danach
+`BAAI/bge-reranker-v2-m3`, mit stabiler Chunk-Provenance als MCP Structured Content.
+stdio ist prozessgekoppelter Entwicklungs-/Testtransport. Streamable HTTP ist
+Deployment-Transport: getrennte Non-Root-Python-3.12-Container exponieren `/mcp` an den
+Compose-Host-Ports `8001` und `8002`. Docker deployt Prozesse, implementiert oder
+ersetzt aber MCP nicht. Fuer einen LangGraph-Run initialisiert und entdeckt der Client
+jeden konfigurierten Server einmal, weist doppelte Namen zurueck, ruft autorisierte Tools
+sequenziell auf und schliesst jede Session nach Graph-Abschluss. Die Bridge erstellt
+LangChain-`StructuredTool`-Objekte aus entdeckten MCP Schemas und besitzt keine
+Fachlogik. Sie ist ein **TEMPORARY COMPATIBILITY ADAPTER**, bis ein stabiles
+`langchain-mcp-adapters`-Release MCP SDK v2 unterstuetzt.
 
 Der MCP-Pfad ersetzt ADR-009 nicht: Jeder Graph Model Call laeuft weiterhin durch
-`EgressCheckedLLMClient`. Eine lokale HTTP-Verbindung zum Factory Container ist
-Service-Transport, keine Erlaubnis zum Egress von Tool-Daten an ein oeffentliches Model.
-Die lokale Docker-Demo hat keine MCP Authentication; Remote- oder Production-Exponierung
-benoetigt ein explizites zukuenftiges Authentication- und Transport-Security-Design.
-Dieser Slice ergaenzt weder MCP Write Tools, MCP HITL, Knowledge MCP, einen
-Multi-Server-Router noch automatische Fallbacks.
+`EgressCheckedLLMClient`. Lokale HTTP-Verbindungen zu Factory- und Knowledge-Containern
+sind Service-Transport, keine Erlaubnis zum Egress von Tool-Daten an ein oeffentliches
+Model. Knowledge MCP verwendet lokale Ollama-Embeddings und einen lokalen Hugging-Face-
+Cache fuer Reranking; Queries, Chunks, Embeddings und Reranker-Inputs erreichen keinen
+Public Provider. Die lokale Docker-Demo hat keine MCP Authentication; Remote- oder
+Production-Exponierung benoetigt explizite zukuenftige Authentication und Transport
+Security. Dieser Slice ergaenzt weder MCP Write Tools, MCP HITL, allgemeines
+Multi-Server-Routing noch automatische Fallbacks.
 
 ## Knowledge-Retrieval-Baseline
 
@@ -501,8 +509,9 @@ Die aktuellen Capabilities sind
 `MachineStatusCapability.get_machine_status(station_id)`. Sie geben die
 Pydantic-Modelle `ProductHistoryResult` und `MachineStatusResult` zurück, jeweils
 einschließlich strukturierter Not-found-Ergebnisse. Die isolierte
-`DocumentationSearchCapability.search_documentation(query)` gibt strukturierte
-`DocumentationSearchResult`-Daten zurück und wird noch nicht als Agent Tool angeboten.
+`DocumentationSearchCapability.search_documentation(query, top_k=3)` gibt strukturierte
+`DocumentationSearchResult`-Daten zurück. LangGraph erhält sie ausschließlich über
+entdeckte und autorisierte `knowledge_mcp`-Tools, nie durch direkte Retriever-Injection.
 `MaintenanceTicketCapability.create_maintenance_ticket(...)` ist eine optionale
 LangGraph-only Demonstrations-Action. Ihre deterministische Approval-Grenze führt sie
 erst nach expliziter Genehmigung aus; der handgeschriebene Referenzpfad exponiert sie

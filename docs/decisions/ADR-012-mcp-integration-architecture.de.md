@@ -23,11 +23,16 @@ dem ersten Server ein ADR erforderlich.
 Das offizielle MCP Python SDK v2 wird als MCP-Protokollimplementierung verwendet.
 Protokoll, Discovery, Schemas oder Transports werden nicht selbst implementiert.
 
-Der erste `factory_mcp`-Server ist ein Infrastructure-Adapter. Er exponiert genau diese
-schreibgeschuetzten Tools:
+Jeder MCP-Server ist ein Infrastructure-Adapter ueber einen begrenzten, fachlich
+kohärenten Capability-Bereich. Die ersten beiden Server sind `factory_mcp` und
+`knowledge_mcp`. `factory_mcp` exponiert genau diese schreibgeschuetzten Tools:
 
 * `get_product_history(product_id)` fuer historische Produktionsinformationen.
 * `get_machine_status(station_id)` fuer den aktuellen Zustand einer Station.
+
+`knowledge_mcp` exponiert genau `search_documentation(query, top_k=3)`. Es delegiert an
+die bestehende Documentation-Search-Capability und ihren `KnowledgeRetriever`-Port; der
+MCP-Handler besitzt weder Ingestion, Chunking, Embeddings, Fusion noch Reranking.
 
 Die Tool-Handler delegieren an injizierte bestehende Capabilities. Domain Models,
 Repository Ports, Repositories und Capability-Semantik bleiben die Source of Truth;
@@ -40,7 +45,7 @@ Clients muessen Tools ueber das Protokoll vom MCP-Server entdecken. Sie duerfen 
 separaten statischen Tool-Katalog pflegen. Ein kleiner Client des offiziellen SDKs zeigt
 Initialisierung, Tool Listing und Aufrufe.
 
-`factory_mcp` unterstuetzt zwei Transports des offiziellen SDK v2 ueber dieselbe
+Jeder MCP-Server unterstuetzt zwei Transports des offiziellen SDK v2 ueber dieselbe
 Serverinstanz und dieselben Tool-Definitionen:
 
 * stdio bleibt fuer prozessgekoppelte lokale Entwicklung und deterministische Tests
@@ -55,19 +60,21 @@ zustandsbehaftete Streamable-HTTP-Session, initialisiert sie, entdeckt Tools ein
 fuehrt die sequenziellen Calls aus und schliesst sie nach dem Run. Er erzeugt weder eine
 Session pro Tool Call noch einen Connection Pool.
 
-Die erste deploybare Variante ist ein schlankes Python-3.12-Docker-Image, das nur die
-Runtime Dependencies des Factory Servers enthaelt, als Non-Root User laeuft und
-Streamable HTTP standardmaessig startet. Die lokale Compose-Demo mappt einen Host-Port
-auf diesen Service. Docker ist ein Deployment- und Process-Isolation-Mechanismus, kein
-Bestandteil von MCP und kein Ersatz fuer dessen Protokoll-Semantik. Internes Docker
-Networking, Reverse Proxy, TLS und ein Agent Container bleiben zukuenftige Arbeit.
+Die ersten deploybaren Varianten sind schlanke Python-3.12-Docker-Images, die nur die
+Runtime Dependencies ihres Servers enthalten, als Non-Root User laufen und Streamable
+HTTP standardmaessig starten. Die lokale Compose-Demo mappt je einen Host-Port auf die
+Services. Docker ist ein Deployment- und Process-Isolation-Mechanismus, kein Bestandteil
+von MCP und kein Ersatz fuer dessen Protokoll-Semantik. Internes Docker Networking,
+Reverse Proxy, TLS und ein Agent Container bleiben zukuenftige Arbeit.
 
 `langchain-mcp-adapters` darf entdeckte MCP-Tools in LangChain Tool Contracts
 uebersetzen. Dieser Adapter ist nur eine Integrationskante. Bis ein stabiles
 MCP-SDK-v2-kompatibles Release vorliegt, bleibt der projekteeigene Compatibility Adapter
-die einzige Bridge. Er erhaelt den transportausgewaehlten MCP Client und exponiert nur
-entdeckte, explizit autorisierte Tools an LangGraph; der Graph kennt weder Docker noch
-Host- oder Port-Details.
+die einzige Bridge. Sie oeffnet jeden explizit konfigurierten MCP Client einmal pro Agent
+Run, entdeckt die Tools jedes Servers und exponiert LangGraph nur entdeckte, explizit
+autorisierte Tools. Toolnamen muessen ueber alle konfigurierten Server eindeutig sein;
+jeder doppelte Name bricht vor dem Binden eines Tools fail closed ab. Der Graph kennt
+weder Docker, Host, Port, Retriever, Embedding-Modell noch Reranker.
 
 MCP ist Transport- und Integrationstechnologie, kein Authorization-, Egress-, Routing-
 oder Agent-Framework. ADR-009 bleibt die massgebliche Model-Egress-Grenze. Eine HTTP-
@@ -84,7 +91,7 @@ Domain Repository Ports und Models
         ^
 Application Capabilities
         ^
-factory_mcp Infrastructure Server Adapter
+factory_mcp / knowledge_mcp Infrastructure Server Adapter
         ^
 MCP Clients / LangChain MCP Adapter
 ```
@@ -125,8 +132,9 @@ MCP-Verfuegbarkeit von einer bestimmten Agent Runtime abhaengig machen.
 
 * MCP wird der Standard fuer den externen Tool-Transport bewusst exponierter
   Projekt-Capabilities.
-* Jeder kuenftige Server bleibt ein Infrastructure-Adapter ueber einer begrenzten Menge
-  bestehender Capabilities; Service-Topologie und Deployment bleiben inkrementelle
+* Jeder Server bleibt ein Infrastructure-Adapter ueber einer begrenzten Menge bestehender
+  Capabilities. Explizit konfigurierte Multi-Server-Discovery wird unterstuetzt;
+  allgemeines Routing, Multiplexing und dynamische Serverauswahl bleiben inkrementelle
   Entscheidungen.
 * Server- und Client-Lifecycle, Protokollkompatibilitaet, Schemas, Structured Results
   und stdio-zu-HTTP-Transportaequivalenz erhalten fokussierte deterministische
@@ -135,8 +143,8 @@ MCP-Verfuegbarkeit von einer bestimmten Agent Runtime abhaengig machen.
   keine Voraussetzung fuer die normale Unit-Test-Suite.
 * Die LangGraph-Integration verwendet denselben entdeckten MCP Tool Path ueber einen
   injizierten Provider; sie konstruiert keinen Container und umgeht keine Egress Control.
-* Multi-Server-Routing, Knowledge MCP, MCP-Authentication ausserhalb der lokalen Demo,
+* Allgemeines Multi-Server-Routing, MCP-Authentication ausserhalb der lokalen Demo,
   Remote-Production-Deployment, Write Tools, Resources, Prompts und MCP-basiertes HITL
-  werden durch dieses ADR weder entschieden noch implementiert.
+  bleiben ausserhalb des Scopes.
 * Eine spaetere Agent-Integration muss vor jedem Model Call weiterhin ADR-008-Routing
   und den finalen Egress Check aus ADR-009 anwenden; MCP schwaecht diese Kontrollen nicht.

@@ -1,0 +1,39 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/home/app/.cache/huggingface \
+    KNOWLEDGE_MCP_KNOWLEDGE_BASE=/app/knowledge_base
+
+WORKDIR /app
+
+RUN groupadd --system app && useradd --system --gid app --create-home app
+
+COPY pyproject.toml ./
+COPY src ./src
+COPY knowledge_base ./knowledge_base
+
+# Keep the image independent from model artifacts and use a CPU-only Torch wheel.
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch==2.7.1+cpu" \
+    && printf "torch==2.7.1+cpu\n" > /tmp/constraints.txt \
+    && pip install --no-cache-dir --constraint /tmp/constraints.txt \
+        "mcp>=2.0,<3.0" \
+        "langchain-core>=1.2,<2.0" \
+        "langchain-ollama>=1.0,<2.0" \
+        "numpy>=2.0" \
+        "pydantic>=2.0" \
+        "sentence-transformers>=5.0,<6.0" \
+    && pip install --no-cache-dir --no-deps . \
+    && mkdir -p "$HF_HOME" \
+    && chown -R app:app /app /home/app
+
+USER app
+
+EXPOSE 8002
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=60s --retries=3 \
+    CMD python -c "import socket; socket.create_connection(('127.0.0.1', 8002), 2).close()"
+
+CMD ["python", "-m", "industrial_ai_agent.infrastructure.knowledge_mcp_server", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8002"]

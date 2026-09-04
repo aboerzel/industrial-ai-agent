@@ -8,6 +8,17 @@ from langchain_core.tools import BaseTool
 
 
 @dataclass(frozen=True, slots=True)
+class McpServerSession:
+    """Protocol metadata discovered from one explicitly configured MCP server."""
+
+    server_id: str
+    server_name: str
+    server_version: str
+    protocol_version: str
+    discovered_tool_names: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class McpToolSession:
     """Authorized tools and protocol metadata for one agent-run MCP session."""
 
@@ -16,6 +27,7 @@ class McpToolSession:
     server_name: str
     server_version: str
     protocol_version: str
+    servers: tuple[McpServerSession, ...] = ()
 
 
 class McpToolProvider(Protocol):

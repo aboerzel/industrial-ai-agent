@@ -20,15 +20,11 @@ from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever im
 from industrial_ai_agent.infrastructure.in_memory_semantic_knowledge_retriever import (
     InMemorySemanticKnowledgeRetriever,
 )
+from industrial_ai_agent.infrastructure.knowledge_retrieval_composition import (
+    create_reranked_knowledge_retriever,
+)
 from industrial_ai_agent.infrastructure.ollama_embedding_client import (
     OllamaEmbeddingClient,
-)
-from industrial_ai_agent.infrastructure.reranked_knowledge_retriever import (
-    DEFAULT_RERANK_CANDIDATE_LIMIT,
-    RerankedKnowledgeRetriever,
-)
-from industrial_ai_agent.infrastructure.sentence_transformers_reranker import (
-    SentenceTransformersCrossEncoderReranker,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -413,23 +409,16 @@ def _create_retriever(
         return InMemoryBm25KnowledgeRetriever(chunks)
     if strategy == "semantic":
         return InMemorySemanticKnowledgeRetriever(chunks, OllamaEmbeddingClient())
-    hybrid_retriever = HybridKnowledgeRetriever(
+    if strategy == "reranked":
+        return create_reranked_knowledge_retriever(chunks)
+    return HybridKnowledgeRetriever(
         chunks,
         bm25_retriever=InMemoryBm25KnowledgeRetriever(chunks),
         semantic_retriever=InMemorySemanticKnowledgeRetriever(
             chunks,
             OllamaEmbeddingClient(),
         ),
-        candidate_limit=(
-            DEFAULT_RERANK_CANDIDATE_LIMIT if strategy == "reranked" else None
-        ),
-    )
-    if strategy == "hybrid":
-        return hybrid_retriever
-    return RerankedKnowledgeRetriever(
-        candidate_retriever=hybrid_retriever,
-        reranker=SentenceTransformersCrossEncoderReranker(),
-        candidate_limit=DEFAULT_RERANK_CANDIDATE_LIMIT,
+        candidate_limit=None,
     )
 
 

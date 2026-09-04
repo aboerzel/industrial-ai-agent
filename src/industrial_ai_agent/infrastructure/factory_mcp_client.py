@@ -18,7 +18,9 @@ class StreamableHttpServerParameters:
     url: str
 
 
-type FactoryMcpTransport = StdioServerParameters | StreamableHttpServerParameters
+type McpTransport = StdioServerParameters | StreamableHttpServerParameters
+# Compatibility alias for existing factory-only callers.
+type FactoryMcpTransport = McpTransport
 
 
 @dataclass(frozen=True)
@@ -37,10 +39,10 @@ class FactoryMcpSmokeResult:
 
 
 @asynccontextmanager
-async def open_factory_mcp_session(
-    transport: FactoryMcpTransport,
+async def open_mcp_session(
+    transport: McpTransport,
 ) -> AsyncIterator[ClientSession]:
-    """Open, initialize, and close one MCP session for either supported transport."""
+    """Open and close one official-SDK session for either supported transport."""
     async with AsyncExitStack() as stack:
         if isinstance(transport, StdioServerParameters):
             read_stream, write_stream = await stack.enter_async_context(
@@ -53,15 +55,17 @@ async def open_factory_mcp_session(
         session = await stack.enter_async_context(
             ClientSession(read_stream, write_stream)
         )
-        await session.initialize()
         yield session
+
+
+open_factory_mcp_session = open_mcp_session
 
 
 async def run_factory_mcp_smoke(
     transport: FactoryMcpTransport,
 ) -> FactoryMcpSmokeResult:
     """Discover and call the read-only tools through an initialized MCP session."""
-    async with open_factory_mcp_session(transport) as session:
+    async with open_mcp_session(transport) as session:
         initialized = await session.initialize()
         listed_tools = await session.list_tools()
         product_history = await session.call_tool(

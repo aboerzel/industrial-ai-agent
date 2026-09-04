@@ -23,11 +23,16 @@ introduced.
 Use the official MCP Python SDK v2 as the MCP protocol implementation. Do not implement
 the protocol, discovery, schemas, or transports manually.
 
-The first `factory_mcp` server is an Infrastructure adapter. It exposes exactly these
-read-only tools:
+Each MCP server is an Infrastructure adapter over one bounded, cohesive capability
+area. The first two servers are `factory_mcp` and `knowledge_mcp`. `factory_mcp`
+exposes exactly these read-only tools:
 
 * `get_product_history(product_id)` for historical production information.
 * `get_machine_status(station_id)` for the current state of a station.
+
+`knowledge_mcp` exposes exactly `search_documentation(query, top_k=3)`. It delegates
+to the existing documentation-search capability and its `KnowledgeRetriever` port; the
+MCP handler does not own ingestion, chunking, embedding, fusion, or reranking logic.
 
 Tool handlers delegate to injected existing capabilities. Domain models, repository
 ports, repositories, and capability semantics remain the source of truth; no business
@@ -39,8 +44,8 @@ Clients must discover tools from the MCP server through the protocol. They must 
 a separate static tool catalogue. A small official-SDK client demonstrates initialization,
 tool listing, and calls.
 
-`factory_mcp` supports two official-SDK v2 transports over the same server instance and
-tool definitions:
+Every MCP server supports two official-SDK v2 transports over the same server instance
+and tool definitions:
 
 * stdio is retained for process-coupled local development and deterministic tests.
 * Streamable HTTP is the deployment transport. The server runs at an externally
@@ -52,18 +57,21 @@ transport. An HTTP client opens one stateful Streamable HTTP session for one age
 initializes it, discovers tools once, makes the sequential calls, and closes it after the
 run. It does not create a session per tool call or add a connection pool.
 
-The first deployable variant is a slim Python 3.12 Docker image that contains only the
-factory server's runtime dependencies, runs as a non-root user, and starts Streamable
-HTTP by default. The local Compose demo maps a host port to that service. Docker is a
-deployment and process-isolation mechanism, not part of MCP or a replacement for its
-protocol semantics. Internal Docker networking, a reverse proxy, TLS, and an agent
-container remain future work.
+The first deployable variants are slim Python 3.12 Docker images that contain only their
+server runtime dependencies, run as non-root users, and start Streamable HTTP by
+default. The local Compose demo maps a host port to each service. Docker is a deployment
+and process-isolation mechanism, not part of MCP or a replacement for its protocol
+semantics. Internal Docker networking, a reverse proxy, TLS, and an agent container
+remain future work.
 
 `langchain-mcp-adapters` may adapt discovered MCP tools to LangChain tool contracts.
 That adapter is an integration edge only. Until it has a stable MCP SDK v2-compatible
-release, the project-owned compatibility adapter remains the single bridge. It receives
-the transport-selected MCP client and exposes only discovered, explicitly authorized
-tools to LangGraph; the graph has no Docker, host, or port knowledge.
+release, the project-owned compatibility adapter remains the single bridge. It opens
+every explicitly configured MCP client once per agent run, discovers each server's
+advertised tools, and exposes only discovered, explicitly authorized tools to LangGraph.
+Tool names must be unique across the configured servers; any duplicate name fails closed
+before a tool is bound. The graph has no Docker, host, port, retriever, embedding-model,
+or reranker knowledge.
 
 MCP is transport and integration technology, not an authorization, egress, routing, or
 agent framework. ADR-009 remains the authoritative model-egress boundary. An HTTP MCP
@@ -80,7 +88,7 @@ Domain repository ports and models
         ^
 Application capabilities
         ^
-factory_mcp Infrastructure server adapter
+factory_mcp / knowledge_mcp Infrastructure server adapters
         ^
 MCP clients / LangChain MCP adapter
 ```
@@ -121,16 +129,17 @@ MCP availability dependent on a particular agent runtime.
 
 * MCP becomes the standard external tool transport for deliberately exposed project
   capabilities.
-* Each future server remains an Infrastructure adapter over a bounded set of existing
-  capabilities; service topology and deployment remain incremental decisions.
+* Each server remains an Infrastructure adapter over a bounded set of existing
+  capabilities. Explicitly configured multi-server discovery is supported; generalized
+  routing, multiplexing, and dynamic server selection remain incremental decisions.
 * Server and client lifecycle, protocol compatibility, schemas, structured results, and
   stdio-to-HTTP transport equivalence receive focused deterministic integration tests.
 * A Docker build and container smoke remain explicit local deployment checks rather than
   prerequisites for the regular unit-test suite.
 * LangGraph integration uses the same discovered MCP tool path through an injected
   provider; it neither constructs a container nor bypasses egress control.
-* Multi-server routing, Knowledge MCP, MCP authentication beyond the local demo,
-  remote production deployment, write tools, resources, prompts, and MCP-based HITL
-  are not decided or implemented by this ADR.
+* Generalized multi-server routing, MCP authentication beyond the local demo, remote
+  production deployment, write tools, resources, prompts, and MCP-based HITL remain out
+  of scope.
 * A later agent integration must still apply ADR-008 routing and the final ADR-009
   egress check before any model call; MCP does not weaken those controls.

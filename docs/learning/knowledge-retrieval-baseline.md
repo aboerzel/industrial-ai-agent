@@ -7,8 +7,9 @@ term overlap, rarity-aware IDF overlap, and BM25. It adds the first semantic bas
 described by ADR-007, a rank-fused BM25-plus-semantic hybrid baseline, and a local
 cross-encoder reranking baseline. Version 2 expanded and froze the corpus and evaluation
 set before BM25, semantic, hybrid, and reranked retrieval were implemented, so none of
-those strategies could shape its own benchmark. Retrieval remains isolated from
-`TroubleshootingAgent`.
+those strategies could shape its own benchmark. The frozen pipeline is exposed by
+`knowledge_mcp`, but LangGraph reaches it only through MCP discovery, never through a
+direct retriever.
 
 ## Knowledge Base and Ingestion
 
@@ -37,8 +38,9 @@ order remain unchanged.
 
 The inner `KnowledgeRetriever` port exposes
 `search(query, limit) -> tuple[KnowledgeRetrievalResult, ...]`. The agent-facing
-`DocumentationSearchCapability.search_documentation(query)` depends only on that port
-and currently requests at most three results.
+`DocumentationSearchCapability.search_documentation(query, top_k=3)` depends only on
+that port. `knowledge_mcp` is a thin transport adapter over this capability and adds no
+retrieval behavior.
 
 Each `KnowledgeRetrievalResult` preserves passage content, `document_id`, relative
 `source`, stable `chunk_id`, optional `relevance_score`, and metadata. The capability
@@ -189,6 +191,17 @@ The adapter selects `cuda` when `torch.cuda.is_available()` and otherwise falls 
 the cached model loaded in roughly 33 seconds and the complete 28-case eval, including
 model initialization, took roughly 18 seconds. These are local observations, not a
 performance target.
+
+## Knowledge MCP Deployment Boundary
+
+`knowledge_mcp` composes this exact frozen pipeline once at process startup and exposes
+only `search_documentation(query, top_k=3)`. It supports stdio for development/test and
+Streamable HTTP for Docker deployment. Its Docker image contains source and the knowledge
+base but no Ollama or Hugging Face model artifact. Compose connects to local host Ollama
+and mounts a pre-populated Hugging Face cache read-only; CPU is portable default, while
+in-process development can retain CUDA. MCP network transport is separate from model
+egress: documents, chunks, queries, embeddings, and reranker inputs remain local under
+ADR-009 and never reach a public provider.
 
 ## Retrieval Evaluation Datasets
 

@@ -18,7 +18,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypedDict
 
 from industrial_ai_agent.agent.langchain_model import (
@@ -51,6 +51,12 @@ from industrial_ai_agent.tools.maintenance_ticket import (
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 CREATE_MAINTENANCE_TICKET_TOOL_NAME = "create_maintenance_ticket"
+MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
+    "You are an industrial troubleshooting assistant. Use only the provided read-only "
+    "tools when their evidence is necessary to answer the explicit user request. Call "
+    "one tool at a time, do not repeat available evidence, and base the final answer on "
+    "the collected tool results without inventing industrial data."
+)
 
 
 class ApprovalDecision(StrEnum):
@@ -84,6 +90,13 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     approval_result: str | None
     model_profile_name: str
     run_classification: int | None
+
+
+def _validate_pydantic_arguments(
+    schema: type[BaseModel],
+    raw_arguments: dict[str, object],
+) -> dict[str, object]:
+    return schema.model_validate(raw_arguments).model_dump()
 
 
 class LangGraphTroubleshootingAgent:
@@ -120,7 +133,7 @@ class LangGraphTroubleshootingAgent:
         """Bind runtime-discovered MCP tools for one first-decision run."""
         async with self._open_mcp_session() as session:
             response = self._chat_model.bind_tools(session.tools).invoke(
-                self._initial_messages(user_request)
+                self._initial_messages(user_request, use_mcp_tools=True)
             )
         return to_llm_response(response)
 
@@ -153,7 +166,7 @@ class LangGraphTroubleshootingAgent:
             graph = self._build_async_graph(chat_model, tools_by_name)
             config: RunnableConfig = {"recursion_limit": 12}
             state = await graph.ainvoke(
-                self._initial_state(user_request),
+                self._initial_state(user_request, use_mcp_tools=True),
                 config=config,
             )
         return self._restore_public_state(
@@ -358,7 +371,7 @@ class LangGraphTroubleshootingAgent:
         if tool is None:
             raise UnknownToolError(f"Unknown tool: {tool_name}")
 
-        arguments = self._validate_tool_arguments(tool_name, dict(tool_call["args"]))
+        arguments = self._validate_tool_arguments(tool, dict(tool_call["args"]))
         result = tool.invoke(arguments)
         executed_call = {"tool": tool_name, "arguments": arguments}
         return {
@@ -387,7 +400,7 @@ class LangGraphTroubleshootingAgent:
         if tool is None:
             raise UnknownToolError(f"Unknown tool: {tool_name}")
 
-        arguments = self._validate_tool_arguments(tool_name, dict(tool_call["args"]))
+        arguments = self._validate_tool_arguments(tool, dict(tool_call["args"]))
         result = await tool.ainvoke(arguments)
         executed_call = {"tool": tool_name, "arguments": arguments}
         return {
@@ -500,23 +513,21 @@ class LangGraphTroubleshootingAgent:
 
     @staticmethod
     def _validate_tool_arguments(
-        tool_name: str,
+        tool: BaseTool,
         raw_arguments: dict[str, object],
     ) -> dict[str, object]:
+        arguments_schema = tool.args_schema
+        if not (
+            isinstance(arguments_schema, type)
+            and issubclass(arguments_schema, BaseModel)
+        ):
+            raise TypeError(f"Tool {tool.name} must expose a Pydantic arguments schema")
         try:
-            if tool_name == GET_PRODUCT_HISTORY_TOOL.name:
-                return ProductHistoryToolArguments.model_validate(
-                    raw_arguments
-                ).model_dump()
-            if tool_name == GET_MACHINE_STATUS_TOOL.name:
-                return MachineStatusToolArguments.model_validate(
-                    raw_arguments
-                ).model_dump()
+            return _validate_pydantic_arguments(arguments_schema, raw_arguments)
         except ValidationError as error:
             raise InvalidToolArgumentsError(
-                f"Invalid arguments for {tool_name}"
+                f"Invalid arguments for {tool.name}"
             ) from error
-        raise UnknownToolError(f"Unknown tool: {tool_name}")
 
     def _create_direct_tools(self) -> tuple[BaseTool, ...]:
         def get_product_history(product_id: str) -> str:
@@ -565,10 +576,16 @@ class LangGraphTroubleshootingAgent:
             yield session
 
     def _initial_state(
-        self, user_request: str
+        self,
+        user_request: str,
+        *,
+        use_mcp_tools: bool = False,
     ) -> CheckpointedTroubleshootingGraphState:
         return {
-            "messages": self._initial_messages(user_request),
+            "messages": self._initial_messages(
+                user_request,
+                use_mcp_tools=use_mcp_tools,
+            ),
             "executed_tool_count": 0,
             "executed_tool_calls": (),
             "run_status": None,
@@ -583,11 +600,20 @@ class LangGraphTroubleshootingAgent:
             ),
         }
 
-    def _initial_messages(self, user_request: str) -> list[AnyMessage]:
+    def _initial_messages(
+        self,
+        user_request: str,
+        *,
+        use_mcp_tools: bool = False,
+    ) -> list[AnyMessage]:
         normalized_request = user_request.strip()
         if not normalized_request:
             raise ValueError("User request must not be empty")
-        system_content = TROUBLESHOOTING_SYSTEM_MESSAGE.content
+        system_content = (
+            MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
+            if use_mcp_tools
+            else TROUBLESHOOTING_SYSTEM_MESSAGE.content
+        )
         if system_content is None:
             raise RuntimeError("Troubleshooting system message must contain text")
         messages: list[AnyMessage] = [

@@ -52,7 +52,10 @@ from industrial_ai_agent.infrastructure.local_environment import (
     load_local_environment,
 )
 from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
+    DEFAULT_ALLOWED_FACTORY_TOOLS,
+    DEFAULT_ALLOWED_KNOWLEDGE_TOOLS,
     McpLangChainToolProvider,
+    McpServerConfiguration,
 )
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
@@ -333,6 +336,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mcp-transport", choices=("stdio", "http"), default="stdio")
     parser.add_argument("--mcp-url", default="http://127.0.0.1:8001/mcp")
+    parser.add_argument("--knowledge-mcp", action="store_true")
+    parser.add_argument("--knowledge-mcp-url", default="http://127.0.0.1:8002/mcp")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument(
@@ -373,7 +378,7 @@ def main() -> None:
                 product_history,
                 machine_status,
                 mcp_tool_provider=(
-                    McpLangChainToolProvider(_mcp_transport_from_args(args))
+                    McpLangChainToolProvider(_mcp_servers_from_args(args))
                     if args.tool_transport == "mcp"
                     else None
                 ),
@@ -445,13 +450,41 @@ def _route_requested_profile(
     )
 
 
-def _mcp_transport_from_args(args: argparse.Namespace) -> FactoryMcpTransport:
+def _mcp_servers_from_args(
+    args: argparse.Namespace,
+) -> tuple[McpServerConfiguration, ...]:
     if args.mcp_transport == "http":
-        return StreamableHttpServerParameters(url=args.mcp_url)
-    return StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
-    )
+        factory_transport: FactoryMcpTransport = StreamableHttpServerParameters(
+            url=args.mcp_url
+        )
+        knowledge_transport: FactoryMcpTransport = StreamableHttpServerParameters(
+            url=args.knowledge_mcp_url
+        )
+    else:
+        factory_transport = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+        )
+        knowledge_transport = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "industrial_ai_agent.infrastructure.knowledge_mcp_server"],
+        )
+    servers = [
+        McpServerConfiguration(
+            server_id="factory",
+            transport=factory_transport,
+            allowed_tool_names=DEFAULT_ALLOWED_FACTORY_TOOLS,
+        )
+    ]
+    if args.knowledge_mcp:
+        servers.append(
+            McpServerConfiguration(
+                server_id="knowledge",
+                transport=knowledge_transport,
+                allowed_tool_names=DEFAULT_ALLOWED_KNOWLEDGE_TOOLS,
+            )
+        )
+    return tuple(servers)
 
 
 if __name__ == "__main__":

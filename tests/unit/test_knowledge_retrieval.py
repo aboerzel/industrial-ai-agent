@@ -216,6 +216,29 @@ def test_capability_rejects_empty_query_without_calling_port() -> None:
     assert retriever.requests == []
 
 
+def test_capability_forwards_requested_top_k_to_the_inner_port() -> None:
+    retriever = RecordingKnowledgeRetriever(
+        knowledge_chunk("one::chunk-001", "one"),
+        knowledge_chunk("two::chunk-001", "two"),
+    )
+    capability = DocumentationSearchCapability(retriever)
+
+    result = capability.search_documentation("known query", top_k=1)
+
+    assert len(result.results) == 1
+    assert retriever.requests == [("known query", 1)]
+
+
+def test_capability_rejects_invalid_top_k_without_calling_port() -> None:
+    retriever = RecordingKnowledgeRetriever()
+    capability = DocumentationSearchCapability(retriever)
+
+    with pytest.raises(ValueError, match="top_k must be at least 1"):
+        capability.search_documentation("known query", top_k=0)
+
+    assert retriever.requests == []
+
+
 def test_idf_retriever_calculates_chunk_document_frequency() -> None:
     retriever = InMemoryIdfKnowledgeRetriever(
         (

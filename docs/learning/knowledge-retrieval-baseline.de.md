@@ -8,8 +8,9 @@ semantische Baseline aus ADR-007 sowie eine rangfusionierte BM25-plus-semantisch
 Hybrid-Baseline und eine lokale Cross-Encoder-Reranking-Baseline. Version 2 erweiterte
 und fror Corpus sowie Evaluation Set ein, bevor BM25, Semantic, Hybrid und Reranking
 implementiert wurden. Keine dieser Strategien
-konnte dadurch ihren eigenen Benchmark beeinflussen. Retrieval bleibt vom
-`TroubleshootingAgent` isoliert.
+konnte dadurch ihren eigenen Benchmark beeinflussen. Die eingefrorene Pipeline wird über
+`knowledge_mcp` exponiert, aber LangGraph erreicht sie ausschließlich über MCP Discovery
+und nie durch einen direkten Retriever.
 
 ## Knowledge Base und Ingestion
 
@@ -40,8 +41,9 @@ vorherigen Überschriften unverändert bleiben.
 
 Der innere Port `KnowledgeRetriever` exponiert
 `search(query, limit) -> tuple[KnowledgeRetrievalResult, ...]`. Die agent-facing
-`DocumentationSearchCapability.search_documentation(query)` hängt ausschließlich von
-diesem Port ab und fordert derzeit höchstens drei Results an.
+`DocumentationSearchCapability.search_documentation(query, top_k=3)` hängt ausschließlich
+von diesem Port ab. `knowledge_mcp` ist ein dünner Transportadapter über dieser
+Capability und fügt keine Retrieval-Logik hinzu.
 
 Jedes `KnowledgeRetrievalResult` erhält Passage Content, `document_id`, relative
 `source`, stabile `chunk_id`, optionalen `relevance_score` und Metadata. Die Capability
@@ -195,6 +197,18 @@ Bei erkannter CUDA verwendet der Adapter `cuda`, sonst `cpu`. Auf der verwendete
 3070 lud das gecachte Modell in ungefähr 33 Sekunden; der vollständige 28-Fall-Eval
 dauerte einschließlich Initialisierung ungefähr 18 Sekunden. Dies sind lokale
 Beobachtungen, keine Performance-Vorgabe.
+
+## Knowledge-MCP-Deployment-Grenze
+
+`knowledge_mcp` komponiert diese exakt eingefrorene Pipeline einmal beim Prozessstart und
+exponiert ausschließlich `search_documentation(query, top_k=3)`. Es unterstützt stdio
+für Entwicklung/Test und Streamable HTTP für Docker Deployment. Sein Docker Image enthält
+Source und Knowledge Base, aber weder Ollama- noch Hugging-Face-Modellartefakte. Compose
+verbindet lokales Host-Ollama und mountet einen vorab gefüllten Hugging-Face-Cache
+read-only; CPU ist der portable Default, während In-Process-Entwicklung CUDA behalten
+kann. MCP-Netzwerktransport ist von Model Egress getrennt: Documents, Chunks, Queries,
+Embeddings und Reranker-Inputs bleiben unter ADR-009 lokal und erreichen keinen Public
+Provider.
 
 ## Retrieval-Evaluation-Datasets
 

@@ -10,22 +10,22 @@ also receive an explicitly injected demonstration action capability that pauses 
 approval. Focused deterministic baselines evaluate
 the first LLM tool decision and complete bounded trajectories for either path. Local
 lexical, semantic, hybrid, and reranked knowledge-retrieval strategies are implemented behind one
-inner port but are not yet integrated into the agent. A deterministic, deny-by-default model-egress decorator
+inner port and are exposed to the LangGraph MCP path only through `knowledge_mcp`. A deterministic, deny-by-default model-egress decorator
 checks explicit request classification against each Model Profile's validated Execution
 Zone before invoking the provider adapter.
 LangGraph and LangChain Core are now used narrowly for the parallel orchestration path.
 An explicitly injected `InMemorySaver` supports local/test checkpoint and HITL
 demonstrations; it is not durable persistence. There is no dynamic tool registry,
 production persistence backend, LangSmith integration, or general evaluation framework.
-A read-only `factory_mcp` server now exposes the existing product-history and
-machine-status capabilities through the official MCP SDK v2. It retains stdio for
-process-coupled development and deterministic tests, and runs as an independently
-deployable Streamable HTTP `/mcp` service in the local Docker demo. The parallel
-`LangGraphTroubleshootingAgent` has an explicit asynchronous MCP path: one session
-discovers authorized tools, translates them through a temporary LangChain bridge, and
-executes its sequential read-only loop before closing the session. Transport selection
-is made by an outer Composition Root; the handwritten path and original direct LangChain
-tool path remain available as references.
+Two read-only MCP services expose existing capabilities through the official MCP SDK v2.
+`factory_mcp` provides product history and machine status; `knowledge_mcp` provides
+documentation search. Both retain stdio for process-coupled development and
+deterministic tests, and run as separate Streamable HTTP `/mcp` Docker services. The
+parallel `LangGraphTroubleshootingAgent` opens one session per explicitly configured
+server, discovers and authorizes tools through the temporary LangChain bridge, executes
+the bounded sequential loop, then closes all sessions. Transport selection is made by an
+outer Composition Root; the handwritten path and direct LangChain tool path remain
+reference paths.
 
 The implemented request flow is:
 
@@ -59,6 +59,7 @@ flowchart LR
         KB["Versioned local Markdown knowledge base"]
         OLLAMA["Local Ollama qwen3-embedding:0.6b"]
         FMCP["factory_mcp MCP server"]
+        KMCP["knowledge_mcp MCP server"]
         MCPCLIENT["Official MCP stdio / Streamable HTTP client"]
         MCPBRIDGE["Temporary MCP v2 to LangChain bridge"]
         LG["LangGraph MCP read-only path"]
@@ -89,7 +90,9 @@ flowchart LR
     OEC --> OLLAMA
     FMCP --> PHC
     FMCP --> MSC
+    KMCP --> DSC
     MCPCLIENT --> FMCP
+    MCPCLIENT --> KMCP
     LG --> MCPBRIDGE
     MCPBRIDGE --> MCPCLIENT
 
@@ -98,7 +101,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,MCPCLIENT,MCPBRIDGE,LG adapter
+    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,KMCP,MCPCLIENT,MCPBRIDGE,LG adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -113,24 +116,29 @@ their prepared in-memory indexes. The semantic adapter receives the separate inn
 `EmbeddingClient` port, builds document vectors in LangChain's `InMemoryVectorStore`,
 and embeds only the query at runtime through local Ollama.
 
-`factory_mcp` is an Infrastructure transport adapter, not another source of factory
-semantics. Its two handlers delegate to injected capabilities and return MCP structured
-content. stdio remains the process-coupled development/test transport. Streamable HTTP
-is the deployment transport: the same SDK server runs in a non-root Python 3.12 Docker
-container and Compose maps its local host port to `/mcp`. Docker isolates and deploys the
-service but neither implements nor replaces MCP. For one MCP LangGraph run, the client
-initializes once, discovers server tools, authorizes only the two read-only factory
-tools, invokes them sequentially, and closes after the graph completes. The bridge
-creates LangChain `StructuredTool` objects from the discovered MCP schemas and awaits
-their invocation; it contains no business logic. It is a **TEMPORARY COMPATIBILITY
-ADAPTER** until a stable `langchain-mcp-adapters` release supports MCP SDK v2.
+`factory_mcp` and `knowledge_mcp` are Infrastructure transport adapters, not sources of
+factory or retrieval semantics. Factory delegates to its two injected capabilities;
+Knowledge delegates `search_documentation(query, top_k=3)` to the existing
+documentation-search capability. Its default composition is the frozen local pipeline:
+BM25 plus semantic candidates, RRF, then `BAAI/bge-reranker-v2-m3`, preserving stable
+chunk provenance as MCP structured content. stdio is process-coupled development/test
+transport. Streamable HTTP is deployment transport: independent non-root Python 3.12
+containers expose `/mcp` through Compose host ports `8001` and `8002`. Docker deploys
+processes but neither implements nor replaces MCP. For one LangGraph run, the client
+initializes and discovers each configured server once, rejects duplicate names, invokes
+authorized tools sequentially, and closes each session after graph completion. The bridge
+creates LangChain `StructuredTool` objects from discovered MCP schemas and has no business
+logic. It is a **TEMPORARY COMPATIBILITY ADAPTER** until a stable
+`langchain-mcp-adapters` release supports MCP SDK v2.
 
 The MCP path does not replace ADR-009: every graph model call still goes through
-`EgressCheckedLLMClient`. A local HTTP connection to the factory container is service
-transport, not permission to egress tool data to a public model. The local Docker demo
-has no MCP authentication; remote or production exposure requires an explicit future
-authentication and transport-security design. This slice does not add MCP write tools,
-MCP HITL, Knowledge MCP, a multi-server router, or automatic fallback.
+`EgressCheckedLLMClient`. Local HTTP connections to factory and knowledge containers are
+service transport, not permission to egress tool data to a public model. Knowledge MCP
+uses local Ollama embeddings and a local Hugging Face cache for reranking; queries,
+chunks, embeddings, and reranker inputs do not reach a public provider. The local Docker
+demo has no MCP authentication; remote or production exposure requires explicit future
+authentication and transport security. This slice does not add MCP write tools, MCP
+HITL, generalized multi-server routing, or automatic fallback.
 
 ## Knowledge Retrieval Baseline
 
@@ -487,8 +495,9 @@ The current capabilities are
 `MachineStatusCapability.get_machine_status(station_id)`. They return Pydantic
 `ProductHistoryResult` and `MachineStatusResult` models, including structured not-found
 results. The isolated
-`DocumentationSearchCapability.search_documentation(query)` returns structured
-`DocumentationSearchResult` data and is not yet offered as an agent tool.
+`DocumentationSearchCapability.search_documentation(query, top_k=3)` returns structured
+`DocumentationSearchResult` data. LangGraph receives it only through discovered and
+authorized `knowledge_mcp` tools, never through direct retriever injection.
 `MaintenanceTicketCapability.create_maintenance_ticket(...)` is an optional
 LangGraph-only demonstration action. Its deterministic approval boundary executes it
 only after explicit approval; it is not exposed by the handwritten reference path.
@@ -619,7 +628,7 @@ Cost and quality preferences cannot override the security filter. See
 
 The lexical baselines and the first semantic baseline are now also compared with a
 fixed rank-fusion hybrid baseline and a bounded local cross-encoder reranking stage. The retrieval
-core remains independent from a later Knowledge MCP transport boundary as specified by
+core remains independent from the Knowledge MCP transport boundary as specified by
 [ADR-006](../decisions/ADR-006-knowledge-retrieval-and-rag-architecture.md). Embeddings
 remain a separate model role from `LLMClient`; the focused `EmbeddingClient` port is in
 the Core, while provider adapters and model configuration remain in Infrastructure.

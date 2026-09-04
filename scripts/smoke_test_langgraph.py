@@ -43,7 +43,10 @@ from industrial_ai_agent.infrastructure.llm.openai_compatible import (
 )
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
 from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
+    DEFAULT_ALLOWED_FACTORY_TOOLS,
+    DEFAULT_ALLOWED_KNOWLEDGE_TOOLS,
     McpLangChainToolProvider,
+    McpServerConfiguration,
 )
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
@@ -53,7 +56,8 @@ CONFIG_PATH = PROJECT_ROOT / "config" / "model_profiles.toml"
 PUBLIC_PROMPT = "Reply exactly with LANGGRAPH_LLM_OK. Do not call a tool."
 CONFIDENTIAL_PROMPT = (
     "P4711 failed during production. Investigate what happened and check the current "
-    "status of the relevant station."
+    "status of the relevant station. Then consult the local technical documentation "
+    "for the relevant fault and provide a final diagnosis."
 )
 
 
@@ -111,7 +115,7 @@ def main() -> None:
             ProductHistoryCapability(InMemoryProductHistoryRepository()),
             MachineStatusCapability(InMemoryMachineStatusRepository()),
             mcp_tool_provider=(
-                McpLangChainToolProvider(_mcp_transport_from_args(args))
+                McpLangChainToolProvider(_mcp_servers_from_args(args))
                 if args.mcp
                 else None
             ),
@@ -124,8 +128,11 @@ def main() -> None:
                     session_observer=lambda session: session_lines.extend(
                         (
                             "mcp_session_initialized=true",
-                            f"mcp_server={session.server_name} {session.server_version}",
-                            f"mcp_protocol={session.protocol_version}",
+                            *(
+                                f"mcp_server={server.server_id}:"
+                                f"{server.server_name} {server.server_version}"
+                                for server in session.servers
+                            ),
                             f"mcp_discovered_tools={','.join(session.discovered_tool_names)}",
                         )
                     ),
@@ -143,7 +150,11 @@ def main() -> None:
         raise RuntimeError("Synthetic LangGraph response did not match expected text")
     if args.mcp and args.confidential_troubleshooting:
         actual_tools = [call.tool for call in result.executed_tool_calls]
-        expected_tools = ["get_product_history", "get_machine_status"]
+        expected_tools = [
+            "get_product_history",
+            "get_machine_status",
+            "search_documentation",
+        ]
         if actual_tools != expected_tools:
             raise RuntimeError(
                 f"MCP troubleshooting smoke expected {expected_tools}, got {actual_tools}"
@@ -180,28 +191,57 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mcp",
         action="store_true",
-        help="Discover and execute read-only tools through the factory MCP server.",
+        help="Discover and execute read-only tools through factory and knowledge MCP.",
     )
     parser.add_argument(
         "--mcp-transport",
         choices=("stdio", "http"),
         default="stdio",
-        help="Select the factory MCP connection at this composition root.",
+        help="Select both MCP connections at this composition root.",
     )
     parser.add_argument(
         "--mcp-url",
         default="http://127.0.0.1:8001/mcp",
-        help="Streamable HTTP endpoint used with --mcp-transport http.",
+        help="Factory Streamable HTTP endpoint used with --mcp-transport http.",
+    )
+    parser.add_argument(
+        "--knowledge-mcp-url",
+        default="http://127.0.0.1:8002/mcp",
+        help="Knowledge Streamable HTTP endpoint used with --mcp-transport http.",
     )
     return parser.parse_args()
 
 
-def _mcp_transport_from_args(args: argparse.Namespace) -> FactoryMcpTransport:
+def _mcp_servers_from_args(
+    args: argparse.Namespace,
+) -> tuple[McpServerConfiguration, ...]:
     if args.mcp_transport == "http":
-        return StreamableHttpServerParameters(url=args.mcp_url)
-    return StdioServerParameters(
-        command=sys.executable,
-        args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+        factory_transport: FactoryMcpTransport = StreamableHttpServerParameters(
+            url=args.mcp_url
+        )
+        knowledge_transport: FactoryMcpTransport = StreamableHttpServerParameters(
+            url=args.knowledge_mcp_url
+        )
+    else:
+        factory_transport = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+        )
+        knowledge_transport = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "industrial_ai_agent.infrastructure.knowledge_mcp_server"],
+        )
+    return (
+        McpServerConfiguration(
+            server_id="factory",
+            transport=factory_transport,
+            allowed_tool_names=DEFAULT_ALLOWED_FACTORY_TOOLS,
+        ),
+        McpServerConfiguration(
+            server_id="knowledge",
+            transport=knowledge_transport,
+            allowed_tool_names=DEFAULT_ALLOWED_KNOWLEDGE_TOOLS,
+        ),
     )
 
 

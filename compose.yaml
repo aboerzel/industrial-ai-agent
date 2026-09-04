@@ -2,5 +2,35 @@ services:
   factory-mcp:
     build:
       context: .
+      dockerfile: Dockerfile.factory-mcp
     ports:
       - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 2).close()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+  knowledge-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.knowledge-mcp
+    environment:
+      KNOWLEDGE_MCP_OLLAMA_BASE_URL: http://host.docker.internal:11434
+      KNOWLEDGE_MCP_RERANKER_DEVICE: cpu
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8002:8002"
+    volumes:
+      - hf-cache:/home/app/.cache/huggingface:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8002), 2).close()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  hf-cache:
