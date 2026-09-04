@@ -5,8 +5,15 @@ from pathlib import Path
 
 import uvicorn
 
+from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.api.app import create_app
+from industrial_ai_agent.infrastructure.api.postgres_run_store import (
+    PostgreSqlAgentRunStore,
+)
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
+from industrial_ai_agent.infrastructure.persistence.postgres import (
+    PostgreSqlSessionFactory,
+)
 from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     create_default_troubleshooting_run_service,
 )
@@ -19,8 +26,18 @@ def create_default_app():
     """Compose the local/demo FastAPI application without embedding deployment details."""
     load_local_environment(PROJECT_ROOT / ".env")
     frontend_origin = os.getenv("AGENT_FRONTEND_ORIGIN", DEFAULT_FRONTEND_ORIGIN)
+    database_url = os.getenv("AGENT_RUNTIME_DATABASE_URL") or os.getenv(
+        "FACTORY_DATABASE_URL"
+    )
+    if not database_url:
+        raise RuntimeError(
+            "AGENT_RUNTIME_DATABASE_URL or FACTORY_DATABASE_URL is required"
+        )
     return create_app(
         create_default_troubleshooting_run_service(),
+        run_store=PostgreSqlAgentRunStore(
+            PostgreSqlSessionFactory(database_url), DEMO_ENGINEER_SECURITY_CONTEXT
+        ),
         allowed_origins=(frontend_origin,),
     )
 

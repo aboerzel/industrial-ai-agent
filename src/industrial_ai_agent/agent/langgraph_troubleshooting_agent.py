@@ -16,6 +16,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
@@ -109,7 +110,7 @@ class LangGraphTroubleshootingAgent:
         *,
         mcp_tool_provider: McpToolProvider | None = None,
         maintenance_ticket: MaintenanceTicketCapability | None = None,
-        checkpointer: BaseCheckpointSaver[str] | None = None,
+        checkpointer: BaseCheckpointSaver[str] | AsyncPostgresSaver | None = None,
         run_classification: DataClassification | None = None,
     ) -> None:
         self._maintenance_ticket = maintenance_ticket
@@ -179,6 +180,24 @@ class LangGraphTroubleshootingAgent:
         )
         return self.get_checkpointed_state(thread_id=thread_id)
 
+    async def astart(
+        self,
+        user_request: str,
+        *,
+        thread_id: str,
+    ) -> TroubleshootingGraphState:
+        """Start the existing HITL graph with an async framework checkpointer."""
+        self._require_resumable_run_context()
+        config = self._checkpoint_config(thread_id)
+        await self._hitl_graph.ainvoke(
+            self._initial_state(
+                user_request,
+                system_content=HITL_TROUBLESHOOTING_SYSTEM_MESSAGE,
+            ),
+            config=config,
+        )
+        return await self.aget_checkpointed_state(thread_id=thread_id)
+
     def resume(
         self,
         *,
@@ -192,6 +211,20 @@ class LangGraphTroubleshootingAgent:
         self._hitl_graph.invoke(Command(resume=approval), config=config)
         return self.get_checkpointed_state(thread_id=thread_id)
 
+    async def aresume(
+        self,
+        *,
+        thread_id: str,
+        approval: object,
+    ) -> TroubleshootingGraphState:
+        """Resume the checkpointed HITL graph without changing its run context."""
+        self._require_resumable_run_context()
+        config = self._checkpoint_config(thread_id)
+        state = await self.aget_checkpointed_state(thread_id=thread_id)
+        self._require_matching_run_context(state)
+        await self._hitl_graph.ainvoke(Command(resume=approval), config=config)
+        return await self.aget_checkpointed_state(thread_id=thread_id)
+
     def get_checkpointed_state(self, *, thread_id: str) -> TroubleshootingGraphState:
         self._require_resumable_run_context()
         snapshot = self._hitl_graph.get_state(self._checkpoint_config(thread_id))
@@ -201,9 +234,38 @@ class LangGraphTroubleshootingAgent:
             cast(CheckpointedTroubleshootingGraphState, snapshot.values)
         )
 
+    async def aget_checkpointed_state(
+        self,
+        *,
+        thread_id: str,
+    ) -> TroubleshootingGraphState:
+        """Read a checkpoint through LangGraph's asynchronous saver API."""
+        self._require_resumable_run_context()
+        snapshot = await self._hitl_graph.aget_state(self._checkpoint_config(thread_id))
+        if not snapshot.values:
+            raise ValueError(f"No checkpointed run found for thread_id: {thread_id}")
+        return self._restore_public_state(
+            cast(CheckpointedTroubleshootingGraphState, snapshot.values)
+        )
+
     def get_interrupt_payload(self, *, thread_id: str) -> dict[str, object] | None:
         self._require_resumable_run_context()
         snapshot = self._hitl_graph.get_state(self._checkpoint_config(thread_id))
+        if not snapshot.interrupts:
+            return None
+        payload = snapshot.interrupts[0].value
+        if not isinstance(payload, dict):
+            raise TypeError("Approval interrupt payload must be a dictionary")
+        return dict(payload)
+
+    async def aget_interrupt_payload(
+        self,
+        *,
+        thread_id: str,
+    ) -> dict[str, object] | None:
+        """Read an interrupt payload from an asynchronously persisted checkpoint."""
+        self._require_resumable_run_context()
+        snapshot = await self._hitl_graph.aget_state(self._checkpoint_config(thread_id))
         if not snapshot.interrupts:
             return None
         payload = snapshot.interrupts[0].value
@@ -229,6 +291,7 @@ class LangGraphTroubleshootingAgent:
             final_answer=state["final_answer"],
             tool_call_count=state["executed_tool_count"],
             executed_tool_calls=state["executed_tool_calls"],
+            model_profile_name=self._chat_model.model_profile.name,
         )
 
     def _build_hitl_graph(

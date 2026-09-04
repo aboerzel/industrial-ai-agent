@@ -11,7 +11,8 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpServiceUnavailableError,
     confidential_troubleshooting_requirements,
 )
-from industrial_ai_agent.infrastructure.api.app import create_app
+from industrial_ai_agent.infrastructure.api.app import create_app as _create_app
+from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
 from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     create_default_troubleshooting_run_service,
 )
@@ -34,6 +35,19 @@ class FakeRunService:
             raise self._error
         assert self._result is not None
         return self._result
+
+
+def create_app(
+    run_service: FakeRunService,
+    *,
+    allowed_origins: tuple[str, ...] = (),
+):
+    """Keep the in-memory adapter explicit and isolated to API unit tests."""
+    return _create_app(
+        run_service,
+        run_store=InMemoryAgentRunStore(),
+        allowed_origins=allowed_origins,
+    )
 
 
 def test_health_returns_ok() -> None:

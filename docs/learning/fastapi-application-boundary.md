@@ -17,7 +17,7 @@ FastAPI owns:
 * HTTP routing, input validation, response serialization, and sanitized error responses.
 * Public Pydantic API schemas.
 * UUID generation for API run IDs.
-* A focused in-memory run lifecycle store for the local process.
+* Delegation to a focused PostgreSQL-backed application run lifecycle store.
 * OpenAPI and Swagger UI publication.
 * A locally configured explicit CORS allowlist for the separate browser development
   origin.
@@ -36,7 +36,7 @@ FastAPI does not own:
 ```text
 POST /api/v1/runs
     -> FastAPI validates CreateRunRequest
-    -> UUID + InMemoryAgentRunStore record
+    -> UUID + PostgreSqlAgentRunStore record in agent_runtime
     -> TroubleshootingRunService
     -> CONFIDENTIAL TaskRequirements
     -> DeterministicModelRouter
@@ -61,7 +61,7 @@ The initial routes are:
 | --- | --- |
 | `GET /health` | Process-local API liveness. |
 | `POST /api/v1/runs` | Start one confidential troubleshooting run. |
-| `GET /api/v1/runs/{run_id}` | Read a local lifecycle record. |
+| `GET /api/v1/runs/{run_id}` | Read a persistent lifecycle record. |
 
 `CreateRunRequest` accepts exactly one required non-empty `message`. It deliberately
 does not accept model, provider, semantic profile, execution zone, or data
@@ -74,14 +74,17 @@ SDK values, provider SDK values, prompts, and raw tool-result payloads.
 
 ## Run Store and Future HITL
 
-`InMemoryAgentRunStore` keeps `running`, `success`, `limit_reached`, or
-`failed` records in the API process. It is intentionally not durable and loses every
-record at process restart. It is neither a generic repository platform nor a production
-persistence choice.
+`PostgreSqlAgentRunStore` keeps `running`, `waiting_for_approval`, `success`,
+`limit_reached`, or `failed` records in `agent_runtime.agent_runs`. It is a narrow
+SQLAlchemy 2.x adapter and not a generic repository platform. The row persists the
+run/thread UUID, effective classification, selected model profile, normalized tool-call
+summary, sanitized errors, and lifecycle timestamps. PostgreSQL RLS remains the database
+boundary; the ORM is mapping/query composition, not authorization enforcement.
 
 The UUID and lifecycle model permit a later `POST /api/v1/runs/{run_id}/resume` endpoint
-for ADR-011 approval flows. This slice does not implement resume, streaming, database
-persistence, or a durable checkpointer.
+for ADR-011 approval flows. LangGraph checkpoints are persisted separately with the
+official `AsyncPostgresSaver` in its framework-managed schema. This slice does not yet
+publish a resume, streaming, or approval HTTP endpoint.
 
 ## Auth-ready Classification Context
 

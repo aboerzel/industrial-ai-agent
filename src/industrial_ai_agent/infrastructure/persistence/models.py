@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from typing import ClassVar
 from uuid import UUID
 
-from sqlalchemy import ARRAY, Date, DateTime, ForeignKey, SmallInteger, String, Text
+from sqlalchemy import (
+    ARRAY,
+    JSON,
+    Date,
+    DateTime,
+    ForeignKey,
+    SmallInteger,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -143,3 +153,31 @@ class DocumentCatalogRecord(Base):
     file_path: Mapped[str] = mapped_column(String, unique=True)
     checksum: Mapped[str] = mapped_column(String, unique=True)
     station: Mapped[StationRecord | None] = relationship()
+
+
+class AgentRunRecord(Base):
+    """Infrastructure-only mapping for durable API run lifecycle records."""
+
+    __tablename__ = "agent_runs"
+    __table_args__: ClassVar[dict[str, str]] = {"schema": "agent_runtime"}
+
+    run_id: Mapped[UUID] = mapped_column(primary_key=True)
+    thread_id: Mapped[UUID] = mapped_column(unique=True)
+    status: Mapped[str] = mapped_column(String)
+    data_classification: Mapped[int] = mapped_column(SmallInteger)
+    model_profile: Mapped[str | None] = mapped_column(String)
+    request_text: Mapped[str] = mapped_column(Text)
+    final_answer: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    tool_call_summary: Mapped[list[dict[str, object]]] = mapped_column(JSON)
+    interrupted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default="CURRENT_TIMESTAMP"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default="CURRENT_TIMESTAMP",
+        onupdate=lambda: datetime.now(UTC),
+    )

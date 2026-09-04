@@ -49,6 +49,7 @@ class AgentRunResult(BaseModel):
     final_answer: str | None = None
     tool_call_count: int = Field(ge=0, le=MAX_TOOL_CALLS)
     executed_tool_calls: tuple[ExecutedToolCall, ...] = ()
+    model_profile_name: str | None = None
 
     @model_validator(mode="after")
     def validate_status_fields(self) -> Self:

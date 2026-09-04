@@ -29,9 +29,9 @@ current conversation context, and at most three successfully executed tools per 
 final model answer returns structured `SUCCESS`; a further tool request after the third
 result returns `LIMIT_REACHED` without executing that call or invoking the LLM again.
 LangGraph uses LangChain Core messages and tool contracts through a narrow adapter to
-the existing security-checked `LLMClient`. Its local/test HITL demonstration remains an
-action-only graph with an injected in-memory checkpointer; there is no dynamic tool
-registry, durable persistence backend, LangSmith integration, or context compression.
+the existing security-checked `LLMClient`. HITL checkpoints use LangGraph's official
+PostgreSQL saver in the application runtime; `InMemorySaver` remains an isolated test
+fake. There is no dynamic tool registry, LangSmith integration, or context compression.
 
 Two deterministic evaluation baselines are available. The first measures the agent's
 initial LLM tool selection and argument extraction against twelve versioned cases
@@ -81,13 +81,14 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/runs `
 
 `GET /health` reports API process liveness. `POST /api/v1/runs` returns a UUID,
 `success` or `limit_reached` status, the final answer when available, and normalized
-tool calls. `GET /api/v1/runs/{run_id}` reads the local in-memory run record. Records
-are lost at process restart and are not production persistence. Errors are sanitized:
+tool calls. `GET /api/v1/runs/{run_id}` reads the persistent `agent_runtime.agent_runs`
+record. The local demo uses the same PostgreSQL instance as factory data but a separate
+runtime schema; records therefore survive API-process recreation. Errors are sanitized:
 unknown IDs return `404`, policy denial returns `403`, and unavailable models or MCP
 services return `503`.
 
 The API is local/demo only: it has no authentication, authorization, TLS, rate limiting,
-streaming, durable persistence, or HITL resume endpoint. A remotely reachable deployment
+streaming, or HITL resume endpoint. A remotely reachable deployment
 requires those controls in a later slice. See
 [FastAPI Application Boundary](docs/learning/fastapi-application-boundary.md).
 
@@ -224,8 +225,8 @@ structurally verifies the sequential calls
 `get_product_history(P4711)` and `get_machine_status(S04)` before a successful final
 answer.
 
-The HITL smoke runs the LangGraph path with a confidential local profile and an
-in-memory checkpointer. It shows the structured approval request for the harmless
+The HITL smoke runs the LangGraph path with a confidential local profile and the
+official PostgreSQL checkpointer. It shows the structured approval request for the harmless
 `create_maintenance_ticket` demonstration action, then resumes the same thread with the
 chosen explicit result. It never calls an external ticket system or performs a machine
 action.

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class RunStatus(StrEnum):
     RUNNING = "running"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     SUCCESS = "success"
     LIMIT_REACHED = "limit_reached"
     FAILED = "failed"

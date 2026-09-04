@@ -14,9 +14,9 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
     McpServiceUnavailableError,
 )
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.run_store import (
     AgentRunStore,
-    InMemoryAgentRunStore,
     StoredAgentRun,
 )
 from industrial_ai_agent.infrastructure.api.schemas import (
@@ -40,7 +40,7 @@ class _ApiRunError(Exception):
 def create_app(
     run_service: AgentRunService,
     *,
-    run_store: AgentRunStore | None = None,
+    run_store: AgentRunStore,
     allowed_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
@@ -52,7 +52,7 @@ def create_app(
         ),
     )
     app.state.run_service = run_service
-    app.state.run_store = run_store or InMemoryAgentRunStore()
+    app.state.run_store = run_store
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
     if allowed_origins:
         # noinspection PyTypeChecker
@@ -87,7 +87,11 @@ def create_app(
     async def create_run(payload: CreateRunRequest, request: Request) -> RunResponse:
         store = _run_store(request)
         run_id = uuid4()
-        await store.create(run_id)
+        await store.create(
+            run_id,
+            request_text=payload.message,
+            data_classification=DataClassification.CONFIDENTIAL,
+        )
         # noinspection PyBroadException
         try:
             result = await _run_service(request).run(payload.message)
@@ -120,6 +124,12 @@ def create_app(
                 message="The agent run could not be completed.",
             )
 
+        if result.model_profile_name is not None:
+            await store.bind_execution_context(
+                run_id,
+                data_classification=DataClassification.CONFIDENTIAL,
+                model_profile=result.model_profile_name,
+            )
         record = await store.complete(run_id, result)
         return _to_run_response(record)
 
@@ -127,7 +137,7 @@ def create_app(
         "/runs/{run_id}",
         response_model=RunResponse,
         responses={status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse}},
-        summary="Get the current local record for one agent run",
+        summary="Get the persisted record for one agent run",
     )
     async def get_run(run_id: UUID, request: Request) -> RunResponse:
         record = await _run_store(request).get(run_id)

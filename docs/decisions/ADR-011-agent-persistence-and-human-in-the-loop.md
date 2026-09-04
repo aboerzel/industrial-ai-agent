@@ -32,13 +32,42 @@ is identified by the native configuration shape:
 ```
 
 The same `thread_id` identifies a continuation of one run; different IDs isolate their
-checkpoint histories. The first slice uses `InMemorySaver` only for deterministic tests
-and local demonstrations. It loses all state when the process ends and is not a durable
-production persistence decision.
+checkpoint histories. For the local/demo runtime, `run_id` and `thread_id` have a stable
+one-to-one relationship and use the same UUID value. A resume always reuses that value;
+it never generates a replacement thread.
+
+`InMemorySaver` is restricted to isolated deterministic tests. The production
+pausable-agent path uses the official asynchronous `AsyncPostgresSaver` from
+`langgraph-checkpoint-postgres`. Its framework-managed checkpoint tables are created by
+the checkpointer's supported `setup()` lifecycle and are not replaced by project-owned
+checkpoint tables or serializers.
 
 No project-specific parallel thread, checkpoint, or polling abstraction is introduced.
-Later durable storage remains an Infrastructure choice justified by operational
-requirements.
+### Durable PostgreSQL Runtime Persistence
+
+The local demo uses the existing PostgreSQL instance but separates factory data from
+agent runtime data through distinct PostgreSQL namespaces: the established factory-data
+tables (currently in `public`) own production and document-catalog records;
+`agent_runtime` owns application-managed run records; official
+LangGraph checkpoint tables remain framework-managed in their dedicated configured
+schema. Factory Data Persistence and Agent Runtime Persistence are separate concerns.
+
+`agent_runtime.agent_runs` persists the public lifecycle and resume-binding context:
+run/thread ID, status, request, effective classification, selected semantic model
+profile, normalized tool-call summary, final answer when present, sanitized error
+metadata, and lifecycle timestamps. It is implemented by an Infrastructure SQLAlchemy
+2.x repository adapter. Retention is deliberately open.
+
+The application role receives RLS protection for `agent_runtime.agent_runs` using the
+existing transaction-local clearance context. Framework-owned checkpoint tables are not
+altered with project RLS policies because that would risk framework compatibility. Their
+access is bounded by a dedicated schema and least-privilege application role grants.
+
+On resume, persisted classification and model-profile bindings MUST match the composed
+agent. A mismatch, missing binding, classification downgrade, or execution-zone change
+fails closed. Resume does not reroute and ADR-009 still validates every later model call.
+Authentication remains open; the server-injected demo `SecurityContext` supplies the
+current RLS clearance.
 
 Checkpointed graph state is restricted to serializer-safe primitives and LangChain
 message contracts. Project value types are restored only at the agent's public result
@@ -91,9 +120,9 @@ run context and must match when resuming. A resume never reroutes or upgrades a 
 
 ### Scope
 
-This ADR does not select a production checkpointer, persistent store, retention policy,
-cross-process durability guarantee, web approval UI, external ticketing API, PLC action,
-background workflow, LangSmith, MCP, multi-agent topology, subgraphs, or planner.
+This ADR does not select a retention policy, authentication mechanism, web approval UI,
+external ticketing API, PLC action, background workflow, LangSmith, MCP, multi-agent
+topology, subgraphs, or planner.
 
 ## Alternatives Considered
 
@@ -116,11 +145,11 @@ trusted enforcement mechanism.
 Accepted. It directly expresses pause/resume semantics while retaining project-owned
 policy, capabilities, routing, and egress enforcement.
 
-### 5. Introduce a durable database-backed checkpointer immediately
+### 5. Use PostgreSQL-backed official LangGraph checkpointing and an AgentRun store
 
-Rejected for this slice. There is no demonstrated operational requirement for a
-production storage backend, and choosing one now would prematurely establish persistence
-infrastructure.
+Accepted. Process-restart resume, API run history, and HITL continuation are now concrete
+runtime requirements. The official framework saver preserves LangGraph compatibility,
+while a separate SQLAlchemy adapter persists application-owned lifecycle records.
 
 ## Consequences
 
@@ -130,14 +159,13 @@ Positive:
 * write actions are separated from read tools and require explicit approval
 * action execution cannot occur before approval
 * the project gains practical LangGraph checkpoint and interrupt experience
-* durable persistence can later replace the in-memory adapter without changing the
-  approval semantics
+* process and application-store recreation retain run history and framework checkpoints
 
 Negative:
 
 * callers must retain and reuse `thread_id` for a continuation
 * interrupted graph nodes need careful side-effect placement
-* in-memory checkpoints disappear when the process exits
+* the local demo needs PostgreSQL before it can start a pausable runtime
 * the parallel LangGraph path gains lifecycle behavior not present in the manual
   reference path
 

@@ -20,9 +20,9 @@ implemented behind one inner port and are exposed to LangGraph only through
 `knowledge_mcp`. A deterministic, deny-by-default model-egress decorator checks explicit
 request classification against each Model Profile's validated Execution Zone before
 invoking the provider adapter. LangGraph and LangChain Core are used narrowly for
-orchestration. An explicitly injected `InMemorySaver` supports local/test checkpoint and
-HITL demonstrations; it is not durable persistence. There is no dynamic tool registry,
-production persistence backend, LangSmith integration, or general evaluation framework.
+orchestration. The runtime uses LangGraph's official PostgreSQL async checkpointer for
+durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
+dynamic tool registry, LangSmith integration, or general evaluation framework.
 Two read-only MCP services expose existing capabilities through the official MCP SDK v2.
 `factory_mcp` provides product history and machine status; `knowledge_mcp` provides
 documentation search. Both retain stdio for process-coupled development and
@@ -43,13 +43,13 @@ MCP results, and the LangGraph run's effective classification. It is separate fr
 subject authorization and from ADR-009 model egress eligibility.
 
 FastAPI now provides the local/demo external Application Boundary. Its versioned
-`POST /api/v1/runs` endpoint creates a UUID, records local lifecycle state in a focused
-in-memory store, and awaits an injected troubleshooting run service. That service creates
+`POST /api/v1/runs` endpoint creates a UUID, records lifecycle state in the PostgreSQL
+`agent_runtime` schema, and awaits an injected troubleshooting run service. That service creates
 server-owned `CONFIDENTIAL` task requirements, routes a semantic profile, and invokes
 the existing LangGraph MCP path. Public Pydantic API contracts contain only the run ID,
 status, final answer, and normalized tool calls; they do not expose LangGraph state,
 LangChain messages, MCP types, prompts, or raw tool payloads. `GET /health` is
-process-local liveness only, and `GET /api/v1/runs/{run_id}` reads the non-durable local
+process-local liveness only, and `GET /api/v1/runs/{run_id}` reads the durable application
 record. The separate static `frontend/` browser client communicates only with this public
 HTTP/JSON API. The local API entry point permits only `http://localhost:8080` through
 explicit CORS configuration; it does not serve frontend assets. The API has no CORS
@@ -61,7 +61,7 @@ flowchart LR
     Browser["Static browser frontend\nHTTP/JSON only"] --> API["FastAPI /api/v1"]
     Client["Local client / Swagger UI"] --> API
     API --> Service["TroubleshootingRunService"]
-    API --> Store["InMemoryAgentRunStore\nlocal/demo only"]
+    API --> Store["PostgreSqlAgentRunStore\nagent_runtime.agent_runs + RLS"]
     Service --> Requirements["CONFIDENTIAL TaskRequirements"]
     Requirements --> Router["DeterministicModelRouter"]
     Router --> Graph["LangGraphTroubleshootingAgent"]
@@ -392,15 +392,17 @@ one-call dispatch explicit instead of adopting a framework default that could ch
 ADR-004 behavior. The Graph does not select a model: the Composition Root injects an
 already routed profile and a client whose final ADR-009 egress check remains active.
 
-For the separate action-only resumable run, the graph is compiled with a native `InMemorySaver` and invoked
+For the separate action-only resumable run, the graph is compiled with LangGraph's official
+`AsyncPostgresSaver` and invoked
 with `configurable.thread_id`. The approval node emits a JSON-serializable
 `action_approval` interrupt and resumes through `Command(resume="approve" | "reject")`
 using the same thread ID. The read-only MCP graph does not expose write tools.
 `create_maintenance_ticket` is an
 in-memory demonstration action: it is prepared before the interrupt, executes only after
-approval, and uses its tool-call ID as an in-memory idempotency key. Nodes before an
+approval, and uses its tool-call ID as an idempotency key. Nodes before an
 interrupt remain side-effect-free because LangGraph restarts the node from its beginning
-on resume. `InMemorySaver` loses state at process end; durable storage is deferred by
+on resume. The checkpoint schema is framework-owned; application lifecycle records stay
+in `agent_runtime.agent_runs`. Both preserve their distinct responsibilities under
 [ADR-011](../decisions/ADR-011-agent-persistence-and-human-in-the-loop.md).
 
 ## Tool Selection Evaluation Baseline
