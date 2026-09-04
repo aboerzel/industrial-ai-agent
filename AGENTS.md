@@ -181,6 +181,11 @@ necessary.
 Provider adapters belong to `infrastructure`. Add abstractions for multiple or
 non-OpenAI-compatible providers only when an implemented capability requires them.
 
+Embedding models are a separate model role. Do not add embeddings to `LLMClient` or a
+generic `AIModelClient`; introduce a focused inner embedding port only when an
+implemented semantic-retrieval capability needs it, with concrete adapters in
+`infrastructure`. See `docs/decisions/ADR-007-embedding-model-abstraction.md`.
+
 See `docs/decisions/ADR-002-provider-and-model-independent-llm-architecture.md`.
 
 ---
@@ -653,6 +658,7 @@ ADR-003  Hexagonal Architecture
 ADR-004  Agent orchestration strategy
 ADR-005  Testing and evaluation strategy
 ADR-006  Knowledge retrieval and RAG architecture
+ADR-007  Embedding model abstraction
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

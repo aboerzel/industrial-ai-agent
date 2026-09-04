@@ -406,6 +406,44 @@ Retrieval Core bleibt gemäß
 [ADR-006](../decisions/ADR-006-knowledge-retrieval-and-rag-architecture.de.md)
 unabhängig von einer späteren Knowledge-MCP-Transportgrenze.
 
+Die nächste Semantic-Retrieval-Implementierung führt einen fokussierten inneren
+Embedding-Port erst bei ihrer tatsächlichen Implementierung ein. Embeddings bleiben
+eine von `LLMClient` getrennte Modellrolle; Provider Adapter und Modellkonfiguration
+verbleiben in Infrastructure. Die folgende geplante Grenze ist nicht Teil der aktuellen
+Implementierung:
+
+```mermaid
+flowchart LR
+    Capability["DocumentationSearchCapability"] --> KnowledgePort["KnowledgeRetriever<br/>bestehender innerer Port"]
+
+    subgraph Core["Application Core"]
+        KnowledgePort
+        EmbeddingPort["Embedding-Port<br/>zukünftig"]
+    end
+
+    subgraph Infrastructure["Zukünftige Infrastructure"]
+        Semantic["SemanticKnowledgeRetriever"]
+        Adapter["Embedding Provider Adapter"]
+        Index["Vector Index"]
+    end
+
+    Semantic -.->|"implementiert"| KnowledgePort
+    Semantic -->|"verwendet"| EmbeddingPort
+    Adapter -.->|"implementiert"| EmbeddingPort
+    Semantic --> Index
+    Adapter --> Model["Konfiguriertes lokales oder Cloud-<br/>Embedding-Modell"]
+
+    classDef core fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
+    class KnowledgePort,EmbeddingPort core
+    class Semantic,Adapter,Index adapter
+    class Model external
+```
+
+Modell, Dimension, Similarity-Metrik, Index-Technologie und Persistenz bleiben offen.
+Siehe [ADR-007](../decisions/ADR-007-embedding-model-abstraction.de.md).
+
 ### Breitere Zielrichtung
 
 Mögliche spätere Stufen sind:
