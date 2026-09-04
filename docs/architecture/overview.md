@@ -25,6 +25,38 @@ discovers and authorizes tools through the temporary LangChain bridge, executes 
 bounded sequential loop, then closes all sessions. Transport selection is made by an
 outer Composition Root.
 
+FastAPI now provides the local/demo external Application Boundary. Its versioned
+`POST /api/v1/runs` endpoint creates a UUID, records local lifecycle state in a focused
+in-memory store, and awaits an injected troubleshooting run service. That service creates
+server-owned `CONFIDENTIAL` task requirements, routes a semantic profile, and invokes
+the existing LangGraph MCP path. Public Pydantic API contracts contain only the run ID,
+status, final answer, and normalized tool calls; they do not expose LangGraph state,
+LangChain messages, MCP types, prompts, or raw tool payloads. `GET /health` is
+process-local liveness only, and `GET /api/v1/runs/{run_id}` reads the non-durable local
+record. The API has no CORS wildcard, authentication, TLS, rate limiting, streaming, or
+HITL resume endpoint. Swagger UI at `/docs` is the initial browser client.
+
+```mermaid
+flowchart LR
+    Client["Local client / Swagger UI"] --> API["FastAPI /api/v1"]
+    API --> Service["TroubleshootingRunService"]
+    API --> Store["InMemoryAgentRunStore\nlocal/demo only"]
+    Service --> Requirements["CONFIDENTIAL TaskRequirements"]
+    Requirements --> Router["DeterministicModelRouter"]
+    Router --> Graph["LangGraphTroubleshootingAgent"]
+    Graph --> Provider["MCP Tool Provider"]
+    Provider --> Factory["factory_mcp"]
+    Provider --> Knowledge["knowledge_mcp"]
+    Graph --> Egress["EgressCheckedLLMClient"]
+
+    classDef boundary fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef state fill:#fefce8,stroke:#ca8a04,color:#422006
+    classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class API,Service,Requirements,Router,Graph,Provider,Factory,Knowledge boundary
+    class Store state
+    class Egress security
+```
+
 The implemented request flow is:
 
 ```mermaid

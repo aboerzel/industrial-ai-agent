@@ -9,6 +9,8 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontext
 from dataclasses import dataclass
 from typing import cast
 
+import httpx
+import httpx2
 from langchain_core.tools import BaseTool, StructuredTool
 from mcp import ClientSession
 from mcp.types import CallToolResult, Tool
@@ -19,6 +21,9 @@ from industrial_ai_agent.agent.mcp_tool_provider import (
     McpToolProvider,
     McpToolSession,
 )
+from industrial_ai_agent.agent.troubleshooting_run_service import (
+    McpServiceUnavailableError,
+)
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     FactoryMcpTransport,
     McpTransport,
@@ -27,10 +32,6 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
 
 DEFAULT_ALLOWED_FACTORY_TOOLS = frozenset({"get_product_history", "get_machine_status"})
 DEFAULT_ALLOWED_KNOWLEDGE_TOOLS = frozenset({"search_documentation"})
-
-
-class McpToolInvocationError(RuntimeError):
-    """Raised when a discovered MCP tool cannot provide structured content."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,85 +80,93 @@ class McpLangChainToolProvider(McpToolProvider):
     @asynccontextmanager
     async def _open_session(self) -> AsyncIterator[McpToolSession]:
         """Initialize, discover, authorize, and close one session per server."""
-        async with AsyncExitStack() as stack:
-            authorized_tools: list[BaseTool] = []
-            discovered_tool_names: list[str] = []
-            server_sessions: list[McpServerSession] = []
-            seen_tool_names: set[str] = set()
-            for configuration in self._servers:
-                client = await stack.enter_async_context(
-                    open_mcp_session(configuration.transport)
-                )
-                initialized = await client.initialize()
-                listed_tools = await client.list_tools()
-                server_tool_names = tuple(tool.name for tool in listed_tools.tools)
-                duplicate_names = seen_tool_names.intersection(server_tool_names)
-                if duplicate_names:
-                    duplicates = ", ".join(sorted(duplicate_names))
-                    raise RuntimeError(
-                        f"Duplicate MCP tool names discovered: {duplicates}"
+        try:
+            async with AsyncExitStack() as stack:
+                authorized_tools: list[BaseTool] = []
+                discovered_tool_names: list[str] = []
+                server_sessions: list[McpServerSession] = []
+                seen_tool_names: set[str] = set()
+                for configuration in self._servers:
+                    client = await stack.enter_async_context(
+                        open_mcp_session(configuration.transport)
                     )
-                seen_tool_names.update(server_tool_names)
-                discovered_by_name = {tool.name: tool for tool in listed_tools.tools}
-                missing_tools = configuration.allowed_tool_names.difference(
-                    discovered_by_name
-                )
-                if missing_tools:
-                    missing = ", ".join(sorted(missing_tools))
-                    raise RuntimeError(
-                        f"Required MCP tools were not discovered from "
-                        f"{configuration.server_id}: {missing}"
+                    initialized = await client.initialize()
+                    listed_tools = await client.list_tools()
+                    server_tool_names = tuple(tool.name for tool in listed_tools.tools)
+                    duplicate_names = seen_tool_names.intersection(server_tool_names)
+                    if duplicate_names:
+                        duplicates = ", ".join(sorted(duplicate_names))
+                        raise RuntimeError(
+                            f"Duplicate MCP tool names discovered: {duplicates}"
+                        )
+                    seen_tool_names.update(server_tool_names)
+                    discovered_by_name = {
+                        tool.name: tool for tool in listed_tools.tools
+                    }
+                    missing_tools = configuration.allowed_tool_names.difference(
+                        discovered_by_name
                     )
-                authorized_tools.extend(
-                    _create_langchain_tool(tool, client)
-                    for tool in listed_tools.tools
-                    if tool.name in configuration.allowed_tool_names
-                )
-                discovered_tool_names.extend(server_tool_names)
-                server_sessions.append(
-                    McpServerSession(
-                        server_id=configuration.server_id,
-                        server_name=initialized.server_info.name,
-                        server_version=initialized.server_info.version,
-                        protocol_version=initialized.protocol_version,
-                        discovered_tool_names=server_tool_names,
+                    if missing_tools:
+                        missing = ", ".join(sorted(missing_tools))
+                        raise RuntimeError(
+                            f"Required MCP tools were not discovered from "
+                            f"{configuration.server_id}: {missing}"
+                        )
+                    authorized_tools.extend(
+                        _create_langchain_tool(tool, client)
+                        for tool in listed_tools.tools
+                        if tool.name in configuration.allowed_tool_names
                     )
+                    discovered_tool_names.extend(server_tool_names)
+                    server_sessions.append(
+                        McpServerSession(
+                            server_id=configuration.server_id,
+                            server_name=initialized.server_info.name,
+                            server_version=initialized.server_info.version,
+                            protocol_version=initialized.protocol_version,
+                            discovered_tool_names=server_tool_names,
+                        )
+                    )
+                first_server = server_sessions[0]
+                yield McpToolSession(
+                    tools=tuple(authorized_tools),
+                    discovered_tool_names=tuple(discovered_tool_names),
+                    server_name=(
+                        first_server.server_name
+                        if len(server_sessions) == 1
+                        else "multiple"
+                    ),
+                    server_version=(
+                        first_server.server_version
+                        if len(server_sessions) == 1
+                        else "multiple"
+                    ),
+                    protocol_version=(
+                        first_server.protocol_version
+                        if len(server_sessions) == 1
+                        else "multiple"
+                    ),
+                    servers=tuple(server_sessions),
                 )
-            first_server = server_sessions[0]
-            yield McpToolSession(
-                tools=tuple(authorized_tools),
-                discovered_tool_names=tuple(discovered_tool_names),
-                server_name=(
-                    first_server.server_name
-                    if len(server_sessions) == 1
-                    else "multiple"
-                ),
-                server_version=(
-                    first_server.server_version
-                    if len(server_sessions) == 1
-                    else "multiple"
-                ),
-                protocol_version=(
-                    first_server.protocol_version
-                    if len(server_sessions) == 1
-                    else "multiple"
-                ),
-                servers=tuple(server_sessions),
-            )
+        except* (OSError, TimeoutError, httpx.HTTPError, httpx2.HTTPError) as error:
+            raise McpServiceUnavailableError("MCP service is unavailable") from error
 
 
 def _create_langchain_tool(tool: Tool, client: ClientSession) -> BaseTool:
     arguments_schema = _create_arguments_schema(tool)
 
     async def invoke_mcp_tool(**arguments: object) -> str:
-        response = await client.call_tool(tool.name, dict(arguments))
+        try:
+            response = await client.call_tool(tool.name, dict(arguments))
+        except (OSError, TimeoutError, httpx.HTTPError, httpx2.HTTPError) as error:
+            raise McpServiceUnavailableError("MCP service is unavailable") from error
         if not isinstance(response, CallToolResult):
-            raise McpToolInvocationError(
-                f"MCP tool {tool.name} did not return a completed result"
+            raise McpServiceUnavailableError(
+                "MCP tool did not return a completed result"
             )
         if response.is_error or response.structured_content is None:
-            raise McpToolInvocationError(
-                f"MCP tool {tool.name} did not return structured content"
+            raise McpServiceUnavailableError(
+                "MCP tool did not return structured content"
             )
         return json.dumps(response.structured_content, sort_keys=True)
 

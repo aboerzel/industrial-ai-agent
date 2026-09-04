@@ -708,6 +708,7 @@ ADR-009  Data classification and model egress policy
 ADR-010  LangGraph and LangChain orchestration migration
 ADR-011  Agent persistence and human-in-the-loop
 ADR-012  MCP integration architecture
+ADR-013  FastAPI application boundary
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

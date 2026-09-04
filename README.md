@@ -53,6 +53,49 @@ and authorizes all configured server tools, rejects duplicate tool names, opens 
 session per server for the run, and calls tools sequentially. There is no generalized
 MCP router or MCP write action.
 
++## Local FastAPI API
+
+FastAPI is the local/demo HTTP Application Boundary, not an agent, MCP, routing, or
+egress replacement. It delegates each run to `TroubleshootingRunService`, which fixes
+the first API use case to `CONFIDENTIAL`, selects an eligible semantic model profile
+through the existing deterministic router, and invokes the LangGraph multi-MCP path.
+The API never accepts a model, provider, profile, execution zone, or client-controlled
+data classification.
+
+Start Factory and Knowledge MCP over HTTP first, then start the API locally:
+
+```powershell
+docker compose up --build -d factory-mcp knowledge-mcp
+python -m industrial_ai_agent.infrastructure.agent_api
+```
+
+The API listens on `127.0.0.1:8000` by default. Open `http://127.0.0.1:8000/docs` for
+Swagger UI, or submit one run directly:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/runs `
+  -ContentType 'application/json' `
+  -Body '{"message":"P4711 failed during production. Investigate what happened and check the current status of the relevant station. Then consult the local technical documentation for the relevant fault and provide a final diagnosis."}'
+```
+
+`GET /health` reports API process liveness. `POST /api/v1/runs` returns a UUID,
+`success` or `limit_reached` status, the final answer when available, and normalized
+tool calls. `GET /api/v1/runs/{run_id}` reads the local in-memory run record. Records
+are lost at process restart and are not production persistence. Errors are sanitized:
+unknown IDs return `404`, policy denial returns `403`, and unavailable models or MCP
+services return `503`.
+
+The API is local/demo only: it has no authentication, authorization, TLS, rate limiting,
+CORS wildcard, streaming, durable persistence, or HITL resume endpoint. A remotely
+reachable deployment requires those controls in a later slice. See
+[FastAPI Application Boundary](docs/learning/fastapi-application-boundary.md).
+
+With both MCP containers and local Ollama running, execute the sequential real smoke:
+
+```powershell
+python scripts/smoke_test_fastapi.py
+```
+
 ## Manual MCP Smoke Test
 
 Run the local stdio client and server without an LLM or external service:
