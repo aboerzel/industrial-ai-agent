@@ -53,7 +53,7 @@ and authorizes all configured server tools, rejects duplicate tool names, opens 
 session per server for the run, and calls tools sequentially. There is no generalized
 MCP router or MCP write action.
 
-+## Local FastAPI API
+## Local FastAPI API
 
 FastAPI is the local/demo HTTP Application Boundary, not an agent, MCP, routing, or
 egress replacement. It delegates each run to `TroubleshootingRunService`, which fixes
@@ -86,8 +86,8 @@ unknown IDs return `404`, policy denial returns `403`, and unavailable models or
 services return `503`.
 
 The API is local/demo only: it has no authentication, authorization, TLS, rate limiting,
-CORS wildcard, streaming, durable persistence, or HITL resume endpoint. A remotely
-reachable deployment requires those controls in a later slice. See
+streaming, durable persistence, or HITL resume endpoint. A remotely reachable deployment
+requires those controls in a later slice. See
 [FastAPI Application Boundary](docs/learning/fastapi-application-boundary.md).
 
 With both MCP containers and local Ollama running, execute the sequential real smoke:
@@ -95,6 +95,25 @@ With both MCP containers and local Ollama running, execute the sequential real s
 ```powershell
 python scripts/smoke_test_fastapi.py
 ```
+
+## Local Browser Demo
+
+`frontend/` is a separate static browser client. It only knows the public JSON API; it
+does not import Python code or know LangGraph, MCP, model routing, providers, or
+retrieval. Start it independently of the API:
+
+```powershell
+python -m http.server 8080 --directory frontend
+```
+
+Open `http://localhost:8080`. The local FastAPI entry point explicitly allows only this
+development origin by default. Set `AGENT_FRONTEND_ORIGIN` to the actual browser-client
+origin when the local deployment changes; production requires a separately designed
+origin, authentication, authorization, TLS, and rate-limiting configuration. The UI
+submits `POST /api/v1/runs` and displays the public run ID, status, answer, and
+normalized executed tool calls.
+
+See [Browser Frontend](docs/learning/browser-frontend.md).
 
 ## Manual MCP Smoke Test
 

@@ -45,6 +45,47 @@ def test_health_returns_ok() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_cors_allows_only_configured_development_origin() -> None:
+    client = TestClient(
+        create_app(
+            FakeRunService(result=_success_result()),
+            allowed_origins=("http://localhost:8080",),
+        )
+    )
+
+    response = client.options(
+        "/api/v1/runs",
+        headers={
+            "Origin": "http://localhost:8080",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:8080"
+    assert response.headers["access-control-allow-methods"] == "GET, POST"
+
+
+def test_cors_rejects_unconfigured_origin() -> None:
+    client = TestClient(
+        create_app(
+            FakeRunService(result=_success_result()),
+            allowed_origins=("http://localhost:8080",),
+        )
+    )
+
+    response = client.options(
+        "/api/v1/runs",
+        headers={
+            "Origin": "http://untrusted.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
 def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
     service = FakeRunService(result=_success_result())
     client = TestClient(create_app(service))

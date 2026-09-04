@@ -6,8 +6,9 @@ FastAPI is the external HTTP Application Boundary for the local/demo Industrial 
 It provides a versioned API contract and generated OpenAPI documentation without becoming
 an agent framework, tool protocol, routing policy, or security control.
 
-The initial browser client is FastAPI's Swagger UI at `/docs`. A dedicated browser UI is
-a separate later client.
+Swagger UI at `/docs` remains the generated contract explorer. The separate static
+browser UI in `frontend/` is an HTTP/JSON client of this API, not a FastAPI template or
+an agent-runtime component.
 
 ## Responsibilities
 
@@ -18,6 +19,8 @@ FastAPI owns:
 * UUID generation for API run IDs.
 * A focused in-memory run lifecycle store for the local process.
 * OpenAPI and Swagger UI publication.
+* A locally configured explicit CORS allowlist for the separate browser development
+  origin.
 
 FastAPI does not own:
 
@@ -25,6 +28,7 @@ FastAPI does not own:
 * factory or knowledge capabilities, repositories, retrieval, embeddings, or reranking;
 * model/provider selection, model names, execution zones, or egress authorization;
 * LangGraph state, tool-loop limits, checkpoint semantics, or HITL decisions;
+* browser rendering, templates, static asset hosting, or frontend UI logic;
 * Docker lifecycle or MCP service deployment.
 
 ## Request Lifecycle
@@ -95,9 +99,13 @@ traces, secrets, prompts, or raw tool results.
 
 MCP's local network transport is independent from model egress. Factory and Knowledge
 MCP may run in Docker, while ADR-009 still requires the final local-only egress check for
-a confidential troubleshooting run. The API applies no CORS wildcard. It is local/demo
-only and has no authentication, authorization, TLS, rate limiting, remote deployment, or
-agent container in this slice.
+a confidential troubleshooting run. The API uses no CORS wildcard. Its local entry point
+permits only `http://localhost:8080` by default; `AGENT_FRONTEND_ORIGIN` can provide one
+explicit replacement origin for a changed local deployment. Production origin policy
+must be configured with the real browser client and its authentication, authorization,
+TLS, and rate-limiting controls. The API remains local/demo only and has no
+authentication, authorization, TLS, rate limiting, remote deployment, or agent container
+in this slice.
 
 ## OpenAPI
 
@@ -117,6 +125,16 @@ python -m industrial_ai_agent.infrastructure.agent_api
 The default API address is `http://127.0.0.1:8000`. The Composition Root defaults to
 Streamable HTTP MCP endpoints at ports `8001` and `8002`; `AGENT_MCP_TRANSPORT=stdio`
 retains the development/test transport.
+
+For the separate browser client, run:
+
+```powershell
+python -m http.server 8080 --directory frontend
+```
+
+Then open `http://localhost:8080`. The frontend sends only public run requests and reads
+public run responses; it cannot select a model, provider, MCP server, or data
+classification.
 
 See [ADR-013](../decisions/ADR-013-fastapi-application-boundary.md) for the durable
 boundary decision.

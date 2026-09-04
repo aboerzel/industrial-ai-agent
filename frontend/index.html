@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Local browser client for the Industrial AI Agent API."
+    />
+    <title>Industrial AI Agent</title>
+    <link rel="stylesheet" href="css/app.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="site-header">
+        <p class="eyebrow">LOCAL DEMO / CONFIDENTIAL</p>
+        <h1>Industrial AI Agent</h1>
+        <p class="subtitle">
+          Troubleshooting assistant using LangGraph and MCP-based industrial services.
+        </p>
+      </header>
+
+      <section class="workspace" aria-label="Troubleshooting workspace">
+        <form class="investigation-panel" id="investigation-form">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">NEW RUN</p>
+              <h2>Investigate an industrial issue</h2>
+            </div>
+            <span class="connection-indicator" aria-hidden="true"></span>
+          </div>
+
+          <label for="message">Troubleshooting request</label>
+          <textarea id="message" name="message" required rows="8">Investigate why product P4711 failed at station S04. Use the available documentation if needed.</textarea>
+          <p class="field-note">Requests are classified as confidential by the server.</p>
+          <button id="run-button" type="submit">Run Investigation</button>
+        </form>
+
+        <section class="result-panel" aria-live="polite" aria-labelledby="result-title">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">RUN RESULT</p>
+              <h2 id="result-title">Awaiting investigation</h2>
+            </div>
+            <span class="status-badge" data-status="idle" id="run-status">Idle</span>
+          </div>
+
+          <dl class="run-metadata">
+            <div>
+              <dt>Run ID</dt>
+              <dd id="run-id">Not started</dd>
+            </div>
+          </dl>
+
+          <div class="answer-section">
+            <h3>Agent answer</h3>
+            <p class="empty-state" id="answer">Start an investigation to view the diagnosis.</p>
+          </div>
+
+          <div class="tool-section">
+            <h3>Executed tool calls</h3>
+            <ol class="tool-calls empty-state" id="tool-calls">
+              <li>No tool calls yet.</li>
+            </ol>
+          </div>
+
+          <p class="error-message" hidden id="error-message" role="alert"></p>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>

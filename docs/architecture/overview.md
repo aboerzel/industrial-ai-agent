@@ -33,12 +33,16 @@ the existing LangGraph MCP path. Public Pydantic API contracts contain only the 
 status, final answer, and normalized tool calls; they do not expose LangGraph state,
 LangChain messages, MCP types, prompts, or raw tool payloads. `GET /health` is
 process-local liveness only, and `GET /api/v1/runs/{run_id}` reads the non-durable local
-record. The API has no CORS wildcard, authentication, TLS, rate limiting, streaming, or
-HITL resume endpoint. Swagger UI at `/docs` is the initial browser client.
+record. The separate static `frontend/` browser client communicates only with this public
+HTTP/JSON API. The local API entry point permits only `http://localhost:8080` through
+explicit CORS configuration; it does not serve frontend assets. The API has no CORS
+wildcard, authentication, TLS, rate limiting, streaming, or HITL resume endpoint.
+Swagger UI at `/docs` remains the generated API contract explorer.
 
 ```mermaid
 flowchart LR
-    Client["Local client / Swagger UI"] --> API["FastAPI /api/v1"]
+    Browser["Static browser frontend\nHTTP/JSON only"] --> API["FastAPI /api/v1"]
+    Client["Local client / Swagger UI"] --> API
     API --> Service["TroubleshootingRunService"]
     API --> Store["InMemoryAgentRunStore\nlocal/demo only"]
     Service --> Requirements["CONFIDENTIAL TaskRequirements"]

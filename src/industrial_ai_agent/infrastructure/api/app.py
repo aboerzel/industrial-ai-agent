@@ -4,6 +4,7 @@ from typing import NoReturn
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
@@ -40,6 +41,7 @@ def create_app(
     run_service: AgentRunService,
     *,
     run_store: AgentRunStore | None = None,
+    allowed_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
     app = FastAPI(
@@ -52,6 +54,15 @@ def create_app(
     app.state.run_service = run_service
     app.state.run_store = run_store or InMemoryAgentRunStore()
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
+    if allowed_origins:
+        # noinspection PyTypeChecker
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(allowed_origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type"],
+        )
 
     @app.get(
         "/health",

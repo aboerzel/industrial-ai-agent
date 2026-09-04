@@ -764,6 +764,13 @@ for example `Dockerfile.factory-mcp`, `Dockerfile.knowledge-mcp`,
 `Dockerfile.vision-mcp`, or `Dockerfile.agent-api`. Third-party service images do not
 require a project Dockerfile unless the project actually builds a custom image for them.
 
+## Frontend Boundary
+
+Frontend code must remain isolated from the Python backend and may communicate with the
+agent exclusively through the public HTTP API. It must not import or depend on LangGraph,
+LangChain, MCP, Domain capabilities, repositories, model routing, or provider-specific
+code.
+
 ## Git
 
 Keep commits focused.

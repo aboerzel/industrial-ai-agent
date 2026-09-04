@@ -12,12 +12,17 @@ from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_FRONTEND_ORIGIN = "http://localhost:8080"
 
 
 def create_default_app():
     """Compose the local/demo FastAPI application without embedding deployment details."""
     load_local_environment(PROJECT_ROOT / ".env")
-    return create_app(create_default_troubleshooting_run_service())
+    frontend_origin = os.getenv("AGENT_FRONTEND_ORIGIN", DEFAULT_FRONTEND_ORIGIN)
+    return create_app(
+        create_default_troubleshooting_run_service(),
+        allowed_origins=(frontend_origin,),
+    )
 
 
 app = create_default_app()
