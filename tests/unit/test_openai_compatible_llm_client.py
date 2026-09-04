@@ -57,6 +57,9 @@ def create_configuration() -> LLMConfiguration:
                     "temperature": 0,
                     "authentication": "none",
                     "execution_zone": "LOCAL",
+                    "capabilities": ["TEXT", "TOOL_CALLING"],
+                    "quality_class": "HIGH",
+                    "cost_class": "LOW",
                 }
             }
         }
@@ -75,6 +78,9 @@ def create_authenticated_configuration() -> LLMConfiguration:
                     "authentication": "api_key",
                     "api_key_env": "CLOUD_LLM_API_KEY",
                     "execution_zone": "PUBLIC_CLOUD",
+                    "capabilities": ["TEXT"],
+                    "quality_class": "HIGH",
+                    "cost_class": "LOW",
                 }
             }
         }

@@ -59,14 +59,18 @@ ollama pull qwen3.5:9b
 python scripts/smoke_test_ollama.py
 python scripts/smoke_test_ollama.py --profile local_fast
 python scripts/smoke_test_ollama.py --profile local_quality
+python scripts/smoke_test_model_routing.py
 python scripts/smoke_test_troubleshooting_agent.py
 ```
 
 Ohne `--profile` ruft das erste Skript `local_fast` und `local_quality` nacheinander auf.
 Die expliziten Aufrufe testen jedes semantische Profile separat und geben sein
-konfiguriertes Modell zusammen mit der Antwort aus. Das Troubleshooting-Skript verwendet
-weiterhin das kompatible `troubleshooting`-Profile, führt eine mehrstufige Anfrage aus
-und prüft strukturell die sequenziellen Calls
+konfiguriertes Modell zusammen mit der Antwort aus. Der Router Smoke prüft
+deterministisch eine kostenorientierte öffentliche Auswahl, eine vertrauliche lokale
+Auswahl mit hoher Quality und Fail-closed bei einer vertraulichen Auswahl, wenn nur
+`public_fast` verfügbar ist. Das Troubleshooting-Skript erstellt explizite vertrauliche
+Task Requirements, wählt aktuell das kompatible lokale Profile `local_quality`, führt
+eine mehrstufige Anfrage aus und prüft strukturell die sequenziellen Calls
 `get_product_history(P4711)` und `get_machine_status(S04)` vor einer erfolgreichen
 finalen Antwort.
 

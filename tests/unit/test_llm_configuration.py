@@ -4,6 +4,11 @@ import pytest
 from pydantic import ValidationError
 
 from industrial_ai_agent.agent.model_egress import ExecutionZone
+from industrial_ai_agent.agent.model_routing import (
+    CostClass,
+    LLMCapability,
+    QualityClass,
+)
 from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
     LLMConfiguration,
@@ -28,6 +33,11 @@ def test_loads_troubleshooting_profile() -> None:
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.NONE
     assert profile.execution_zone is ExecutionZone.LOCAL
+    assert profile.capabilities == frozenset(
+        {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+    )
+    assert profile.quality_class is QualityClass.HIGH
+    assert profile.cost_class is CostClass.LOW
     assert profile.api_key_env is None
 
 
@@ -40,6 +50,11 @@ def test_loads_local_fast_profile() -> None:
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.NONE
     assert profile.execution_zone is ExecutionZone.LOCAL
+    assert profile.capabilities == frozenset(
+        {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+    )
+    assert profile.quality_class is QualityClass.STANDARD
+    assert profile.cost_class is CostClass.LOW
     assert profile.api_key_env is None
 
 
@@ -52,6 +67,11 @@ def test_loads_local_quality_profile() -> None:
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.NONE
     assert profile.execution_zone is ExecutionZone.LOCAL
+    assert profile.capabilities == frozenset(
+        {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+    )
+    assert profile.quality_class is QualityClass.HIGH
+    assert profile.cost_class is CostClass.LOW
     assert profile.api_key_env is None
 
 
@@ -64,6 +84,11 @@ def test_loads_public_fast_profile() -> None:
     assert profile.temperature == 0
     assert profile.authentication is AuthenticationMode.API_KEY
     assert profile.execution_zone is ExecutionZone.PUBLIC_CLOUD
+    assert profile.capabilities == frozenset(
+        {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+    )
+    assert profile.quality_class is QualityClass.HIGH
+    assert profile.cost_class is CostClass.LOW
     assert profile.api_key_env == "GROQ_API_KEY"
 
 
@@ -104,6 +129,9 @@ def test_rejects_api_key_value_in_model_configuration() -> None:
                         "temperature": 0,
                         "authentication": "none",
                         "execution_zone": "LOCAL",
+                        "capabilities": ["TEXT", "TOOL_CALLING"],
+                        "quality_class": "HIGH",
+                        "cost_class": "LOW",
                         "api_key": "must-not-be-configured-here",
                     }
                 }
@@ -123,6 +151,9 @@ def test_requires_environment_variable_name_for_api_key_authentication() -> None
                         "temperature": 0,
                         "authentication": "api_key",
                         "execution_zone": "PUBLIC_CLOUD",
+                        "capabilities": ["TEXT"],
+                        "quality_class": "HIGH",
+                        "cost_class": "LOW",
                     }
                 }
             }
@@ -141,6 +172,9 @@ def test_rejects_environment_variable_name_for_no_authentication() -> None:
                         "temperature": 0,
                         "authentication": "none",
                         "execution_zone": "LOCAL",
+                        "capabilities": ["TEXT", "TOOL_CALLING"],
+                        "quality_class": "HIGH",
+                        "cost_class": "LOW",
                         "api_key_env": "UNNECESSARY_API_KEY",
                     }
                 }
@@ -159,6 +193,9 @@ def test_requires_explicit_execution_zone() -> None:
                         "base_url": "http://localhost:11434/v1",
                         "temperature": 0,
                         "authentication": "none",
+                        "capabilities": ["TEXT", "TOOL_CALLING"],
+                        "quality_class": "HIGH",
+                        "cost_class": "LOW",
                     }
                 }
             }
@@ -177,7 +214,36 @@ def test_rejects_unknown_execution_zone() -> None:
                         "temperature": 0,
                         "authentication": "none",
                         "execution_zone": "UNKNOWN",
+                        "capabilities": ["TEXT", "TOOL_CALLING"],
+                        "quality_class": "HIGH",
+                        "cost_class": "LOW",
                     }
                 }
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("capabilities", ["UNKNOWN"]),
+        ("quality_class", "UNKNOWN"),
+        ("cost_class", "UNKNOWN"),
+    ],
+)
+def test_rejects_unknown_routing_metadata(field: str, value: object) -> None:
+    raw_profile: dict[str, object] = {
+        "provider": "ollama",
+        "model": "qwen3.5:9b",
+        "base_url": "http://localhost:11434/v1",
+        "temperature": 0,
+        "authentication": "none",
+        "execution_zone": "LOCAL",
+        "capabilities": ["TEXT", "TOOL_CALLING"],
+        "quality_class": "HIGH",
+        "cost_class": "LOW",
+        field: value,
+    }
+
+    with pytest.raises(ValidationError, match=field):
+        LLMConfiguration.model_validate({"profiles": {"troubleshooting": raw_profile}})

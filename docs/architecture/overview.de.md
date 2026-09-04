@@ -111,17 +111,23 @@ Relevant-Chunk-Ground-Truth. Dasselbe unveränderte Dataset vergleicht beide Str
 Agent-Query-Formulierung und Grounding der finalen Antwort liegen außerhalb dieses
 Slice.
 
-Die implementierte LLM-Grenze ist:
+Die implementierte LLM-Grenze umfasst die deterministische Task-Level-Profile-Auswahl
+und einen separaten abschließenden Egress Check:
 
 ```mermaid
 flowchart LR
-    A["Agent / Use Case"] -->|"semantisches ModelProfile + LLMRequest"| G["EgressCheckedLLMClient"]
+    A["Composition Root / Use Case"] -->|"explizite TaskRequirements"| R["DeterministicModelRouter"]
+    M["Validierte Profile-Metadata"] --> R
+    S["ModelEgressPolicy<br/>Security Eligibility zuerst"] --> R
+    R -->|"ausgewähltes ModelProfile"| A
+    A -->|"ModelProfile + LLMRequest"| G["EgressCheckedLLMClient"]
     P["LLMClient port"]
     G -.->|"implementiert"| P
     C["OpenAICompatibleLLMClient"] -.->|"implementiert"| P
     CL["Explizite DataClassification"] --> G
-    POLICY["ModelEgressPolicy<br/>Deny-by-default"] --> G
-    TOML["config/model_profiles.toml<br/>Modelleinstellungen + Execution Zone"] --> G
+    S --> G
+    TOML["config/model_profiles.toml<br/>Modelleinstellungen + Routing-Metadata"] --> M
+    TOML --> G
     TOML --> C
     ENV["Environment Variables<br/>API Keys nur für authentifizierte Profile"] -.-> C
     G -->|"nur bei Allow"| C
@@ -133,7 +139,8 @@ flowchart LR
         P
         G
         CL
-        POLICY
+        R
+        S
         F
     end
 
@@ -150,18 +157,20 @@ flowchart LR
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
-    class A,P,G,CL,POLICY,F core
-    class C,TOML,ENV adapter
+    class A,P,G,CL,R,S,F core
+    class C,TOML,M,ENV adapter
     class E external
 ```
 
-`config/model_profiles.toml` weist jedem Profile unabhängig von seinem Provider eine
-explizite, validierte Execution Zone zu. `troubleshooting`, `local_fast` und
-`local_quality` verwenden `LOCAL`; `public_fast` verwendet `PUBLIC_CLOUD`. Aufrufer
-geben die Request-Klassifikation beim Erzeugen des kontrollierten Clients explizit an.
-Die aktuelle Policy erlaubt alle vier Klassifikationen lokal und nur `PUBLIC`-Daten in
-`PUBLIC_CLOUD`. Fehlende oder unbekannte Klassifikationen und Zonen schlagen geschlossen
-fehl, ohne den Adapter aufzurufen.
+`config/model_profiles.toml` weist jedem Profile explizite, validierte Capabilities,
+Quality- und relative Cost Classes sowie eine vom Provider unabhängige Execution Zone
+zu. `troubleshooting`, `local_fast` und `local_quality` verwenden `LOCAL`; `public_fast`
+verwendet `PUBLIC_CLOUD`. Ein Aufrufer erstellt `TaskRequirements`; der Router wendet die
+bestehende Egress Policy vor Capability-, Minimum-Quality- und Cost/Quality-Sortierung
+an. Für den unabhängigen finalen Check geben Aufrufer dem kontrollierten Client außerdem
+die Request-Klassifikation mit. Die aktuelle Policy erlaubt alle vier Klassifikationen
+lokal und nur `PUBLIC`-Daten in `PUBLIC_CLOUD`. Fehlende oder unbekannte Klassifikationen,
+Zonen oder Routing-Metadata schlagen geschlossen fehl, ohne den Adapter aufzurufen.
 
 Der implementierte Tool-Calling-Ablauf ist:
 
@@ -359,18 +368,21 @@ einschließlich strukturierter Not-found-Ergebnisse. Die isolierte
 Enthält provider-unabhängige LLM-Verträge und Agenten-Orchestrierungslogik.
 
 Die aktuelle Implementierung definiert `LLMClient`, die Auswahl über semantische
-`ModelProfile`, kleine Request- und Response-Modelle sowie `TroubleshootingAgent`. Der
-Agent enthält den expliziten begrenzten sequenziellen Loop und den festen
-Zwei-Tool-Dispatch. `AgentRunResult` unterscheidet `SUCCESS` von `LIMIT_REACHED` und gibt
-die Anzahl ausgeführter Tools sowie die normalisierte ausgeführte Trajectory an. Der
-Agent importiert weder das OpenAI-SDK noch benennt er einen konkreten Provider oder ein
-konkretes Modell.
+`ModelProfile`, kleine Request- und Response-Modelle sowie `TroubleshootingAgent`. Sie
+stellt außerdem explizite `TaskRequirements`, validierte Routing-Metadata und
+`DeterministicModelRouter` bereit. Der Router verwendet `ModelEgressPolicy`, filtert nach
+erforderlichen Capabilities und Minimum Quality und wendet anschließend eine stabile
+Cost/Quality-Sortierung an. Der Agent enthält den expliziten begrenzten sequenziellen
+Loop und den festen Zwei-Tool-Dispatch. `AgentRunResult` unterscheidet `SUCCESS` von
+`LIMIT_REACHED` und gibt die Anzahl ausgeführter Tools sowie die normalisierte
+ausgeführte Trajectory an. Der Agent konstruiert den Router nicht, importiert weder das
+OpenAI-SDK noch benennt er einen konkreten Provider oder ein konkretes Modell.
 
 Mögliche spätere Verantwortlichkeiten sind:
 
 * persistenter Agent State
 * Context Compression
-* umfangreicheres Routing
+* Classification Propagation im Application State
 * Integration von Policies und Guardrails
 
 ### `infrastructure`
@@ -414,30 +426,32 @@ Git ignorierte Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert 
 
 Die Architektur sollte nur dann weiterentwickelt werden, wenn implementierte Fähigkeiten dies erfordern.
 
-### Model Egress und geplantes Task-Level Routing
+### Task-Level Model Routing und Model Egress
 
-Das abschließende Data-Egress-Enforcement ist als innerer `LLMClient`-Decorator um den
-Provider Adapter implementiert. Es wendet die deterministische ADR-009-Policy auf eine
-explizite Request-Klassifikation und die validierte Execution Zone des ausgewählten
-Profiles an. Classification Propagation in Application State, der Eligibility Filter
-vor dem Routing, Task Requirements und deterministisches Task-Level Routing bleiben
-geplant.
+Task-Level Routing und abschließendes Data-Egress-Enforcement sind als getrennte innere
+Verantwortlichkeiten implementiert. Explizite `TaskRequirements` tragen Task Role,
+erforderliche Capabilities, Minimum Quality, Cost Preference und Data Classification.
+Der Router wendet zuerst die ADR-009-Policy als Security Eligibility Filter an, danach
+Capability- und Quality-Filter und erst dann seine deterministische Cost/Quality-
+Präferenz mit Profile-ID-Tie-Breaker. Der unabhängige `EgressCheckedLLMClient` wiederholt
+den ADR-009-Check unmittelbar vor dem Provider Adapter. Classification Propagation im
+Application State bleibt geplant.
 
 ```mermaid
 flowchart LR
-    Task["Task / Capability"] --> Requirements["Task Requirements<br/>geplant"]
+    Task["Task / Capability"] --> Requirements["Explizite Task Requirements"]
     Context["Request- + Tool- + Retrieval-Kontext"] -.-> Classification["Effektive Data Classification<br/>geplanter Application State"]
-    Requirements --> Eligibility["Security Eligibility Filter<br/>geplant, Deny-by-default"]
-    Classification --> Eligibility
-    Profiles["Konfigurierte Model Profiles<br/>validierte Execution Zone"] --> Eligibility
+    Requirements --> Eligibility["Security Eligibility Filter<br/>implementiert, Deny-by-default"]
+    Requirements --> ExplicitClass["Explizite Request-Klassifikation"]
+    ExplicitClass --> Eligibility
+    Profiles["Konfigurierte Model Profiles<br/>validierte Capabilities, Quality,<br/>Cost und Execution Zone"] --> Eligibility
     Eligibility --> Eligible["Nur zulässige Profiles"]
-    Eligible --> Router["Deterministischer Task Router<br/>geplant"]
+    Eligible --> Router["Deterministischer Task Router"]
     Requirements --> Router
     Router --> Selected["Ausgewähltes semantisches Profile"]
-    Caller["Aktueller Aufrufer<br/>explizite Klassifikation"] --> FinalCheck["EgressCheckedLLMClient<br/>implementierter finaler Check"]
-    Selected -.-> FinalCheck
+    Selected --> FinalCheck["EgressCheckedLLMClient<br/>unabhängiger finaler Check"]
     Profiles --> FinalCheck
-    Classification -.-> FinalCheck
+    ExplicitClass --> FinalCheck
     FinalCheck -->|"erlaubt"| Client["Provider-LLMClient-Adapter"]
     FinalCheck -->|"abgelehnt"| Failure["Deterministischer Fehler<br/>kein Adapter-Aufruf"]
     Client --> Endpoint["Konfigurierter Model Endpoint"]
@@ -446,15 +460,19 @@ flowchart LR
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
     classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
-    class Task,Requirements,Context,Classification,Caller core
+    class Task,Requirements,Context,Classification,ExplicitClass core
     class Eligibility,FinalCheck,Failure security
     class Profiles,Eligible,Router,Selected routing
     class Client,Endpoint adapter
 ```
 
-Kosten-, Qualitäts-, Latenz-, Verfügbarkeits- und Fallback-Präferenzen können den
-Security-Filter nicht überstimmen. Ist kein erlaubtes Profile verfügbar, schlägt die
-Auswahl geschlossen fehl, statt auf eine nicht erlaubte Zone zurückzufallen. Siehe
+`MINIMIZE_COST` sortiert nach niedrigeren relativen Kosten und dann nach der kleinsten
+ausreichenden Quality; `BALANCED` sortiert nach niedrigeren Kosten und dann höherer
+Quality; `PREFER_QUALITY` sortiert nach höherer Quality und dann niedrigeren Kosten. Jeder
+Tie endet mit der lexikalischen Profile ID, sodass die Eingabereihenfolge die Auswahl
+nicht beeinflusst. Fallbacks und adaptive Auswahl sind nicht implementiert. Ist kein
+erlaubtes und geeignetes Profile verfügbar, löst der Router `NoEligibleModelError` aus.
+Cost- und Quality-Präferenzen können den Security-Filter nicht überstimmen. Siehe
 [ADR-008](../decisions/ADR-008-task-level-model-routing.de.md) und
 [ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.de.md).
 
@@ -545,6 +563,7 @@ Dies ist eine Zielrichtung und nicht die aktuelle Implementierung.
 Model Profiles wie `vision`, `planning` oder `evaluation` können über Konfiguration
 ergänzt werden, sobald ihre Capabilities implementiert werden. Ein nicht
 OpenAI-kompatibler Provider benötigt einen weiteren Infrastructure Adapter hinter
-demselben `LLMClient`-Port; ein spekulativer Multi-Provider Router existiert heute
-nicht. Die Entscheidung und ihre Trade-offs beschreibt
+demselben `LLMClient`-Port; die Providerwahl bleibt ein Ergebnis semantischer
+Profile-Metadata und des deterministischen Task Routings statt providerspezifischer
+Agentenlogik. Die Entscheidung und ihre Trade-offs beschreibt
 [ADR-002](../decisions/ADR-002-provider-and-model-independent-llm-architecture.de.md).

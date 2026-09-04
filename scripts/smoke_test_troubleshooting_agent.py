@@ -3,6 +3,15 @@ from pathlib import Path
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     EgressCheckedLLMClient,
+    ModelEgressPolicy,
+)
+from industrial_ai_agent.agent.model_routing import (
+    CostPreference,
+    DeterministicModelRouter,
+    LLMCapability,
+    QualityClass,
+    TaskRequirements,
+    TaskRole,
 )
 from industrial_ai_agent.agent.troubleshooting_agent import (
     AgentRunStatus,
@@ -62,17 +71,33 @@ def main() -> None:
     )
     product_repository = RecordingProductHistoryRepository()
     machine_repository = RecordingMachineStatusRepository()
+    egress_policy = ModelEgressPolicy()
+    requirements = TaskRequirements(
+        task_role=TaskRole.TROUBLESHOOTING,
+        required_capabilities=frozenset(
+            {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+        ),
+        minimum_quality=QualityClass.HIGH,
+        cost_preference=CostPreference.PREFER_QUALITY,
+        data_classification=DataClassification.CONFIDENTIAL,
+    )
+    model_profile = DeterministicModelRouter(egress_policy).route(
+        requirements,
+        configuration.get_routing_profiles(),
+    )
 
     with OpenAICompatibleLLMClient(configuration) as adapter:
         llm_client = EgressCheckedLLMClient(
             adapter,
             configuration,
-            DataClassification.CONFIDENTIAL,
+            requirements.data_classification,
+            policy=egress_policy,
         )
         agent = TroubleshootingAgent(
             llm_client,
             ProductHistoryCapability(product_repository),
             MachineStatusCapability(machine_repository),
+            model_profile=model_profile,
         )
         result = agent.answer(
             "P4711 failed during production. Investigate what happened and check "
@@ -91,6 +116,7 @@ def main() -> None:
         raise RuntimeError("Successful smoke test did not return a final answer")
 
     print("tool_calls=get_product_history(P4711),get_machine_status(S04)")
+    print(f"selected_profile={model_profile.name}")
     print(f"status={result.status.value}")
     print(result.final_answer)
 

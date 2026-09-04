@@ -5,6 +5,9 @@ base_url = "http://localhost:11434/v1"
 temperature = 0
 authentication = "none"
 execution_zone = "LOCAL"
+capabilities = ["TEXT", "TOOL_CALLING"]
+quality_class = "HIGH"
+cost_class = "LOW"
 
 [profiles.local_fast]
 provider = "ollama"
@@ -13,6 +16,9 @@ base_url = "http://localhost:11434/v1"
 temperature = 0
 authentication = "none"
 execution_zone = "LOCAL"
+capabilities = ["TEXT", "TOOL_CALLING"]
+quality_class = "STANDARD"
+cost_class = "LOW"
 
 [profiles.local_quality]
 provider = "ollama"
@@ -21,6 +27,9 @@ base_url = "http://localhost:11434/v1"
 temperature = 0
 authentication = "none"
 execution_zone = "LOCAL"
+capabilities = ["TEXT", "TOOL_CALLING"]
+quality_class = "HIGH"
+cost_class = "LOW"
 
 [profiles.public_fast]
 provider = "groq"
@@ -30,3 +39,6 @@ temperature = 0
 authentication = "api_key"
 api_key_env = "GROQ_API_KEY"
 execution_zone = "PUBLIC_CLOUD"
+capabilities = ["TEXT", "TOOL_CALLING"]
+quality_class = "HIGH"
+cost_class = "LOW"

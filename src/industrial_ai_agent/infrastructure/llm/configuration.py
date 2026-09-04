@@ -5,7 +5,14 @@ from typing import Self
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
+from industrial_ai_agent.agent.llm import ModelProfile
 from industrial_ai_agent.agent.model_egress import ExecutionZone
+from industrial_ai_agent.agent.model_routing import (
+    CostClass,
+    LLMCapability,
+    ModelProfileMetadata,
+    QualityClass,
+)
 
 
 class AuthenticationMode(StrEnum):
@@ -22,6 +29,9 @@ class ModelProfileConfig(BaseModel):
     temperature: float = Field(ge=0, le=2)
     authentication: AuthenticationMode
     execution_zone: ExecutionZone
+    capabilities: frozenset[LLMCapability] = Field(min_length=1)
+    quality_class: QualityClass
+    cost_class: CostClass
     api_key_env: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
@@ -48,6 +58,18 @@ class LLMConfiguration(BaseModel):
 
     def get_execution_zone(self, profile_name: str) -> ExecutionZone:
         return self.get_profile(profile_name).execution_zone
+
+    def get_routing_profiles(self) -> tuple[ModelProfileMetadata, ...]:
+        return tuple(
+            ModelProfileMetadata(
+                profile=ModelProfile(profile_name),
+                capabilities=profile.capabilities,
+                quality_class=profile.quality_class,
+                cost_class=profile.cost_class,
+                execution_zone=profile.execution_zone,
+            )
+            for profile_name, profile in sorted(self.profiles.items())
+        )
 
 
 def load_llm_configuration(path: Path) -> LLMConfiguration:

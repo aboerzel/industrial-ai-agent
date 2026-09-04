@@ -108,17 +108,23 @@ measure Hit@1, Hit@3, and Mean Recall@3 using structured relevant-chunk ground t
 The same unchanged dataset compares both strategies. Agent query formulation and
 final-answer grounding are outside this slice.
 
-The implemented LLM boundary is:
+The implemented LLM boundary includes deterministic task-level profile selection and a
+separate final egress check:
 
 ```mermaid
 flowchart LR
-    A["Agent / Use Case"] -->|"semantic ModelProfile + LLMRequest"| G["EgressCheckedLLMClient"]
+    A["Composition Root / Use Case"] -->|"explicit TaskRequirements"| R["DeterministicModelRouter"]
+    M["Validated profile metadata"] --> R
+    S["ModelEgressPolicy<br/>security eligibility first"] --> R
+    R -->|"selected ModelProfile"| A
+    A -->|"ModelProfile + LLMRequest"| G["EgressCheckedLLMClient"]
     P["LLMClient port"]
     G -.->|"implements"| P
     C["OpenAICompatibleLLMClient"] -.->|"implements"| P
     CL["Explicit DataClassification"] --> G
-    POLICY["ModelEgressPolicy<br/>deny by default"] --> G
-    TOML["config/model_profiles.toml<br/>model settings + Execution Zone"] --> G
+    S --> G
+    TOML["config/model_profiles.toml<br/>model settings + routing metadata"] --> M
+    TOML --> G
     TOML --> C
     ENV["Environment variables<br/>API keys for authenticated profiles only"] -.-> C
     G -->|"allowed only"| C
@@ -130,7 +136,8 @@ flowchart LR
         P
         G
         CL
-        POLICY
+        R
+        S
         F
     end
 
@@ -147,18 +154,20 @@ flowchart LR
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
-    class A,P,G,CL,POLICY,F core
-    class C,TOML,ENV adapter
+    class A,P,G,CL,R,S,F core
+    class C,TOML,M,ENV adapter
     class E external
 ```
 
-`config/model_profiles.toml` assigns every profile an explicit, validated Execution
-Zone independently from its provider. `troubleshooting`, `local_fast`, and
-`local_quality` use `LOCAL`; `public_fast` uses `PUBLIC_CLOUD`. Callers explicitly
-supply the request classification when constructing the controlled client. The current
-policy allows all four classifications locally and allows only `PUBLIC` data in
-`PUBLIC_CLOUD`. Missing or unknown classifications and zones fail closed without an
-adapter call.
+`config/model_profiles.toml` assigns every profile explicit, validated capabilities,
+quality and relative cost classes, and an Execution Zone independent from its provider.
+`troubleshooting`, `local_fast`, and `local_quality` use `LOCAL`; `public_fast` uses
+`PUBLIC_CLOUD`. A caller creates `TaskRequirements`; the router applies the existing
+egress policy before capability, minimum-quality, and cost/quality ordering. Callers
+also supply the request classification to the controlled client for the independent
+final check. The current policy allows all four classifications locally and allows only
+`PUBLIC` data in `PUBLIC_CLOUD`. Missing or unknown classifications, zones, or routing
+metadata fail closed without an adapter call.
 
 The implemented tool-calling flow is:
 
@@ -353,17 +362,20 @@ results. The isolated
 Contains provider-independent LLM contracts and agent orchestration logic.
 
 The current implementation defines `LLMClient`, semantic `ModelProfile` selection,
-small request and response models, and `TroubleshootingAgent`. The agent contains the
-explicit bounded sequential loop and fixed two-tool dispatch. `AgentRunResult`
-distinguishes `SUCCESS` from `LIMIT_REACHED` and reports both the executed-tool count
-and the normalized executed trajectory. The agent does not import the OpenAI SDK or
-name a concrete provider or model.
+small request and response models, and `TroubleshootingAgent`. It also provides explicit
+`TaskRequirements`, validated routing metadata, and `DeterministicModelRouter`. The
+router reuses `ModelEgressPolicy`, filters by required capabilities and minimum quality,
+and then applies a stable cost/quality ordering. The agent contains the explicit bounded
+sequential loop and fixed two-tool dispatch. `AgentRunResult` distinguishes `SUCCESS`
+from `LIMIT_REACHED` and reports both the executed-tool count and the normalized executed
+trajectory. The agent does not construct the router, import the OpenAI SDK, or name a
+concrete provider or model.
 
 Possible later responsibilities include:
 
 * persistent agent state
 * context compression
-* richer routing
+* Application-state classification propagation
 * policy and guardrail integration
 
 ### `infrastructure`
@@ -405,29 +417,31 @@ directory unless deliberately curated.
 
 The architecture should evolve only when required by implemented capabilities.
 
-### Model Egress and Planned Task-Level Routing
+### Task-Level Model Routing and Model Egress
 
-Final data-egress enforcement is implemented as an inner `LLMClient` decorator around
-the provider adapter. It applies the deterministic ADR-009 policy to an explicit request
-classification and the selected profile's validated Execution Zone. Classification
-propagation into Application State, the pre-routing eligibility filter, Task
-Requirements, and deterministic task-level routing remain planned.
+Task-level routing and final data-egress enforcement are implemented as separate inner
+responsibilities. Explicit `TaskRequirements` carry task role, required capabilities,
+minimum quality, cost preference, and data classification. The router first applies the
+ADR-009 policy as a security eligibility filter, then capability and quality filters,
+and only then its deterministic cost/quality preference and profile-ID tie-breaker. The
+independent `EgressCheckedLLMClient` repeats the ADR-009 check immediately before the
+provider adapter. Application-state classification propagation remains planned.
 
 ```mermaid
 flowchart LR
-    Task["Task / capability"] --> Requirements["Task Requirements<br/>planned"]
+    Task["Task / capability"] --> Requirements["Explicit Task Requirements"]
     Context["Request + tool + retrieval context"] -.-> Classification["Effective Data Classification<br/>planned Application State"]
-    Requirements --> Eligibility["Security eligibility filter<br/>planned, deny by default"]
-    Classification --> Eligibility
-    Profiles["Configured Model Profiles<br/>validated Execution Zone"] --> Eligibility
+    Requirements --> Eligibility["Security eligibility filter<br/>implemented, deny by default"]
+    Requirements --> ExplicitClass["Explicit request classification"]
+    ExplicitClass --> Eligibility
+    Profiles["Configured Model Profiles<br/>validated capabilities, quality,<br/>cost, and Execution Zone"] --> Eligibility
     Eligibility --> Eligible["Eligible profiles only"]
-    Eligible --> Router["Deterministic task router<br/>planned"]
+    Eligible --> Router["Deterministic task router"]
     Requirements --> Router
     Router --> Selected["Selected semantic profile"]
-    Caller["Current caller<br/>explicit classification"] --> FinalCheck["EgressCheckedLLMClient<br/>implemented final check"]
-    Selected -.-> FinalCheck
+    Selected --> FinalCheck["EgressCheckedLLMClient<br/>independent final check"]
     Profiles --> FinalCheck
-    Classification -.-> FinalCheck
+    ExplicitClass --> FinalCheck
     FinalCheck -->|"allow"| Client["Provider LLMClient adapter"]
     FinalCheck -->|"deny"| Failure["Deterministic failure<br/>no adapter call"]
     Client --> Endpoint["Configured model endpoint"]
@@ -436,15 +450,18 @@ flowchart LR
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
     classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
-    class Task,Requirements,Context,Classification,Caller core
+    class Task,Requirements,Context,Classification,ExplicitClass core
     class Eligibility,FinalCheck,Failure security
     class Profiles,Eligible,Router,Selected routing
     class Client,Endpoint adapter
 ```
 
-Cost, quality, latency, availability, and fallback preferences cannot override the
-security filter. If no allowed profile is available, selection fails closed instead of
-falling back to a disallowed zone. See
+`MINIMIZE_COST` orders by lower relative cost and then the smallest sufficient quality;
+`BALANCED` orders by lower cost and then higher quality; `PREFER_QUALITY` orders by
+higher quality and then lower cost. Every tie ends with the lexical profile ID, so input
+order cannot affect selection. No fallback or adaptive selection is implemented. If no
+allowed and suitable profile is available, the router raises `NoEligibleModelError`.
+Cost and quality preferences cannot override the security filter. See
 [ADR-008](../decisions/ADR-008-task-level-model-routing.md) and
 [ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.md).
 
@@ -533,6 +550,7 @@ This is a target direction, not the current implementation.
 Model profiles such as `vision`, `planning`, or `evaluation` can be added through
 configuration when their capabilities are implemented. A non-OpenAI-compatible
 provider will require another infrastructure adapter behind the same `LLMClient` port;
-no speculative multi-provider router exists today. See
+provider choice remains an outcome of semantic profile metadata and deterministic task
+routing rather than provider-specific agent logic. See
 [ADR-002](../decisions/ADR-002-provider-and-model-independent-llm-architecture.md) for
 the decision and its tradeoffs.
