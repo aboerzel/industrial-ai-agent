@@ -50,9 +50,10 @@ Document-, Source-, Chunk-, Score- und Metadata-Provenance. Retrieval ist bewuss
 nicht als Tool des `TroubleshootingAgent` exponiert.
 
 Ein erster schreibgeschuetzter `factory_mcp`-Server adaptiert die zwei bestehenden
-Capabilities ueber das offizielle MCP SDK v2. Sein offizieller SDK-Client entdeckt die
-angebotenen Tools und ruft sie ueber stdio auf. Er ist noch keine Agent Tool Source; es
-gibt weder MCP-Routing, Knowledge MCP, Remote Deployment noch MCP Write Actions.
+Capabilities ueber das offizielle MCP SDK v2. Der asynchrone Read-Only-LangGraph-Pfad
+entdeckt seine zwei autorisierten Tools und ruft sie ueber eine stdio Session pro Agent
+Run auf. Der direkte LangChain-Tool-Pfad bleibt als Referenz erhalten; es gibt weder
+MCP-Routing, Knowledge MCP, Remote Deployment noch MCP Write Actions.
 
 ## Manueller MCP-Smoke-Test
 
@@ -60,11 +61,14 @@ Fuehre den lokalen stdio-Client und -Server ohne LLM oder externen Service aus:
 
 ```powershell
 python scripts/smoke_test_factory_mcp.py
+python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp
 ```
 
 Der Smoke gibt Server-Identitaet, die ausgehandelte Protokollversion, die entdeckten
 Tool-Namen und strukturierte Results fuer `get_product_history(P4711)` und
-`get_machine_status(S04)` aus. Das aktuelle Release von `langchain-mcp-adapters`
+`get_machine_status(S04)` aus. Der LangGraph-Smoke verwendet fuer seinen vertraulichen
+MCP Run ausschliesslich `local_quality` und gibt MCP Session Discovery sowie die finale
+Trajectory aus. Das aktuelle Release von `langchain-mcp-adapters`
 fordert `mcp<2.0` und wird deshalb in diesem SDK-v2-Slice bewusst nicht installiert.
 
 ## Manuelle Model-Profile-Smoke-Tests
@@ -132,6 +136,7 @@ Orchestrierungspfade aus:
 ```powershell
 python -m evals.run_tool_selection --agent-path manual --profile troubleshooting
 python -m evals.run_tool_selection --agent-path langgraph --profile troubleshooting
+python -m evals.run_tool_selection --agent-path langgraph --tool-transport mcp --profile troubleshooting
 ```
 
 Der Befehl gibt einen strukturierten JSON Report mit Einzelergebnissen, Tool Selection
@@ -147,6 +152,7 @@ begrenzten Agent-Pfade aus:
 ```powershell
 python -m evals.run_trajectory --agent-path manual --profile troubleshooting
 python -m evals.run_trajectory --agent-path langgraph --profile troubleshooting
+python -m evals.run_trajectory --agent-path langgraph --tool-transport mcp --profile troubleshooting
 ```
 
 Der JSON Report enthält pro Fall erwartete und tatsächliche Trajectories,

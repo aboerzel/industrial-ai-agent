@@ -21,8 +21,11 @@ keine dauerhafte Persistenz. Es existieren weder dynamische Tool Registry, produ
 Persistenz-Backend, LangSmith-Integration noch allgemeines Eval-Framework.
 Ein lokaler schreibgeschuetzter `factory_mcp`-Server exponiert nun die bestehenden
 Produktionshistorie- und Maschinenstatus-Capabilities ueber das offizielle MCP SDK v2.
-Ein offizieller stdio-Client entdeckt und ruft diese Tools auf; MCP ist noch nicht mit
-LangGraph oder einem Agenten verbunden.
+Der parallele `LangGraphTroubleshootingAgent` besitzt einen expliziten asynchronen
+MCP-Pfad: Eine Session entdeckt autorisierte Tools, uebersetzt sie ueber eine temporaere
+LangChain-Bridge und fuehrt den sequenziellen Read-Only-Loop aus, bevor die Session
+geschlossen wird. Der handgeschriebene Pfad und der urspruengliche direkte
+LangChain-Tool-Pfad bleiben als Referenz erhalten.
 
 Der implementierte Request Flow ist:
 
@@ -57,6 +60,8 @@ flowchart LR
         OLLAMA["Lokales Ollama qwen3-embedding:0.6b"]
         FMCP["factory_mcp MCP Server"]
         MCPCLIENT["Offizieller MCP stdio Client"]
+        MCPBRIDGE["Temporaere MCP v2 zu LangChain Bridge"]
+        LG["LangGraph MCP Read-Only Path"]
     end
 
     PHC -->|"ProductId"| PHR
@@ -85,13 +90,15 @@ flowchart LR
     FMCP --> PHC
     FMCP --> MSC
     MCPCLIENT --> FMCP
+    LG --> MCPBRIDGE
+    MCPBRIDGE --> MCPCLIENT
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,MCPCLIENT adapter
+    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,MCPCLIENT,MCPBRIDGE,LG adapter
 ```
 
 Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
@@ -110,9 +117,16 @@ separaten inneren `EmbeddingClient`-Port, baut Dokumentvektoren in LangChains
 fuer Factory-Semantik. Seine zwei Handler delegieren an injizierte Capabilities und
 geben MCP Structured Content zurueck. Der lokale stdio-Transport wird fuer den manuellen
 Smoke verwendet, weil er keinen Listener und keine Deployment-Konfiguration benoetigt.
-Es gibt noch kein Remote Deployment, keine Authentifizierung, keine schreibenden
-MCP-Tools, kein Knowledge MCP, keinen Multi-Server-Router und keine LangGraph-MCP-
-Integration.
+Fuer einen MCP-LangGraph-Run initialisiert der Client genau einmal, entdeckt Server Tools,
+autorisiert nur die zwei schreibgeschuetzten Factory Tools, ruft sie sequenziell auf und
+schliesst nach Abschluss des Graphen. Die Bridge erstellt LangChain-`StructuredTool`-
+Objekte aus den entdeckten MCP Schemas und erwartet ihren Aufruf; sie enthaelt keine
+Fachlogik. Sie ist ein **TEMPORARY COMPATIBILITY ADAPTER**, bis ein stabiles
+`langchain-mcp-adapters`-Release MCP SDK v2 unterstuetzt.
+
+Der MCP-Pfad ersetzt ADR-009 nicht: Jeder Graph Model Call laeuft weiterhin durch
+`EgressCheckedLLMClient`. Es gibt weder MCP Write Tools, MCP HITL, Remote Deployment,
+Authentifizierung, Knowledge MCP, Multi-Server-Router noch automatische Fallbacks.
 
 ## Knowledge-Retrieval-Baseline
 

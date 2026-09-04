@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from enum import StrEnum
 from typing import Annotated, Literal, cast
 
@@ -24,6 +26,7 @@ from industrial_ai_agent.agent.langchain_model import (
     to_llm_response,
 )
 from industrial_ai_agent.agent.llm import LLMResponse
+from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpToolSession
 from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.troubleshooting_agent import (
     GET_MACHINE_STATUS_TOOL,
@@ -93,19 +96,32 @@ class LangGraphTroubleshootingAgent:
         *,
         checkpointer: BaseCheckpointSaver[str] | None = None,
         run_classification: DataClassification | None = None,
+        mcp_tool_provider: McpToolProvider | None = None,
     ) -> None:
         self._product_history = product_history
         self._machine_status = machine_status
         self._maintenance_ticket = maintenance_ticket
         self._checkpointer = checkpointer
         self._run_classification = run_classification
-        self._tools = self._create_tools()
+        self._mcp_tool_provider = mcp_tool_provider
+        self._tools = self._create_direct_tools()
         self._tools_by_name = {tool.name: tool for tool in self._tools}
         self._chat_model = chat_model.bind_tools(self._tools)
-        self._graph = self._build_graph()
+        self._graph = self._build_graph(self._chat_model, self._tools_by_name)
 
     def request_tool_selection(self, user_request: str) -> LLMResponse:
         response = self._chat_model.invoke(self._initial_messages(user_request))
+        return to_llm_response(response)
+
+    async def request_tool_selection_via_mcp(
+        self,
+        user_request: str,
+    ) -> LLMResponse:
+        """Bind runtime-discovered MCP tools for one first-decision run."""
+        async with self._open_mcp_session() as session:
+            response = self._chat_model.bind_tools(session.tools).invoke(
+                self._initial_messages(user_request)
+            )
         return to_llm_response(response)
 
     def invoke(self, user_request: str) -> TroubleshootingGraphState:
@@ -114,6 +130,32 @@ class LangGraphTroubleshootingAgent:
             self._initial_state(user_request),
             config=config,
         )
+        return self._restore_public_state(
+            cast(CheckpointedTroubleshootingGraphState, state)
+        )
+
+    async def ainvoke_via_mcp(
+        self,
+        user_request: str,
+        *,
+        session_observer: Callable[[McpToolSession], None] | None = None,
+    ) -> TroubleshootingGraphState:
+        """Run the read-only graph path through one MCP session.
+
+        This path deliberately excludes checkpoint resume and MCP write tools. The
+        existing synchronous graph retains the ADR-011 approval flow.
+        """
+        async with self._open_mcp_session() as session:
+            if session_observer is not None:
+                session_observer(session)
+            tools_by_name = {tool.name: tool for tool in session.tools}
+            chat_model = self._chat_model.bind_tools(session.tools)
+            graph = self._build_async_graph(chat_model, tools_by_name)
+            config: RunnableConfig = {"recursion_limit": 12}
+            state = await graph.ainvoke(
+                self._initial_state(user_request),
+                config=config,
+            )
         return self._restore_public_state(
             cast(CheckpointedTroubleshootingGraphState, state)
         )
@@ -168,13 +210,37 @@ class LangGraphTroubleshootingAgent:
             executed_tool_calls=state["executed_tool_calls"],
         )
 
-    def _build_graph(self):
+    async def aanswer_via_mcp(
+        self,
+        user_request: str,
+        *,
+        session_observer: Callable[[McpToolSession], None] | None = None,
+    ) -> AgentRunResult:
+        state = await self.ainvoke_via_mcp(
+            user_request,
+            session_observer=session_observer,
+        )
+        run_status = state["run_status"]
+        if run_status is None:
+            raise RuntimeError("LangGraph MCP run terminated without a status")
+        return AgentRunResult(
+            status=run_status,
+            final_answer=state["final_answer"],
+            tool_call_count=state["executed_tool_count"],
+            executed_tool_calls=state["executed_tool_calls"],
+        )
+
+    def _build_graph(
+        self,
+        chat_model: LangChainChatModel,
+        tools_by_name: dict[str, BaseTool],
+    ):
         # noinspection PyTypeChecker
         builder = StateGraph(CheckpointedTroubleshootingGraphState)
         # noinspection PyTypeChecker
-        builder.add_node("model", self._model_node)
+        builder.add_node("model", lambda state: self._model_node(chat_model, state))
         # noinspection PyTypeChecker
-        builder.add_node("tool", self._tool_node)
+        builder.add_node("tool", lambda state: self._tool_node(tools_by_name, state))
         # noinspection PyTypeChecker
         builder.add_node("prepare_action", self._prepare_action_node)
         # noinspection PyTypeChecker
@@ -192,11 +258,47 @@ class LangGraphTroubleshootingAgent:
         builder.add_edge("cancel_action", END)
         return builder.compile(checkpointer=self._checkpointer)
 
-    def _model_node(
+    def _build_async_graph(
         self,
+        chat_model: LangChainChatModel,
+        tools_by_name: dict[str, BaseTool],
+    ):
+        async def tool_node(
+            state: CheckpointedTroubleshootingGraphState,
+        ) -> dict[str, object]:
+            return await self._atool_node(tools_by_name, state)
+
+        # noinspection PyTypeChecker
+        builder = StateGraph(CheckpointedTroubleshootingGraphState)
+        # noinspection PyTypeChecker
+        builder.add_node("model", lambda state: self._model_node(chat_model, state))
+        # noinspection PyTypeChecker
+        builder.add_node("tool", tool_node)
+        # The read-only MCP path never advertises this action, but preserving the
+        # existing branches keeps a malicious or malformed tool call fail-closed.
+        # noinspection PyTypeChecker
+        builder.add_node("prepare_action", self._prepare_action_node)
+        # noinspection PyTypeChecker
+        builder.add_node("approval", self._approval_node)
+        # noinspection PyTypeChecker
+        builder.add_node("execute_action", self._execute_action_node)
+        # noinspection PyTypeChecker
+        builder.add_node("cancel_action", self._cancel_action_node)
+        builder.add_edge(START, "model")
+        builder.add_conditional_edges("model", self._route_after_model)
+        builder.add_edge("tool", "model")
+        builder.add_edge("prepare_action", "approval")
+        builder.add_conditional_edges("approval", self._route_after_approval)
+        builder.add_edge("execute_action", "model")
+        builder.add_edge("cancel_action", END)
+        return builder.compile()
+
+    @staticmethod
+    def _model_node(
+        chat_model: LangChainChatModel,
         state: CheckpointedTroubleshootingGraphState,
     ) -> dict[str, object]:
-        message = self._chat_model.invoke(state["messages"])
+        message = chat_model.invoke(state["messages"])
         response = to_llm_response(message)
         if len(response.tool_calls) > 1:
             raise ToolCallLimitExceededError(
@@ -243,6 +345,7 @@ class LangGraphTroubleshootingAgent:
 
     def _tool_node(
         self,
+        tools_by_name: dict[str, BaseTool],
         state: CheckpointedTroubleshootingGraphState,
     ) -> dict[str, object]:
         message = state["messages"][-1]
@@ -251,12 +354,41 @@ class LangGraphTroubleshootingAgent:
 
         tool_call = message.tool_calls[0]
         tool_name = tool_call["name"]
-        tool = self._tools_by_name.get(tool_name)
+        tool = tools_by_name.get(tool_name)
         if tool is None:
             raise UnknownToolError(f"Unknown tool: {tool_name}")
 
         arguments = self._validate_tool_arguments(tool_name, dict(tool_call["args"]))
         result = tool.invoke(arguments)
+        executed_call = {"tool": tool_name, "arguments": arguments}
+        return {
+            "messages": [
+                ToolMessage(
+                    content=str(result),
+                    tool_call_id=_require_tool_call_id(tool_call.get("id")),
+                )
+            ],
+            "executed_tool_count": state["executed_tool_count"] + 1,
+            "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
+        }
+
+    async def _atool_node(
+        self,
+        tools_by_name: dict[str, BaseTool],
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> dict[str, object]:
+        message = state["messages"][-1]
+        if not isinstance(message, AIMessage) or len(message.tool_calls) != 1:
+            raise RuntimeError("Tool node requires exactly one AI tool call")
+
+        tool_call = message.tool_calls[0]
+        tool_name = tool_call["name"]
+        tool = tools_by_name.get(tool_name)
+        if tool is None:
+            raise UnknownToolError(f"Unknown tool: {tool_name}")
+
+        arguments = self._validate_tool_arguments(tool_name, dict(tool_call["args"]))
+        result = await tool.ainvoke(arguments)
         executed_call = {"tool": tool_name, "arguments": arguments}
         return {
             "messages": [
@@ -386,7 +518,7 @@ class LangGraphTroubleshootingAgent:
             ) from error
         raise UnknownToolError(f"Unknown tool: {tool_name}")
 
-    def _create_tools(self) -> tuple[BaseTool, ...]:
+    def _create_direct_tools(self) -> tuple[BaseTool, ...]:
         def get_product_history(product_id: str) -> str:
             result = self._product_history.get_product_history(product_id)
             return result.model_dump_json()
@@ -424,6 +556,13 @@ class LangGraphTroubleshootingAgent:
                 )
             )
         return tuple(tools)
+
+    @asynccontextmanager
+    async def _open_mcp_session(self) -> AsyncIterator[McpToolSession]:
+        if self._mcp_tool_provider is None:
+            raise RuntimeError("LangGraph MCP execution requires an MCP tool provider")
+        async with self._mcp_tool_provider.open_session() as session:
+            yield session
 
     def _initial_state(
         self, user_request: str

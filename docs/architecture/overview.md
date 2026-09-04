@@ -18,8 +18,11 @@ An explicitly injected `InMemorySaver` supports local/test checkpoint and HITL
 demonstrations; it is not durable persistence. There is no dynamic tool registry,
 production persistence backend, LangSmith integration, or general evaluation framework.
 A local read-only `factory_mcp` server now exposes the existing product-history and
-machine-status capabilities through the official MCP SDK v2. An official stdio client
-discovers and calls those tools; MCP is not yet connected to LangGraph or an agent.
+machine-status capabilities through the official MCP SDK v2. The parallel
+`LangGraphTroubleshootingAgent` has an explicit asynchronous MCP path: one session
+discovers authorized tools, translates them through a temporary LangChain bridge, and
+executes its sequential read-only loop before closing the session. The handwritten path
+and the original direct LangChain tool path remain available as references.
 
 The implemented request flow is:
 
@@ -54,6 +57,8 @@ flowchart LR
         OLLAMA["Local Ollama qwen3-embedding:0.6b"]
         FMCP["factory_mcp MCP server"]
         MCPCLIENT["Official MCP stdio client"]
+        MCPBRIDGE["Temporary MCP v2 to LangChain bridge"]
+        LG["LangGraph MCP read-only path"]
     end
 
     PHC -->|"ProductId"| PHR
@@ -82,13 +87,15 @@ flowchart LR
     FMCP --> PHC
     FMCP --> MSC
     MCPCLIENT --> FMCP
+    LG --> MCPBRIDGE
+    MCPBRIDGE --> MCPCLIENT
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,MCPCLIENT adapter
+    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,MCPCLIENT,MCPBRIDGE,LG adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -106,8 +113,16 @@ and embeds only the query at runtime through local Ollama.
 `factory_mcp` is an Infrastructure transport adapter, not another source of factory
 semantics. Its two handlers delegate to injected capabilities and return MCP structured
 content. The local stdio transport is used for the manual smoke because it needs no
-listener or deployment configuration. No remote deployment, authentication, write MCP
-tool, Knowledge MCP, multi-server router, or LangGraph MCP integration exists yet.
+listener or deployment configuration. For one MCP LangGraph run, the client initializes
+once, discovers server tools, authorizes only the two read-only factory tools, invokes
+them sequentially, and closes after the graph completes. The bridge creates LangChain
+`StructuredTool` objects from the discovered MCP schemas and awaits their invocation;
+it contains no business logic. It is a **TEMPORARY COMPATIBILITY ADAPTER** until a stable
+`langchain-mcp-adapters` release supports MCP SDK v2.
+
+The MCP path does not replace ADR-009: every graph model call still goes through
+`EgressCheckedLLMClient`. It does not add MCP write tools, MCP HITL, remote deployment,
+authentication, Knowledge MCP, a multi-server router, or automatic fallback.
 
 ## Knowledge Retrieval Baseline
 

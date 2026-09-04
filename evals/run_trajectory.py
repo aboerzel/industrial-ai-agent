@@ -1,9 +1,12 @@
 import argparse
+import asyncio
 import json
-from collections.abc import Callable, Sequence
+import sys
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from mcp.client.stdio import StdioServerParameters
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
@@ -43,6 +46,9 @@ from industrial_ai_agent.infrastructure.llm.openai_compatible import (
 )
 from industrial_ai_agent.infrastructure.local_environment import (
     load_local_environment,
+)
+from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
+    McpLangChainToolProvider,
 )
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
@@ -257,6 +263,30 @@ def run_trajectory_eval(
     )
 
 
+async def run_trajectory_eval_async(
+    *,
+    cases: Sequence[TrajectoryEvalCase],
+    run_agent: Callable[[str], Awaitable[AgentRunResult]],
+    dataset: str,
+    model_profile: str,
+    orchestration_path: str,
+) -> TrajectoryEvalReport:
+    results: list[TrajectoryEvalResult] = []
+    for case in cases:
+        try:
+            run_result = await run_agent(case.user_input)
+        except Exception as error:  # noqa: BLE001
+            results.append(_error_result(case, error))
+            continue
+        results.append(score_trajectory(case, run_result))
+    return aggregate_results(
+        dataset=dataset,
+        model_profile=model_profile,
+        orchestration_path=orchestration_path,
+        results=results,
+    )
+
+
 def _error_result(
     case: TrajectoryEvalCase,
     error: Exception,
@@ -291,6 +321,12 @@ def _parse_args() -> argparse.Namespace:
         choices=("manual", "langgraph"),
         default="manual",
     )
+    parser.add_argument(
+        "--tool-transport",
+        choices=("direct", "mcp"),
+        default="direct",
+        help="Use MCP only with the LangGraph path.",
+    )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument(
@@ -308,6 +344,8 @@ def main() -> None:
     configuration = load_llm_configuration(args.config)
     requested_profile = ModelProfile(args.profile)
     request_classification = DataClassification.INTERNAL
+    if args.tool_transport == "mcp" and args.agent_path != "langgraph":
+        raise ValueError("MCP tool transport requires --agent-path langgraph")
 
     with OpenAICompatibleLLMClient(configuration) as adapter:
         llm_client = EgressCheckedLLMClient(
@@ -328,6 +366,11 @@ def main() -> None:
                 LLMClientChatModel(llm_client, model_profile),
                 product_history,
                 machine_status,
+                mcp_tool_provider=(
+                    McpLangChainToolProvider(_factory_server_parameters())
+                    if args.tool_transport == "mcp"
+                    else None
+                ),
             )
         else:
             model_profile = requested_profile
@@ -337,13 +380,26 @@ def main() -> None:
                 machine_status,
                 model_profile=model_profile,
             )
-        report = run_trajectory_eval(
-            cases=cases,
-            run_agent=agent.answer,
-            dataset=args.dataset.name,
-            model_profile=model_profile.name,
-            orchestration_path=args.agent_path,
-        )
+        if args.tool_transport == "mcp":
+            if not isinstance(agent, LangGraphTroubleshootingAgent):
+                raise RuntimeError("MCP tool transport requires a LangGraph agent")
+            report = asyncio.run(
+                run_trajectory_eval_async(
+                    cases=cases,
+                    run_agent=agent.aanswer_via_mcp,
+                    dataset=args.dataset.name,
+                    model_profile=model_profile.name,
+                    orchestration_path="langgraph-mcp",
+                )
+            )
+        else:
+            report = run_trajectory_eval(
+                cases=cases,
+                run_agent=agent.answer,
+                dataset=args.dataset.name,
+                model_profile=model_profile.name,
+                orchestration_path=args.agent_path,
+            )
 
     serialized_report = report.model_dump_json(indent=2)
     print(serialized_report)
@@ -380,6 +436,13 @@ def _route_requested_profile(
             data_classification=data_classification,
         ),
         candidates,
+    )
+
+
+def _factory_server_parameters() -> StdioServerParameters:
+    return StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
     )
 
 

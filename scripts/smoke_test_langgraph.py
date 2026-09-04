@@ -1,5 +1,9 @@
 import argparse
+import asyncio
+import sys
 from pathlib import Path
+
+from mcp.client.stdio import StdioServerParameters
 
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     LangGraphTroubleshootingAgent,
@@ -34,6 +38,9 @@ from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
 )
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
+from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
+    McpLangChainToolProvider,
+)
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
@@ -99,8 +106,29 @@ def main() -> None:
             LLMClientChatModel(checked_client, selected_profile),
             ProductHistoryCapability(InMemoryProductHistoryRepository()),
             MachineStatusCapability(InMemoryMachineStatusRepository()),
+            mcp_tool_provider=(
+                McpLangChainToolProvider(_factory_server_parameters())
+                if args.mcp
+                else None
+            ),
         )
-        result = agent.answer(prompt)
+        session_lines: list[str] = []
+        if args.mcp:
+            result = asyncio.run(
+                agent.aanswer_via_mcp(
+                    prompt,
+                    session_observer=lambda session: session_lines.extend(
+                        (
+                            "mcp_session_initialized=true",
+                            f"mcp_server={session.server_name} {session.server_version}",
+                            f"mcp_protocol={session.protocol_version}",
+                            f"mcp_discovered_tools={','.join(session.discovered_tool_names)}",
+                        )
+                    ),
+                )
+            )
+        else:
+            result = agent.answer(prompt)
 
     if result.final_answer is None:
         raise RuntimeError("LangGraph smoke did not return a final answer")
@@ -109,10 +137,19 @@ def main() -> None:
         and result.final_answer != "LANGGRAPH_LLM_OK"
     ):
         raise RuntimeError("Synthetic LangGraph response did not match expected text")
+    if args.mcp and args.confidential_troubleshooting:
+        actual_tools = [call.tool for call in result.executed_tool_calls]
+        expected_tools = ["get_product_history", "get_machine_status"]
+        if actual_tools != expected_tools:
+            raise RuntimeError(
+                f"MCP troubleshooting smoke expected {expected_tools}, got {actual_tools}"
+            )
     print(f"selected_profile={selected_profile.name}")
     print(f"classification={requirements.data_classification.name}")
     print(f"status={result.status.value}")
     print(f"tool_call_count={result.tool_call_count}")
+    for line in session_lines:
+        print(line)
     print(result.final_answer)
 
 
@@ -136,7 +173,19 @@ def _parse_args() -> argparse.Namespace:
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--profile")
     selection.add_argument("--confidential-troubleshooting", action="store_true")
+    parser.add_argument(
+        "--mcp",
+        action="store_true",
+        help="Discover and execute read-only tools through the local factory MCP server.",
+    )
     return parser.parse_args()
+
+
+def _factory_server_parameters() -> StdioServerParameters:
+    return StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+    )
 
 
 if __name__ == "__main__":

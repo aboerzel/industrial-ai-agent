@@ -268,6 +268,9 @@ MCP is an Infrastructure transport boundary. MCP server handlers must delegate t
 injected existing capabilities and must not duplicate Domain or repository logic.
 Clients must discover advertised tools through MCP rather than maintain a static tool
 catalogue. MCP does not replace deterministic model-routing or egress enforcement.
+Until stable `langchain-mcp-adapters` supports MCP SDK v2, any MCP-to-LangChain bridge
+must remain a small Infrastructure-only compatibility adapter and be reviewed for removal
+when that compatibility exists.
 
 See `docs/decisions/ADR-012-mcp-integration-architecture.md`.
 

@@ -47,9 +47,10 @@ metadata provenance. Retrieval is intentionally not yet exposed as a
 `TroubleshootingAgent` tool.
 
 A first read-only `factory_mcp` server now adapts the two existing capabilities through
-the official MCP SDK v2. Its official SDK client discovers the advertised tools and
-calls them through stdio. It is not yet an agent tool source; there is no MCP routing,
-Knowledge MCP, remote deployment, or MCP write action.
+the official MCP SDK v2. The asynchronous read-only LangGraph path discovers its two
+authorized tools and calls them through one stdio session per agent run. The direct
+LangChain tool path remains as a reference; there is no MCP routing, Knowledge MCP,
+remote deployment, or MCP write action.
 
 ## Manual MCP Smoke Test
 
@@ -57,11 +58,13 @@ Run the local stdio client and server without an LLM or external service:
 
 ```powershell
 python scripts/smoke_test_factory_mcp.py
+python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp
 ```
 
 The smoke prints the server identity, negotiated protocol version, discovered tool
 names, and structured results for `get_product_history(P4711)` and
-`get_machine_status(S04)`. The current `langchain-mcp-adapters` release requires
+`get_machine_status(S04)`. The LangGraph smoke uses only `local_quality` for its
+confidential MCP run and prints MCP session discovery plus the final trajectory. The current `langchain-mcp-adapters` release requires
 `mcp<2.0`, so it is intentionally not installed alongside this SDK v2 slice.
 
 ## Manual Model Profile Smoke Tests
@@ -127,6 +130,7 @@ Run the unchanged versioned tool-selection dataset against either orchestration 
 ```powershell
 python -m evals.run_tool_selection --agent-path manual --profile troubleshooting
 python -m evals.run_tool_selection --agent-path langgraph --profile troubleshooting
+python -m evals.run_tool_selection --agent-path langgraph --tool-transport mcp --profile troubleshooting
 ```
 
 The command prints a structured JSON report with per-case results, Tool Selection
@@ -141,6 +145,7 @@ Run the unchanged versioned multi-step dataset through either complete bounded a
 ```powershell
 python -m evals.run_trajectory --agent-path manual --profile troubleshooting
 python -m evals.run_trajectory --agent-path langgraph --profile troubleshooting
+python -m evals.run_trajectory --agent-path langgraph --tool-transport mcp --profile troubleshooting
 ```
 
 The JSON report contains per-case expected and actual trajectories, tool-call counts,
