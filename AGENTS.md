@@ -750,7 +750,7 @@ When a diagram is affected:
 * update it in the same change as the implementation or documentation change
 * keep it consistent with the current code and accepted ADRs
 * preserve the distinction between implemented architecture and future target direction
-* update both the canonical English document and its German `.de.md` counterpart
+* update both the canonical English document and its local German `.de.md` counterpart
 
 Do not leave architecture diagrams stale when the surrounding prose is updated.
 
@@ -830,7 +830,7 @@ This includes:
 
 ### German Documentation
 
-For every English Markdown documentation file other than `AGENTS.md`, maintain a corresponding German version for the repository owner's personal use.
+For every relevant English Markdown documentation file other than `AGENTS.md`, maintain a corresponding local German version for the repository owner's personal use.
 
 `AGENTS.md` is an explicit exception: it is maintained in English only, and `AGENTS.de.md` must not be created.
 
@@ -847,7 +847,12 @@ docs/decisions/ADR-001-project-foundation.md
 docs/decisions/ADR-001-project-foundation.de.md
 ```
 
-The English version remains the canonical technical document.
+The English version is the canonical and versioned repository documentation. German
+`*.de.md` variants are intentionally local and Git-ignored; never add them to the Git
+index.
+
+New relevant documentation must receive a matching local `.de.md` variant, which remains
+Git-ignored.
 
 The German version should be a faithful technical translation, but may use natural German wording where this improves comprehension.
 
@@ -863,7 +868,7 @@ Do not translate:
 
 ### Synchronization Requirement
 
-English and German documentation covered by this policy must remain synchronized.
+English and local German documentation covered by this policy must remain synchronized.
 
 Whenever an English documentation file other than `AGENTS.md` is:
 
@@ -873,18 +878,22 @@ Whenever an English documentation file other than `AGENTS.md` is:
 * moved
 * deleted
 
-the corresponding `.de.md` file must be handled in the same change.
+the corresponding local `.de.md` file must be handled in the same change, without
+adding it to Git.
 
 Likewise, if a German documentation file is changed in a way that affects technical content, ensure that the canonical English document reflects the same information.
 
 A documentation change is not complete until both language variants are consistent.
+Versioned documentation must not link to local `.de.md` files because they are not part
+of the public repository.
 
 ### Definition of Done Addition
 
 Before completing a task that changes documentation, verify:
 
 1. the English documentation is correct,
-2. the corresponding German `.de.md` exists when required by this policy,
+2. the corresponding local German `.de.md` exists when required by this policy and is
+   not staged for Git,
 3. both versions describe the same technical state when a language pair is required,
 4. links and file references remain valid in both versions where applicable,
 5. affected Mermaid diagrams are updated and technically consistent in both versions.

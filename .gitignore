@@ -8,6 +8,7 @@ __pycache__/
 htmlcov/
 .env
 .env.example
+*.de.md
 dist/
 build/
 *.egg-info/
