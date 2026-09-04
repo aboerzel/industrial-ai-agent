@@ -3,11 +3,10 @@
 ## Purpose
 
 The retrieval slice implements three measurable lexical baselines from ADR-006: simple
-term overlap, rarity-aware IDF overlap, and BM25. Version 2 expanded and froze the
-corpus and evaluation set before BM25 was implemented, so the new strategy could not
-shape its own benchmark. All retrievers run without an LLM, embeddings, a vector
-database, reranking, MCP, query rewriting, or an external retrieval library. Retrieval
-remains isolated from `TroubleshootingAgent`.
+term overlap, rarity-aware IDF overlap, and BM25. It now adds the first semantic
+baseline described by ADR-007. Version 2 expanded and froze the corpus and evaluation
+set before BM25 and semantic retrieval were implemented, so neither strategy could
+shape its own benchmark. Retrieval remains isolated from `TroubleshootingAgent`.
 
 ## Knowledge Base and Ingestion
 
@@ -41,8 +40,8 @@ and currently requests at most three results.
 
 Each `KnowledgeRetrievalResult` preserves passage content, `document_id`, relative
 `source`, stable `chunk_id`, optional `relevance_score`, and metadata. The capability
-returns a structured result and does not construct prose. Filesystem access and lexical
-ranking remain in Infrastructure.
+returns a structured result and does not construct prose. Filesystem access and all
+ranking implementations remain in Infrastructure.
 
 ## Lexical Strategies
 
@@ -106,6 +105,28 @@ chunk-length normalization relative to `avgdl`. The fixed baseline parameters ar
 tuned against its results. Zero-score chunks are omitted, and equal scores are ordered
 by ascending `chunk_id`.
 
+## Semantic Baseline
+
+ADR-007 introduces a separate inner `EmbeddingClient` port with
+`embed_query(text)` and `embed_documents(texts)`. It returns only numeric vectors and
+does not expose LangChain, Ollama, or provider SDK types. The local
+`OllamaEmbeddingClient` adapts LangChain `OllamaEmbeddings` with the baseline model
+`qwen3-embedding:0.6b` at `http://localhost:11434`.
+
+`InMemorySemanticKnowledgeRetriever` implements the existing `KnowledgeRetriever` port.
+At explicit construction, it sends the unchanged 25 chunks in one batch through the
+embedding port and stores the resulting vectors in LangChain Core's
+`InMemoryVectorStore`. Query-time retrieval embeds only the query, asks that store for
+its top-k vector matches, then maps results back to the original chunks by stable
+`chunk_id`. It preserves the existing content and provenance. The score is the vector
+store's similarity score and is not numerically comparable to lexical scores.
+
+This is a local-only baseline. No document text or embedding is sent to a cloud provider.
+`numpy` is a direct dependency because LangChain's `InMemoryVectorStore` uses it for its
+implemented similarity calculation. The store is recreated during explicit adapter
+construction; it is neither a persistent vector database nor a project-wide similarity
+decision.
+
 ## Retrieval Evaluation Datasets
 
 `evals/datasets/knowledge_retrieval_v1.jsonl` remains byte-for-byte unchanged with its
@@ -149,6 +170,8 @@ Run the frozen v2 baseline with:
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy simple
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy idf
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy semantic
+python scripts/smoke_test_semantic_retrieval.py
 ```
 
 The original v1 dataset remains selectable with `--dataset
@@ -160,8 +183,8 @@ Git-ignored `evals/results/` directory with `--output`.
 The seven-document corpus and v2 ground truth were frozen on 2026-09-04 before the
 first v2 retrieval run. The dataset SHA-256 at freeze is
 `E535816185D90DA816C5FD2033865094BD430E3752AE19632647E82309A46EA6`.
-Neither v2 queries nor relevance labels may be changed in response to later BM25
-results. Corpus wording and chunking used for that comparison are frozen as well. A
+Neither v2 queries nor relevance labels may be changed in response to later BM25 or
+semantic-retrieval results. Corpus wording and chunking used for that comparison are frozen as well. A
 necessary correction must be explicit and versioned as a later dataset rather than
 silently rewriting v2.
 
@@ -170,14 +193,14 @@ silently rewriting v2.
 The v1 values are the historical three-document baseline recorded before corpus
 expansion. The v2 values use the frozen seven-document, 25-chunk corpus.
 
-| Dataset | Metric | Simple overlap | Rarity-aware IDF | BM25 |
-| --- | --- | ---: | ---: | ---: |
-| v1 (10 cases) | Hit@1 | 0.9000 | 1.0000 | 0.9000 |
-| v1 (10 cases) | Hit@3 | 1.0000 | 1.0000 | 1.0000 |
-| v1 (10 cases) | Mean Recall@3 | 0.9500 | 0.9500 | 0.9500 |
-| v2 (28 cases) | Hit@1 | 0.7857 | 0.8571 | 0.7857 |
-| v2 (28 cases) | Hit@3 | 0.8929 | 0.9286 | 0.9643 |
-| v2 (28 cases) | Mean Recall@3 | 0.8155 | 0.8452 | 0.8810 |
+| Dataset | Metric | Simple overlap | Rarity-aware IDF | BM25 | Semantic |
+| --- | --- | ---: | ---: | ---: | ---: |
+| v1 (10 cases) | Hit@1 | 0.9000 | 1.0000 | 0.9000 | not measured |
+| v1 (10 cases) | Hit@3 | 1.0000 | 1.0000 | 1.0000 | not measured |
+| v1 (10 cases) | Mean Recall@3 | 0.9500 | 0.9500 | 0.9500 | not measured |
+| v2 (28 cases) | Hit@1 | 0.7857 | 0.8571 | 0.7857 | 0.8571 |
+| v2 (28 cases) | Hit@3 | 0.8929 | 0.9286 | 0.9643 | 0.9643 |
+| v2 (28 cases) | Mean Recall@3 | 0.8155 | 0.8452 | 0.8810 | 0.8810 |
 
 The v1 regression against the expanded 25-chunk corpus reproduced the existing simple
 and IDF values. BM25 reached `0.9000 / 1.0000 / 0.9500`; its only Hit@1 miss was
@@ -186,26 +209,26 @@ Recall@3.
 
 The v2 failure lists are:
 
-| Failure | Simple overlap | Rarity-aware IDF | BM25 |
-| --- | --- | --- | --- |
-| Hit@1 misses | `station_quality_role`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_invalid_after_work`, `calibration_procedure`, `qv1_role_short` | `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `error_code_exact`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple` |
-| Hit@3 misses | `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `s02_recovery_verification`, `calibration_procedure` | `s02_recovery_verification` |
-| Incomplete Recall@3 | `product_failure_context_multiple`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `calibration_procedure`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `service_evidence_multiple`, `vision_recovery_multiple` |
+| Failure | Simple overlap | Rarity-aware IDF | BM25 | Semantic |
+| --- | --- | --- | --- | --- |
+| Hit@1 misses | `station_quality_role`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_invalid_after_work`, `calibration_procedure`, `qv1_role_short` | `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `error_code_exact`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple` | `station_current_fault`, `axis_encoder_short`, `qv1_role_short`, `vision_recovery_multiple` |
+| Hit@3 misses | `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short` | `s02_recovery_verification`, `calibration_procedure` | `s02_recovery_verification` | `qv1_role_short` |
+| Incomplete Recall@3 | `product_failure_context_multiple`, `positioning_causes_natural`, `s02_recovery_verification`, `calibration_procedure`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `calibration_procedure`, `service_evidence_multiple`, `vision_recovery_multiple` | `product_failure_context_multiple`, `positioning_causes_natural`, `axis_encoder_short`, `s02_recovery_verification`, `service_evidence_multiple`, `vision_recovery_multiple` | `positioning_causes_natural`, `axis_encoder_short`, `positioning_long_diagnosis`, `qv1_role_short`, `service_evidence_multiple`, `vision_recovery_multiple` |
 
 ## v2 Results by Category
 
-| Category (n) | Simple H@1/H@3/MR@3 | IDF H@1/H@3/MR@3 | BM25 H@1/H@3/MR@3 |
-| --- | --- | --- | --- |
-| Exact identifiers (15) | 0.8667 / 0.8667 / 0.7889 | 0.8667 / 0.9333 / 0.8444 | 0.8000 / 1.0000 / 0.9111 |
-| Natural language (17) | 0.7059 / 0.8824 / 0.8235 | 0.8235 / 0.8824 / 0.8235 | 0.7647 / 0.9412 / 0.8824 |
-| Rare terms (7) | 1.0000 / 1.0000 / 1.0000 | 1.0000 / 1.0000 / 0.9286 | 0.8571 / 1.0000 / 0.9286 |
-| Common-term ambiguity (14) | 0.7143 / 0.7857 / 0.7857 | 0.7857 / 0.8571 / 0.8571 | 0.7857 / 0.9286 / 0.9286 |
-| Multi-relevance (9) | 0.8889 / 1.0000 / 0.7593 | 0.8889 / 1.0000 / 0.7407 | 0.7778 / 1.0000 / 0.7407 |
-| Short queries (5) | 0.8000 / 0.8000 / 0.8000 | 0.8000 / 1.0000 / 0.9000 | 0.8000 / 1.0000 / 0.9000 |
-| Longer technical queries (5) | 1.0000 / 1.0000 / 0.6667 | 1.0000 / 1.0000 / 0.7333 | 0.8000 / 1.0000 / 0.7333 |
-| Cross-document ambiguity (20) | 0.7500 / 0.9000 / 0.7917 | 0.8500 / 0.9500 / 0.8333 | 0.8000 / 0.9500 / 0.8333 |
-| Term-frequency-sensitive (4) | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 1.0000 / 0.8750 |
-| Length-sensitive (6) | 0.8333 / 1.0000 / 0.7222 | 0.8333 / 1.0000 / 0.7778 | 0.6667 / 1.0000 / 0.7778 |
+| Category (n) | Simple H@1/H@3/MR@3 | IDF H@1/H@3/MR@3 | BM25 H@1/H@3/MR@3 | Semantic H@1/H@3/MR@3 |
+| --- | --- | --- | --- | --- |
+| Exact identifiers (15) | 0.8667 / 0.8667 / 0.7889 | 0.8667 / 0.9333 / 0.8444 | 0.8000 / 1.0000 / 0.9111 | 0.7333 / 0.9333 / 0.8444 |
+| Natural language (17) | 0.7059 / 0.8824 / 0.8235 | 0.8235 / 0.8824 / 0.8235 | 0.7647 / 0.9412 / 0.8824 | 0.9412 / 1.0000 / 0.9412 |
+| Rare terms (7) | 1.0000 / 1.0000 / 1.0000 | 1.0000 / 1.0000 / 0.9286 | 0.8571 / 1.0000 / 0.9286 | 0.8571 / 1.0000 / 0.9286 |
+| Common-term ambiguity (14) | 0.7143 / 0.7857 / 0.7857 | 0.7857 / 0.8571 / 0.8571 | 0.7857 / 0.9286 / 0.9286 | 0.8571 / 0.9286 / 0.9286 |
+| Multi-relevance (9) | 0.8889 / 1.0000 / 0.7593 | 0.8889 / 1.0000 / 0.7407 | 0.7778 / 1.0000 / 0.7407 | 0.7778 / 1.0000 / 0.7407 |
+| Short queries (5) | 0.8000 / 0.8000 / 0.8000 | 0.8000 / 1.0000 / 0.9000 | 0.8000 / 1.0000 / 0.9000 | 0.6000 / 0.8000 / 0.7000 |
+| Longer technical queries (5) | 1.0000 / 1.0000 / 0.6667 | 1.0000 / 1.0000 / 0.7333 | 0.8000 / 1.0000 / 0.7333 | 0.8000 / 1.0000 / 0.7333 |
+| Cross-document ambiguity (20) | 0.7500 / 0.9000 / 0.7917 | 0.8500 / 0.9500 / 0.8333 | 0.8000 / 0.9500 / 0.8333 | 0.8500 / 0.9500 / 0.8333 |
+| Term-frequency-sensitive (4) | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 0.7500 / 0.6250 | 0.5000 / 1.0000 / 0.8750 | 1.0000 / 1.0000 / 0.7500 |
+| Length-sensitive (6) | 0.8333 / 1.0000 / 0.7222 | 0.8333 / 1.0000 / 0.7778 | 0.6667 / 1.0000 / 0.7778 | 0.8333 / 1.0000 / 0.6944 |
 
 ## Ranking Differences and Interpretation
 
@@ -246,11 +269,37 @@ underspecified, so a more specific outcome passage matches better than the inten
 overview. Several remaining incomplete Multi-Relevance cases express multiple intents
 whose complementary passages compete for only three result positions.
 
+### Semantic Comparison
+
+The semantic baseline improves the natural-language category materially: `0.9412 /
+1.0000 / 0.9412`, compared with BM25's `0.7647 / 0.9412 / 0.8824`. Its improvements are
+consistent with different wording rather than a changed corpus: `positioning_causes_natural`
+places the expected `station_s02::chunk-002` first (0.6968),
+`s02_recovery_verification` places `station_s02::chunk-004` first (0.5760), and
+`calibration_procedure` places `vision_calibration::chunk-003` first (0.6519). BM25
+places those expected chunks at ranks 2, outside Top-3, and 2 respectively.
+
+| Case | Expected chunk(s) | Semantic Top-3 | BM25 Top-3 |
+| --- | --- | --- | --- |
+| `positioning_causes_natural` | `station_s02::chunk-002`, `troubleshooting_service::chunk-002` | `station_s02::chunk-002` (0.6968), `station_s02::chunk-001` (0.6228), `station_s02::chunk-003` (0.6038) | `station_s02::chunk-001` (8.5921), `station_s02::chunk-002` (5.6584), `maintenance::chunk-002` (2.7372) |
+| `s02_recovery_verification` | `station_s02::chunk-004` | `station_s02::chunk-004` (0.5760), `station_s02::chunk-001` (0.5430), `station_s02::chunk-002` (0.5113) | `station_s02::chunk-003` (4.7327), `troubleshooting_service::chunk-002` (4.5982), `maintenance::chunk-002` (4.4223) |
+| `qv1_role_short` | `vision_calibration::chunk-001` | `error_codes::chunk-003` (0.5685), `station_s04::chunk-001` (0.5537), `production_quality::chunk-002` (0.5486) | `production_quality::chunk-002` (3.1451), `vision_calibration::chunk-001` (2.3338), `station_s04::chunk-001` (1.5720) |
+| `calibration_procedure` | `vision_calibration::chunk-003` | `vision_calibration::chunk-003` (0.6519), `vision_calibration::chunk-002` (0.6496), `vision_calibration::chunk-004` (0.5898) | `vision_calibration::chunk-002` (5.7888), `vision_calibration::chunk-003` (4.8377), `vision_calibration::chunk-004` (4.5653) |
+
+Semantic ranking is weaker for exact identifiers (`0.7333` Hit@1 versus BM25's `0.8000`)
+and short queries (`0.6000 / 0.8000 / 0.7000` versus `0.8000 / 1.0000 / 0.9000`).
+`qv1_role_short` becomes a semantic Hit@3 miss, whereas BM25 retains it at rank 2. The
+semantic model also does not improve aggregate Multi-Relevance recall, because
+complementary relevant chunks still compete for three places. The score scales differ,
+so they support ranking inspection only, not direct cross-strategy comparison.
+
 ## Known Limits
 
 The corpus remains intentionally small and manually inspectable rather than production
 scale. BM25 still has no stemming, synonyms, phrase model, query expansion, or semantic
-understanding. Its fixed parameters have not been tested across a larger corpus.
-Section-position IDs can shift after structural document edits, and there is no index
-persistence or freshness management. Final-answer grounding and agent query quality
-are not evaluated by this retrieval baseline.
+understanding. The semantic baseline is local-only, has no exact-identifier boost,
+hybrid fusion, reranker, query rewriting, persistent index, freshness management, or
+embedding-routing policy. `InMemoryVectorStore` is recreated at construction and is not
+a vector-database decision. Section-position IDs can shift after structural document
+edits. Final-answer grounding and agent query quality are not evaluated by this
+retrieval baseline.

@@ -9,7 +9,8 @@ begrenzte Single-Agent-Pfade über dieselben zwei Read-Only-Tools: den handgesch
 kann zusätzlich eine explizit injizierte Demonstrations-Action-Capability erhalten, die
 für Human Approval pausiert. Fokussierte
 deterministische Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige
-begrenzte Trajectories für beide Pfade. Lokale lexical Knowledge-Retrieval-Strategien
+begrenzte Trajectories für beide Pfade. Lokale lexical und semantische
+Knowledge-Retrieval-Strategien
 sind hinter einem inneren Port implementiert, aber noch nicht in den Agenten integriert. Ein
 deterministischer Model-Egress-Decorator mit Deny-by-default prüft die explizite
 Request-Klassifikation gegen die validierte Execution Zone jedes Model Profiles, bevor
@@ -33,6 +34,7 @@ flowchart LR
         PHR["ProductHistoryRepository"]
         MSR["MachineStatusRepository"]
         KR["KnowledgeRetriever"]
+        EP["EmbeddingClient"]
     end
 
     subgraph Infrastructure["Infrastructure Adapter"]
@@ -41,7 +43,11 @@ flowchart LR
         LKR["InMemoryLexicalKnowledgeRetriever"]
         IDF["InMemoryIdfKnowledgeRetriever"]
         BM25["InMemoryBm25KnowledgeRetriever"]
+        SEM["InMemorySemanticKnowledgeRetriever"]
+        OEC["OllamaEmbeddingClient"]
+        VEC["LangChain InMemoryVectorStore"]
         KB["Versionierte lokale Markdown Knowledge Base"]
+        OLLAMA["Lokales Ollama qwen3-embedding:0.6b"]
     end
 
     PHC -->|"ProductId"| PHR
@@ -52,16 +58,22 @@ flowchart LR
     LKR -.->|"implementiert"| KR
     IDF -.->|"implementiert"| KR
     BM25 -.->|"implementiert"| KR
+    SEM -.->|"implementiert"| KR
+    OEC -.->|"implementiert"| EP
     KB -->|"expliziter Index Build"| LKR
     KB -->|"expliziter Index Build"| IDF
     KB -->|"expliziter Index Build"| BM25
+    KB -->|"expliziter Index Build"| SEM
+    SEM -->|"embedded über"| EP
+    SEM --> VEC
+    OEC --> OLLAMA
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
-    class PHR,MSR,KR port
-    class PHM,MSM,LKR,IDF,BM25,KB adapter
+    class PHR,MSR,KR,EP port
+    class PHM,MSM,LKR,IDF,BM25,SEM,OEC,VEC,KB,OLLAMA adapter
 ```
 
 Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
@@ -70,9 +82,11 @@ zurück. Die deterministischen Demo-Daten enthalten das Produkt `P4711` und die 
 `S04` und `S12`.
 
 `DocumentationSearchCapability` erhält `KnowledgeRetriever` per Dependency Injection
-und gibt strukturierte Passagen zurück. Der aktuelle Adapter lädt die lokale Markdown
-Knowledge Base einmalig bei der expliziten Erstellung; Suchen zur Request-Zeit verwenden
-seinen vorbereiteten In-Memory-Index.
+und gibt strukturierte Passagen zurück. Lexical und semantische Adapter laden die lokale
+Markdown Knowledge Base einmalig bei der expliziten Erstellung; Suchen zur Request-Zeit
+verwenden ihre vorbereiteten In-Memory-Indizes. Der semantische Adapter erhält den
+separaten inneren `EmbeddingClient`-Port, baut Dokumentvektoren in LangChains
+`InMemoryVectorStore` und embedded zur Runtime nur die Query über lokales Ollama.
 
 Verteilte Services sind bewusst nicht Teil dieses Slice.
 
@@ -92,12 +106,15 @@ flowchart LR
     Port --> Simple["Einfaches Term-Overlap-Ranking<br/>Top 3"]
     Port --> IDFSearch["Rarity-aware IDF-Ranking<br/>Top 3"]
     Port --> BM25Search["BM25-Ranking<br/>Top 3"]
+    Port --> SemanticSearch["Semantisches Vector-Ranking<br/>Top 3"]
     Index --> Simple
     Index --> IDFSearch
     Index --> BM25Search
+    Chunk --> SemanticSearch
     Simple --> Results["Strukturierte Results<br/>Content + Provenance + Score"]
     IDFSearch --> Results
     BM25Search --> Results
+    SemanticSearch --> Results
     Results --> Query
 
     classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
@@ -105,7 +122,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class Docs,Load,Chunk data
     class Query,Port,Results core
-    class Index,Simple,IDFSearch,BM25Search adapter
+    class Index,Simple,IDFSearch,BM25Search,SemanticSearch adapter
 ```
 
 Der Tokenizer führt Case Folding für alphanumerische Terme und Identifier mit
@@ -113,13 +130,14 @@ Bindestrichen durch, sodass exakte industrielle Identifier erhalten bleiben. Der
 einfache Adapter bewertet den Anteil unterschiedlicher Query-Terme im Chunk. Der zweite
 Adapter gewichtet übereinstimmende Terme mit geglätteter inverser Chunk Frequency und
 normalisiert anschließend mit dem gesamten Query-Gewicht. BM25 ergänzt gesättigte Term
-Frequency und Chunk-Length-Normalisierung. Alle lassen Chunks mit Score null aus und
-lösen Ties durch `chunk_id`. Source Path, Document ID, Chunk ID, Abschnitts-Metadata und
-Score bleiben an jedem Result erhalten.
+Frequency und Chunk-Length-Normalisierung. Der semantische Adapter baut lokale Vektoren
+über `EmbeddingClient` und LangChains `InMemoryVectorStore`. Alle lexikalischen
+Strategien lassen Chunks mit Score null aus und lösen Ties durch `chunk_id`. Source Path,
+Document ID, Chunk ID, Abschnitts-Metadata und Score bleiben an jedem Result erhalten.
 
 Der fokussierte Retrieval-Eval ist von den Agent-Evals getrennt. Seine 28 eingefrorenen
 v2-Fälle messen Hit@1, Hit@3 und Mean Recall@3 mit strukturierter
-Relevant-Chunk-Ground-Truth. Dasselbe unveränderte Dataset vergleicht alle drei Strategien.
+Relevant-Chunk-Ground-Truth. Dasselbe unveränderte Dataset vergleicht alle vier Strategien.
 Agent-Query-Formulierung und Grounding der finalen Antwort liegen außerhalb dieses
 Slice.
 
@@ -402,7 +420,8 @@ Enthält industrielle Domänenmodelle und Regeln.
 Die aktuellen Slices definieren `ProductId`, die gemeinsam verwendete `StationId`,
 `ProductionStep`, `ProductionStepStatus`, `ProductHistory`, `MachineState`,
 `MachineStatus` und `KnowledgeRetrievalResult`. Die inneren Ports sind
-`ProductHistoryRepository`, `MachineStatusRepository` und `KnowledgeRetriever`. Die
+`ProductHistoryRepository`, `MachineStatusRepository`, `KnowledgeRetriever` und
+`EmbeddingClient`. Die
 HITL-Demonstration definiert zusätzlich `MaintenanceTicketRequestId` und
 `MaintenanceTicket` sowie den inneren Port `MaintenanceTicketRepository`.
 
@@ -466,7 +485,10 @@ Die aktuellen Implementierungen sind `InMemoryProductHistoryRepository` und
 `InMemoryMachineStatusRepository`, die kleine deterministische Demo-Datensätze
 bereitstellen, `InMemoryLexicalKnowledgeRetriever`, `InMemoryIdfKnowledgeRetriever` und
 `InMemoryBm25KnowledgeRetriever`, die vorbereitete lokale Token-Indizes mit
-unterschiedlichen Scoring-Formeln durchsuchen, sowie `OpenAICompatibleLLMClient`, das den
+unterschiedlichen Scoring-Formeln durchsuchen, `InMemorySemanticKnowledgeRetriever`, das
+LangChains `InMemoryVectorStore`-Matches über `EmbeddingClient` auf originale
+Chunk-Provenance zurückmappt, sowie `OllamaEmbeddingClient`, das das Baseline-Embedding-
+Modell auf lokales Ollama beschränkt, sowie `OpenAICompatibleLLMClient`, das den
 provider-unabhängigen LLM-Vertrag in eine OpenAI-compatible Chat Completions API
 übersetzt. `LLMClientChatModel` ist der schmale Infrastructure Adapter zwischen
 LangChain Messages/Tools und dem bestehenden `LLMClient`; er konstruiert weder Provider
@@ -554,18 +576,12 @@ Cost- und Quality-Präferenzen können den Security-Filter nicht überstimmen. S
 
 ### Retrieval-Weiterentwicklung
 
-Die lexical Baselines können später mit BM25-artigem, Embedding-, Hybrid- oder reranktem
-Retrieval verglichen werden. Neue Ports, Storage Adapter, Modellrollen und Dependencies
-werden nur eingeführt, wenn Retrieval-Evals einen konkreten Bedarf zeigen. Der
+Die lexical Baselines werden nun mit einer ersten semantischen Baseline verglichen. Der
 Retrieval Core bleibt gemäß
 [ADR-006](../decisions/ADR-006-knowledge-retrieval-and-rag-architecture.de.md)
-unabhängig von einer späteren Knowledge-MCP-Transportgrenze.
-
-Die nächste Semantic-Retrieval-Implementierung führt einen fokussierten inneren
-Embedding-Port erst bei ihrer tatsächlichen Implementierung ein. Embeddings bleiben
-eine von `LLMClient` getrennte Modellrolle; Provider Adapter und Modellkonfiguration
-verbleiben in Infrastructure. Die folgende geplante Grenze ist nicht Teil der aktuellen
-Implementierung:
+unabhängig von einer späteren Knowledge-MCP-Transportgrenze. Embeddings bleiben eine von
+`LLMClient` getrennte Modellrolle; der fokussierte `EmbeddingClient`-Port liegt im Core,
+während Provider Adapter und Modellkonfiguration in Infrastructure verbleiben.
 
 ```mermaid
 flowchart LR
@@ -573,20 +589,20 @@ flowchart LR
 
     subgraph Core["Application Core"]
         KnowledgePort
-        EmbeddingPort["Embedding-Port<br/>zukünftig"]
+        EmbeddingPort["EmbeddingClient"]
     end
 
-    subgraph Infrastructure["Zukünftige Infrastructure"]
-        Semantic["SemanticKnowledgeRetriever"]
-        Adapter["Embedding Provider Adapter"]
-        Index["Vector Index"]
+    subgraph Infrastructure["Implementierte lokale Infrastructure"]
+        Semantic["InMemorySemanticKnowledgeRetriever"]
+        Adapter["OllamaEmbeddingClient"]
+        Index["LangChain InMemoryVectorStore"]
     end
 
     Semantic -.->|"implementiert"| KnowledgePort
     Semantic -->|"verwendet"| EmbeddingPort
     Adapter -.->|"implementiert"| EmbeddingPort
     Semantic --> Index
-    Adapter --> Model["Konfiguriertes lokales oder Cloud-<br/>Embedding-Modell"]
+    Adapter --> Model["Lokales Ollama<br/>qwen3-embedding:0.6b"]
 
     classDef core fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
@@ -596,8 +612,10 @@ flowchart LR
     class Model external
 ```
 
-Modell, Dimension, Similarity-Metrik, Index-Technologie und Persistenz bleiben offen.
-Siehe [ADR-007](../decisions/ADR-007-embedding-model-abstraction.de.md).
+Das erste Modell und der In-Memory-Index sind Implementierungsbaselines, keine
+langlebigen Provider- oder Vector-Store-Festlegungen. Dimension, persistenter Storage,
+Hybrid Fusion, Reranking und Embedding Routing bleiben offen. Siehe
+[ADR-007](../decisions/ADR-007-embedding-model-abstraction.de.md).
 
 ### Breitere Zielrichtung
 

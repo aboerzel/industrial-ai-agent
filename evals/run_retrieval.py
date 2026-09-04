@@ -14,6 +14,12 @@ from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever im
     InMemoryLexicalKnowledgeRetriever,
     load_markdown_chunks,
 )
+from industrial_ai_agent.infrastructure.in_memory_semantic_knowledge_retriever import (
+    InMemorySemanticKnowledgeRetriever,
+)
+from industrial_ai_agent.infrastructure.ollama_embedding_client import (
+    OllamaEmbeddingClient,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_PATH = (
@@ -21,7 +27,7 @@ DEFAULT_DATASET_PATH = (
 )
 DEFAULT_KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
 DEFAULT_K = 3
-RetrievalStrategy = Literal["simple", "idf", "bm25"]
+RetrievalStrategy = Literal["simple", "idf", "bm25", "semantic"]
 RetrievalCategory = Literal[
     "exact_identifier",
     "natural_language",
@@ -326,7 +332,7 @@ def run_retrieval_eval(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate the local lexical knowledge-retrieval baseline."
+        description="Evaluate a local knowledge-retrieval baseline."
     )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument(
@@ -337,7 +343,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=DEFAULT_K)
     parser.add_argument(
         "--strategy",
-        choices=("simple", "idf", "bm25"),
+        choices=("simple", "idf", "bm25", "semantic"),
         default="simple",
         help="Retrieval implementation to evaluate.",
     )
@@ -386,7 +392,9 @@ def _create_retriever(
         return InMemoryLexicalKnowledgeRetriever(chunks)
     if strategy == "idf":
         return InMemoryIdfKnowledgeRetriever(chunks)
-    return InMemoryBm25KnowledgeRetriever(chunks)
+    if strategy == "bm25":
+        return InMemoryBm25KnowledgeRetriever(chunks)
+    return InMemorySemanticKnowledgeRetriever(chunks, OllamaEmbeddingClient())
 
 
 if __name__ == "__main__":

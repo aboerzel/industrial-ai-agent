@@ -139,18 +139,20 @@ die [Troubleshooting-Trajectory-Evaluation](docs/learning/trajectory-evaluation.
 
 ## Manueller Retrieval-Eval
 
-Führe die eingefrorene v2-Retrieval-Baseline gegen alle drei lokalen Strategien aus:
+Führe die eingefrorene v2-Retrieval-Baseline gegen alle vier lokalen Strategien aus:
 
 ```powershell
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy simple
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy idf
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy semantic
+python scripts/smoke_test_semantic_retrieval.py
 ```
 
 Der JSON Report enthält Hit@1, Hit@3, Mean Recall@3, erwartete und tatsächliche
 Chunk-IDs pro Fall, explizite Fehlerlisten und Metriken pro Kategorie. Das ursprüngliche
 v1-Dataset bleibt durch explizite Auswahl von `knowledge_retrieval_v1.jsonl` verfügbar.
-Chunking- und Scoring-Formeln, den Vergleich von v1 und v2, die Freeze-Regel sowie
+Chunking- und Scoring-Formeln, den Vergleich von v1 und v2, die semantische Baseline, die Freeze-Regel sowie
 bekannte Grenzen beschreibt die
 [lokale Knowledge-Retrieval-Baseline](docs/learning/knowledge-retrieval-baseline.de.md).
 

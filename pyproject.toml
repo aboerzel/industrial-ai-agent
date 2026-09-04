@@ -5,7 +5,9 @@ description = "Industrial Agentic AI learning and portfolio project"
 requires-python = ">=3.12"
 dependencies = [
     "langchain-core>=1.2,<2.0",
+    "langchain-ollama>=1.0,<2.0",
     "langgraph>=1.2,<2.0",
+    "numpy>=2.0",
     "openai>=1.0,<3.0",
     "pydantic>=2.0",
     "python-dotenv>=1.0",
