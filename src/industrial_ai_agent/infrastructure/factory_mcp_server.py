@@ -1,5 +1,7 @@
-"""MCP server adapter for the read-only factory capabilities."""
+"""MCP server adapter and deployment entry point for factory capabilities."""
 
+import argparse
+import os
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -15,6 +17,7 @@ from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 FACTORY_MCP_SERVER_NAME = "factory_mcp"
 FACTORY_MCP_SERVER_VERSION = "0.1.0"
+FACTORY_MCP_HTTP_PATH = "/mcp"
 
 
 def create_factory_mcp_server(
@@ -59,7 +62,34 @@ def create_default_factory_mcp_server() -> MCPServer:
 
 
 def main() -> None:
-    create_default_factory_mcp_server().run(transport="stdio")
+    """Run the demo server through the transport chosen at process startup."""
+    args = _parse_args()
+    server = create_default_factory_mcp_server()
+    if args.transport == "stdio":
+        server.run(transport="stdio")
+        return
+    server.run(
+        transport="streamable-http",
+        host=args.host,
+        port=args.port,
+        streamable_http_path=FACTORY_MCP_HTTP_PATH,
+    )
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the factory MCP server.")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "streamable-http"),
+        default=os.getenv("FACTORY_MCP_TRANSPORT", "stdio"),
+    )
+    parser.add_argument("--host", default=os.getenv("FACTORY_MCP_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("FACTORY_MCP_PORT", "8001")),
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

@@ -23,6 +23,10 @@ from industrial_ai_agent.agent.model_routing import (
     TaskRequirements,
     TaskRole,
 )
+from industrial_ai_agent.infrastructure.factory_mcp_client import (
+    FactoryMcpTransport,
+    StreamableHttpServerParameters,
+)
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
     InMemoryMachineStatusRepository,
 )
@@ -107,7 +111,7 @@ def main() -> None:
             ProductHistoryCapability(InMemoryProductHistoryRepository()),
             MachineStatusCapability(InMemoryMachineStatusRepository()),
             mcp_tool_provider=(
-                McpLangChainToolProvider(_factory_server_parameters())
+                McpLangChainToolProvider(_mcp_transport_from_args(args))
                 if args.mcp
                 else None
             ),
@@ -176,12 +180,25 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mcp",
         action="store_true",
-        help="Discover and execute read-only tools through the local factory MCP server.",
+        help="Discover and execute read-only tools through the factory MCP server.",
+    )
+    parser.add_argument(
+        "--mcp-transport",
+        choices=("stdio", "http"),
+        default="stdio",
+        help="Select the factory MCP connection at this composition root.",
+    )
+    parser.add_argument(
+        "--mcp-url",
+        default="http://127.0.0.1:8001/mcp",
+        help="Streamable HTTP endpoint used with --mcp-transport http.",
     )
     return parser.parse_args()
 
 
-def _factory_server_parameters() -> StdioServerParameters:
+def _mcp_transport_from_args(args: argparse.Namespace) -> FactoryMcpTransport:
+    if args.mcp_transport == "http":
+        return StreamableHttpServerParameters(url=args.mcp_url)
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],

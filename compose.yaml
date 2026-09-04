@@ -1,0 +1,6 @@
+services:
+  factory-mcp:
+    build:
+      context: .
+    ports:
+      - "8001:8001"

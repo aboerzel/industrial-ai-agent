@@ -1,10 +1,24 @@
-"""Official-SDK client path for the local factory MCP server."""
+"""Official-SDK client path for factory MCP transports."""
 
+from collections.abc import AsyncIterator, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import Tool
+
+
+@dataclass(frozen=True)
+class StreamableHttpServerParameters:
+    """Network endpoint for one stateful Streamable HTTP MCP session."""
+
+    url: str
+
+
+type FactoryMcpTransport = StdioServerParameters | StreamableHttpServerParameters
 
 
 @dataclass(frozen=True)
@@ -15,18 +29,39 @@ class FactoryMcpSmokeResult:
     server_version: str
     protocol_version: str
     tool_names: tuple[str, ...]
+    tool_schemas: dict[str, dict[str, Any]]
     product_history: dict[str, Any] | None
     machine_status: dict[str, Any] | None
+    unknown_product_history: dict[str, Any] | None
+    unknown_machine_status: dict[str, Any] | None
+
+
+@asynccontextmanager
+async def open_factory_mcp_session(
+    transport: FactoryMcpTransport,
+) -> AsyncIterator[ClientSession]:
+    """Open, initialize, and close one MCP session for either supported transport."""
+    async with AsyncExitStack() as stack:
+        if isinstance(transport, StdioServerParameters):
+            read_stream, write_stream = await stack.enter_async_context(
+                stdio_client(transport)
+            )
+        else:
+            read_stream, write_stream = await stack.enter_async_context(
+                streamable_http_client(transport.url)
+            )
+        session = await stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
+        )
+        await session.initialize()
+        yield session
 
 
 async def run_factory_mcp_smoke(
-    server_parameters: StdioServerParameters,
+    transport: FactoryMcpTransport,
 ) -> FactoryMcpSmokeResult:
-    """Discover and call the two read-only tools through an MCP stdio session."""
-    async with (
-        stdio_client(server_parameters) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
+    """Discover and call the read-only tools through an initialized MCP session."""
+    async with open_factory_mcp_session(transport) as session:
         initialized = await session.initialize()
         listed_tools = await session.list_tools()
         product_history = await session.call_tool(
@@ -35,12 +70,25 @@ async def run_factory_mcp_smoke(
         machine_status = await session.call_tool(
             "get_machine_status", {"station_id": "S04"}
         )
+        unknown_product_history = await session.call_tool(
+            "get_product_history", {"product_id": "P9999"}
+        )
+        unknown_machine_status = await session.call_tool(
+            "get_machine_status", {"station_id": "S99"}
+        )
 
     return FactoryMcpSmokeResult(
         server_name=initialized.server_info.name,
         server_version=initialized.server_info.version,
         protocol_version=initialized.protocol_version,
         tool_names=tuple(tool.name for tool in listed_tools.tools),
+        tool_schemas=_tool_schemas(listed_tools.tools),
         product_history=product_history.structured_content,
         machine_status=machine_status.structured_content,
+        unknown_product_history=unknown_product_history.structured_content,
+        unknown_machine_status=unknown_machine_status.structured_content,
     )
+
+
+def _tool_schemas(tools: Sequence[Tool]) -> dict[str, dict[str, Any]]:
+    return {tool.name: dict(tool.input_schema) for tool in tools}

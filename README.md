@@ -47,10 +47,11 @@ metadata provenance. Retrieval is intentionally not yet exposed as a
 `TroubleshootingAgent` tool.
 
 A first read-only `factory_mcp` server now adapts the two existing capabilities through
-the official MCP SDK v2. The asynchronous read-only LangGraph path discovers its two
-authorized tools and calls them through one stdio session per agent run. The direct
-LangChain tool path remains as a reference; there is no MCP routing, Knowledge MCP,
-remote deployment, or MCP write action.
+the official MCP SDK v2. stdio remains available for process-coupled development and
+tests; the same server runs through Streamable HTTP at `/mcp` as a local Docker service.
+The asynchronous read-only LangGraph path discovers its two authorized tools and calls
+them through one stdio or HTTP session per agent run. The direct LangChain tool path
+remains as a reference; there is no MCP routing, Knowledge MCP, or MCP write action.
 
 ## Manual MCP Smoke Test
 
@@ -64,8 +65,28 @@ python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp
 The smoke prints the server identity, negotiated protocol version, discovered tool
 names, and structured results for `get_product_history(P4711)` and
 `get_machine_status(S04)`. The LangGraph smoke uses only `local_quality` for its
-confidential MCP run and prints MCP session discovery plus the final trajectory. The current `langchain-mcp-adapters` release requires
-`mcp<2.0`, so it is intentionally not installed alongside this SDK v2 slice.
+confidential MCP run and prints MCP session discovery plus the final trajectory.
+
+To run the networked deployment path, build and start only the local factory service:
+
+```powershell
+docker compose up --build -d factory-mcp
+python scripts/smoke_test_factory_mcp.py --transport http
+python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp --mcp-transport http
+```
+
+The container defaults to `0.0.0.0:8001` and its SDK-managed endpoint is
+`http://127.0.0.1:8001/mcp`. It contains no `.env`, secrets, LLM, or embedding model and
+runs as a non-root user. One HTTP MCP session covers discovery and all sequential tool
+calls in an agent run; it is closed after the run. Docker provides repeatable service
+deployment, while MCP provides the tool protocol and discovery. The unauthenticated
+HTTP endpoint is accepted only for this local demo; a remote or production deployment
+requires explicit MCP authentication and transport security. MCP network transport does
+not authorize model egress: confidential troubleshooting still uses the local profile
+under ADR-009 and never sends factory results to `public_fast`.
+
+The current stable `langchain-mcp-adapters` release remains incompatible with MCP SDK
+v2, so the temporary project-owned bridge is intentionally retained.
 
 ## Manual Model Profile Smoke Tests
 

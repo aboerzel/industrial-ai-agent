@@ -8,8 +8,10 @@ The project has two established, read-only application capabilities:
 `ProductHistoryCapability.get_product_history(product_id)` and
 `MachineStatusCapability.get_machine_status(station_id)`. They currently run through
 direct in-process calls. The target architecture anticipates independently exposed
-factory, production, knowledge, and vision integrations, but no transport boundary has
-yet been selected or implemented.
+factory, production, knowledge, and vision integrations. The initial implementation
+used process-coupled stdio for local development and tests. The first independently
+deployable service needs a network transport and a narrow container lifecycle without
+changing the tool semantics.
 
 Model Context Protocol (MCP) is a long-lived interoperability and service-boundary
 decision. It affects how capabilities are advertised, discovered, transported, tested,
@@ -35,18 +37,41 @@ found/not-found status, timestamps, states, and error codes.
 
 Clients must discover tools from the MCP server through the protocol. They must not keep
 a separate static tool catalogue. A small official-SDK client demonstrates initialization,
-tool listing, and calls. Tests use the SDK's in-process or in-memory test path where
-available. The manual local smoke uses stdio, because it requires no listening port,
-reverse proxy, or deployment configuration. Streamable HTTP remains a future deployment
-choice, not a decision in this ADR.
+tool listing, and calls.
+
+`factory_mcp` supports two official-SDK v2 transports over the same server instance and
+tool definitions:
+
+* stdio is retained for process-coupled local development and deterministic tests.
+* Streamable HTTP is the deployment transport. The server runs at an externally
+  configured host and port and exposes the SDK-managed `/mcp` endpoint.
+
+Transport selection belongs only to a server or client Composition Root. Capabilities,
+tool handlers, Domain models, agent orchestration, and tool contracts do not branch on a
+transport. An HTTP client opens one stateful Streamable HTTP session for one agent run,
+initializes it, discovers tools once, makes the sequential calls, and closes it after the
+run. It does not create a session per tool call or add a connection pool.
+
+The first deployable variant is a slim Python 3.12 Docker image that contains only the
+factory server's runtime dependencies, runs as a non-root user, and starts Streamable
+HTTP by default. The local Compose demo maps a host port to that service. Docker is a
+deployment and process-isolation mechanism, not part of MCP or a replacement for its
+protocol semantics. Internal Docker networking, a reverse proxy, TLS, and an agent
+container remain future work.
 
 `langchain-mcp-adapters` may adapt discovered MCP tools to LangChain tool contracts.
-That adapter is an integration edge only. This slice does not connect MCP tools to
-LangGraph, an LLM, or an agent.
+That adapter is an integration edge only. Until it has a stable MCP SDK v2-compatible
+release, the project-owned compatibility adapter remains the single bridge. It receives
+the transport-selected MCP client and exposes only discovered, explicitly authorized
+tools to LangGraph; the graph has no Docker, host, or port knowledge.
 
 MCP is transport and integration technology, not an authorization, egress, routing, or
-agent framework. ADR-009 remains the authoritative model-egress boundary. The initial
-tools are read-only and do not make public-cloud calls.
+agent framework. ADR-009 remains the authoritative model-egress boundary. An HTTP MCP
+connection to a local container is service-network transport, not permission to send
+tool data to a public model. The initial tools are read-only and do not make public-cloud
+calls. Authentication is deliberately absent only for the local Docker demo; every
+remote or production deployment requires an explicit authentication and transport
+security design before exposure.
 
 ## Dependency Boundaries
 
@@ -98,10 +123,14 @@ MCP availability dependent on a particular agent runtime.
   capabilities.
 * Each future server remains an Infrastructure adapter over a bounded set of existing
   capabilities; service topology and deployment remain incremental decisions.
-* Server and client lifecycle, protocol compatibility, and tool schemas receive focused
-  deterministic integration tests.
-* LangGraph integration, multi-server routing, Knowledge MCP, MCP authentication,
-  remote deployment, write tools, resources, prompts, and MCP-based HITL are not
-  decided or implemented by this ADR.
+* Server and client lifecycle, protocol compatibility, schemas, structured results, and
+  stdio-to-HTTP transport equivalence receive focused deterministic integration tests.
+* A Docker build and container smoke remain explicit local deployment checks rather than
+  prerequisites for the regular unit-test suite.
+* LangGraph integration uses the same discovered MCP tool path through an injected
+  provider; it neither constructs a container nor bypasses egress control.
+* Multi-server routing, Knowledge MCP, MCP authentication beyond the local demo,
+  remote production deployment, write tools, resources, prompts, and MCP-based HITL
+  are not decided or implemented by this ADR.
 * A later agent integration must still apply ADR-008 routing and the final ADR-009
   egress check before any model call; MCP does not weaken those controls.

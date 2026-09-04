@@ -19,13 +19,16 @@ für den parallelen Orchestrierungspfad verwendet. Ein explizit injizierter
 `InMemorySaver` unterstützt lokale/Test-Checkpoint- und HITL-Demonstrationen, ist aber
 keine dauerhafte Persistenz. Es existieren weder dynamische Tool Registry, produktives
 Persistenz-Backend, LangSmith-Integration noch allgemeines Eval-Framework.
-Ein lokaler schreibgeschuetzter `factory_mcp`-Server exponiert nun die bestehenden
+Ein schreibgeschuetzter `factory_mcp`-Server exponiert nun die bestehenden
 Produktionshistorie- und Maschinenstatus-Capabilities ueber das offizielle MCP SDK v2.
+Er behaelt stdio fuer prozessgekoppelte Entwicklung und deterministische Tests und laeuft
+in der lokalen Docker-Demo als eigenstaendig deploybarer Streamable-HTTP-`/mcp`-Service.
 Der parallele `LangGraphTroubleshootingAgent` besitzt einen expliziten asynchronen
 MCP-Pfad: Eine Session entdeckt autorisierte Tools, uebersetzt sie ueber eine temporaere
 LangChain-Bridge und fuehrt den sequenziellen Read-Only-Loop aus, bevor die Session
-geschlossen wird. Der handgeschriebene Pfad und der urspruengliche direkte
-LangChain-Tool-Pfad bleiben als Referenz erhalten.
+geschlossen wird. Die Transportauswahl erfolgt an einer aeusseren Composition Root; der
+handgeschriebene Pfad und der urspruengliche direkte LangChain-Tool-Pfad bleiben als
+Referenz erhalten.
 
 Der implementierte Request Flow ist:
 
@@ -59,7 +62,7 @@ flowchart LR
         KB["Versionierte lokale Markdown Knowledge Base"]
         OLLAMA["Lokales Ollama qwen3-embedding:0.6b"]
         FMCP["factory_mcp MCP Server"]
-        MCPCLIENT["Offizieller MCP stdio Client"]
+        MCPCLIENT["Offizieller MCP stdio / Streamable-HTTP Client"]
         MCPBRIDGE["Temporaere MCP v2 zu LangChain Bridge"]
         LG["LangGraph MCP Read-Only Path"]
     end
@@ -115,18 +118,24 @@ separaten inneren `EmbeddingClient`-Port, baut Dokumentvektoren in LangChains
 
 `factory_mcp` ist ein Infrastructure-Transportadapter und keine weitere Source of Truth
 fuer Factory-Semantik. Seine zwei Handler delegieren an injizierte Capabilities und
-geben MCP Structured Content zurueck. Der lokale stdio-Transport wird fuer den manuellen
-Smoke verwendet, weil er keinen Listener und keine Deployment-Konfiguration benoetigt.
-Fuer einen MCP-LangGraph-Run initialisiert der Client genau einmal, entdeckt Server Tools,
-autorisiert nur die zwei schreibgeschuetzten Factory Tools, ruft sie sequenziell auf und
-schliesst nach Abschluss des Graphen. Die Bridge erstellt LangChain-`StructuredTool`-
-Objekte aus den entdeckten MCP Schemas und erwartet ihren Aufruf; sie enthaelt keine
-Fachlogik. Sie ist ein **TEMPORARY COMPATIBILITY ADAPTER**, bis ein stabiles
-`langchain-mcp-adapters`-Release MCP SDK v2 unterstuetzt.
+geben MCP Structured Content zurueck. stdio bleibt der prozessgekoppelte Entwicklungs-
+und Testtransport. Streamable HTTP ist der Deployment-Transport: Derselbe SDK Server
+laeuft in einem Non-Root-Python-3.12-Docker-Container und Compose mappt seinen lokalen
+Host-Port auf `/mcp`. Docker isoliert und deployt den Service, implementiert oder ersetzt
+aber nicht MCP. Fuer einen MCP-LangGraph-Run initialisiert der Client genau einmal,
+entdeckt Server Tools, autorisiert nur die zwei schreibgeschuetzten Factory Tools, ruft
+sie sequenziell auf und schliesst nach Abschluss des Graphen. Die Bridge erstellt
+LangChain-`StructuredTool`-Objekte aus den entdeckten MCP Schemas und erwartet ihren
+Aufruf; sie enthaelt keine Fachlogik. Sie ist ein **TEMPORARY COMPATIBILITY ADAPTER**,
+bis ein stabiles `langchain-mcp-adapters`-Release MCP SDK v2 unterstuetzt.
 
 Der MCP-Pfad ersetzt ADR-009 nicht: Jeder Graph Model Call laeuft weiterhin durch
-`EgressCheckedLLMClient`. Es gibt weder MCP Write Tools, MCP HITL, Remote Deployment,
-Authentifizierung, Knowledge MCP, Multi-Server-Router noch automatische Fallbacks.
+`EgressCheckedLLMClient`. Eine lokale HTTP-Verbindung zum Factory Container ist
+Service-Transport, keine Erlaubnis zum Egress von Tool-Daten an ein oeffentliches Model.
+Die lokale Docker-Demo hat keine MCP Authentication; Remote- oder Production-Exponierung
+benoetigt ein explizites zukuenftiges Authentication- und Transport-Security-Design.
+Dieser Slice ergaenzt weder MCP Write Tools, MCP HITL, Knowledge MCP, einen
+Multi-Server-Router noch automatische Fallbacks.
 
 ## Knowledge-Retrieval-Baseline
 

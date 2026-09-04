@@ -26,17 +26,36 @@ MCP **resources** are addressable contextual data that a server can expose. MCP
 **prompts** are server-provided prompt templates. They are protocol concepts only in
 this slice: neither resources nor prompts are implemented.
 
-## Discovery and Transport
+## Discovery, Transport, and Docker
 
 The client first initializes an MCP session and lists the tools the server actually
-advertises. It does not duplicate a static tool catalogue. The local smoke uses stdio:
-the client launches the server as a child process and communicates over standard input
-and output. This is a small, port-free local transport. Streamable HTTP is available in
-the SDK but is deliberately deferred until remote deployment has a real requirement.
+advertises. It does not duplicate a static tool catalogue. `factory_mcp` supports the
+same tool definitions and protocol semantics through two official SDK v2 transports:
+
+* **stdio** is process-coupled: the client launches the local server as a child process
+  and communicates through standard input and output. It stays useful for development
+  and deterministic tests because it needs no listener or port configuration.
+* **Streamable HTTP** is networked: the server owns a listener and exposes `/mcp`; a
+  client connects to its configured URL. It is the deployment path for `factory_mcp`.
+
+The server's Composition Root selects `stdio` or `streamable-http`; the capabilities,
+handlers, Domain, and agent orchestration do not contain transport conditionals. The
+HTTP client uses the official `streamable_http_client(url)` API together with the same
+`ClientSession` used by stdio. For a single agent run it initializes once, discovers
+once, performs all sequential calls on that session, and closes it afterwards. This
+slice deliberately has no session-per-call behavior or connection pool.
+
+Docker packages the networked server as a reproducible, non-root Python 3.12 service.
+The local `compose.yaml` maps host port `8001` to the container; no source mount, `.env`,
+secret, Hugging Face model, or Ollama model is needed. Docker is not MCP: Docker starts
+and isolates a process, whereas MCP defines discovery, schemas, messages, and tool-call
+semantics. Docker is useful here because the target architecture will contain several
+independently deployable MCP services. Internal Docker networking, an agent container,
+TLS, and a reverse proxy are intentionally deferred.
 
 ## LangGraph Tool Execution
 
-For one asynchronous LangGraph MCP run, the adapter opens a stdio session, calls
+For one asynchronous LangGraph MCP run, the adapter opens the selected stdio or HTTP session, calls
 `initialize()`, discovers tools, filters them through the explicit read-only
 authorization set, and creates LangChain `StructuredTool` objects. The graph awaits
 each tool sequentially through `ainvoke()`, then closes the session after its final
@@ -57,20 +76,29 @@ the direct path and is not an MCP tool.
 
 MCP is not a model-egress boundary. The graph's model node continues to use the selected
 profile through `EgressCheckedLLMClient`; ADR-009 still blocks confidential or restricted
-context from public-cloud model profiles. The local factory MCP server does not authorize
-model calls or cloud egress. Current tool results have no new classification contract in
-this slice, so existing classification semantics are unchanged.
+context from public-cloud model profiles. A local HTTP connection to the factory
+container is MCP service-network transport, not authorization to send factory results to
+`public_fast`. The local factory MCP server does not authorize model calls or cloud
+egress. Current tool results have no new classification contract in this slice, so
+existing classification semantics are unchanged.
+
+The first Docker demo deliberately has no MCP authentication because it binds a local
+host port for development. That is not a remote-deployment security model. Authentication
+and transport security are required design work before any remote or production exposure.
 
 ## OBSOLETE CANDIDATES AFTER MCP MIGRATION
 
-Do not remove these yet. After the MCP path has replaced all intended direct consumers,
-the later cleanup slice must review:
+Do not remove these yet. After the HTTP/Docker MCP path has replaced all intended direct
+LangGraph consumers, the later cleanup slice must review:
 
 * the read-only closure implementations in
   `LangGraphTroubleshootingAgent._create_direct_tools()`;
 * the direct read-only branch of `LangGraphTroubleshootingAgent._tool_node()`;
 * direct `ProductHistoryCapability` and `MachineStatusCapability` construction in
   LangGraph-only composition roots.
+* stdio-only helper construction in production-oriented LangGraph composition roots once
+  those roots use explicit transport configuration; stdio itself remains a supported
+  development and test transport.
 
 The capabilities themselves, `factory_mcp`, the manual agent, and the approval action
 are not obsolete candidates.
@@ -78,9 +106,10 @@ are not obsolete candidates.
 ## MCP and Other Concepts
 
 MCP is not a LangChain tool. An MCP server exposes protocol-level tools; a LangChain
-adapter can later translate discovered tools into LangChain contracts. The current
-`langchain-mcp-adapters` release is incompatible with MCP SDK v2 because it requires
-`mcp<2.0`, so no such adapter is installed here.
+adapter can later translate discovered tools into LangChain contracts. The current stable
+`langchain-mcp-adapters` release remains incompatible with MCP SDK v2. A v2-support
+change is in progress but is not a stable release, so the project retains its one narrow
+bridge until that changes.
 
 MCP is not REST. REST commonly exposes application resources over HTTP paths, while MCP
 standardizes AI-oriented capability discovery, tool schemas, and multiple transports.

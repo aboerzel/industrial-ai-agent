@@ -17,12 +17,15 @@ LangGraph and LangChain Core are now used narrowly for the parallel orchestratio
 An explicitly injected `InMemorySaver` supports local/test checkpoint and HITL
 demonstrations; it is not durable persistence. There is no dynamic tool registry,
 production persistence backend, LangSmith integration, or general evaluation framework.
-A local read-only `factory_mcp` server now exposes the existing product-history and
-machine-status capabilities through the official MCP SDK v2. The parallel
+A read-only `factory_mcp` server now exposes the existing product-history and
+machine-status capabilities through the official MCP SDK v2. It retains stdio for
+process-coupled development and deterministic tests, and runs as an independently
+deployable Streamable HTTP `/mcp` service in the local Docker demo. The parallel
 `LangGraphTroubleshootingAgent` has an explicit asynchronous MCP path: one session
 discovers authorized tools, translates them through a temporary LangChain bridge, and
-executes its sequential read-only loop before closing the session. The handwritten path
-and the original direct LangChain tool path remain available as references.
+executes its sequential read-only loop before closing the session. Transport selection
+is made by an outer Composition Root; the handwritten path and original direct LangChain
+tool path remain available as references.
 
 The implemented request flow is:
 
@@ -56,7 +59,7 @@ flowchart LR
         KB["Versioned local Markdown knowledge base"]
         OLLAMA["Local Ollama qwen3-embedding:0.6b"]
         FMCP["factory_mcp MCP server"]
-        MCPCLIENT["Official MCP stdio client"]
+        MCPCLIENT["Official MCP stdio / Streamable HTTP client"]
         MCPBRIDGE["Temporary MCP v2 to LangChain bridge"]
         LG["LangGraph MCP read-only path"]
     end
@@ -112,17 +115,22 @@ and embeds only the query at runtime through local Ollama.
 
 `factory_mcp` is an Infrastructure transport adapter, not another source of factory
 semantics. Its two handlers delegate to injected capabilities and return MCP structured
-content. The local stdio transport is used for the manual smoke because it needs no
-listener or deployment configuration. For one MCP LangGraph run, the client initializes
-once, discovers server tools, authorizes only the two read-only factory tools, invokes
-them sequentially, and closes after the graph completes. The bridge creates LangChain
-`StructuredTool` objects from the discovered MCP schemas and awaits their invocation;
-it contains no business logic. It is a **TEMPORARY COMPATIBILITY ADAPTER** until a stable
-`langchain-mcp-adapters` release supports MCP SDK v2.
+content. stdio remains the process-coupled development/test transport. Streamable HTTP
+is the deployment transport: the same SDK server runs in a non-root Python 3.12 Docker
+container and Compose maps its local host port to `/mcp`. Docker isolates and deploys the
+service but neither implements nor replaces MCP. For one MCP LangGraph run, the client
+initializes once, discovers server tools, authorizes only the two read-only factory
+tools, invokes them sequentially, and closes after the graph completes. The bridge
+creates LangChain `StructuredTool` objects from the discovered MCP schemas and awaits
+their invocation; it contains no business logic. It is a **TEMPORARY COMPATIBILITY
+ADAPTER** until a stable `langchain-mcp-adapters` release supports MCP SDK v2.
 
 The MCP path does not replace ADR-009: every graph model call still goes through
-`EgressCheckedLLMClient`. It does not add MCP write tools, MCP HITL, remote deployment,
-authentication, Knowledge MCP, a multi-server router, or automatic fallback.
+`EgressCheckedLLMClient`. A local HTTP connection to the factory container is service
+transport, not permission to egress tool data to a public model. The local Docker demo
+has no MCP authentication; remote or production exposure requires an explicit future
+authentication and transport-security design. This slice does not add MCP write tools,
+MCP HITL, Knowledge MCP, a multi-server router, or automatic fallback.
 
 ## Knowledge Retrieval Baseline
 

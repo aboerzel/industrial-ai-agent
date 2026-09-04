@@ -5,15 +5,18 @@ Review this module when a stable langchain-mcp-adapters release supports MCP SDK
 
 import json
 from collections.abc import AsyncIterator, Mapping
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from langchain_core.tools import BaseTool, StructuredTool
 from mcp import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult, Tool
 from pydantic import BaseModel, ConfigDict, create_model
 
 from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpToolSession
+from industrial_ai_agent.infrastructure.factory_mcp_client import (
+    FactoryMcpTransport,
+    open_factory_mcp_session,
+)
 
 DEFAULT_ALLOWED_FACTORY_TOOLS = frozenset({"get_product_history", "get_machine_status"})
 
@@ -23,26 +26,26 @@ class McpToolInvocationError(RuntimeError):
 
 
 class McpLangChainToolProvider(McpToolProvider):
-    """Open one stdio MCP session and translate authorized discovered tools."""
+    """Open one MCP session and translate authorized discovered tools."""
 
     def __init__(
         self,
-        server_parameters: StdioServerParameters,
+        transport: FactoryMcpTransport,
         *,
         allowed_tool_names: frozenset[str] = DEFAULT_ALLOWED_FACTORY_TOOLS,
     ) -> None:
         if not allowed_tool_names:
             raise ValueError("At least one MCP tool must be authorized")
-        self._server_parameters = server_parameters
+        self._transport = transport
         self._allowed_tool_names = allowed_tool_names
 
+    def open_session(self) -> AbstractAsyncContextManager[McpToolSession]:
+        return self._open_session()
+
     @asynccontextmanager
-    async def open_session(self) -> AsyncIterator[McpToolSession]:
+    async def _open_session(self) -> AsyncIterator[McpToolSession]:
         """Initialize, discover, authorize, and close one MCP session."""
-        async with (
-            stdio_client(self._server_parameters) as (read_stream, write_stream),
-            ClientSession(read_stream, write_stream) as client,
-        ):
+        async with open_factory_mcp_session(self._transport) as client:
             initialized = await client.initialize()
             listed_tools = await client.list_tools()
             discovered_by_name = {tool.name: tool for tool in listed_tools.tools}

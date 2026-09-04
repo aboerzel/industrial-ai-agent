@@ -33,6 +33,9 @@ from industrial_ai_agent.agent.troubleshooting_agent import (
     MachineStatusToolArguments,
     ProductHistoryToolArguments,
 )
+from industrial_ai_agent.infrastructure.factory_mcp_client import (
+    StreamableHttpServerParameters,
+)
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
     InMemoryMachineStatusRepository,
 )
@@ -112,6 +115,18 @@ def _mcp_agent(llm_client: FakeLLMClient) -> LangGraphTroubleshootingAgent:
     )
 
 
+def _http_mcp_agent(
+    llm_client: FakeLLMClient,
+    transport: StreamableHttpServerParameters,
+) -> LangGraphTroubleshootingAgent:
+    return LangGraphTroubleshootingAgent(
+        LLMClientChatModel(llm_client, PROFILE),
+        ProductHistoryCapability(InMemoryProductHistoryRepository()),
+        MachineStatusCapability(InMemoryMachineStatusRepository()),
+        mcp_tool_provider=McpLangChainToolProvider(transport),
+    )
+
+
 def _factory_server_parameters() -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
@@ -168,6 +183,31 @@ def test_langgraph_mcp_path_matches_direct_tool_sequence_arguments_and_results()
     assert _tool_contents(mcp_llm) == _tool_contents(direct_llm)
     assert _tool_definitions(mcp_llm.requests[0]) == _tool_definitions(
         direct_llm.requests[0]
+    )
+
+
+def test_langgraph_mcp_http_path_matches_the_stdio_path(
+    factory_mcp_http_transport: StreamableHttpServerParameters,
+) -> None:
+    stdio_llm = FakeLLMClient(*_two_tool_responses())
+    http_llm = FakeLLMClient(*_two_tool_responses())
+
+    stdio_result = asyncio.run(
+        _mcp_agent(stdio_llm).aanswer_via_mcp("Investigate P4711.")
+    )
+    http_result = asyncio.run(
+        _http_mcp_agent(http_llm, factory_mcp_http_transport).aanswer_via_mcp(
+            "Investigate P4711."
+        )
+    )
+
+    assert http_result.status is stdio_result.status is AgentRunStatus.SUCCESS
+    assert http_result.executed_tool_calls == stdio_result.executed_tool_calls
+    assert http_result.tool_call_count == stdio_result.tool_call_count == 2
+    assert http_result.final_answer == stdio_result.final_answer
+    assert _tool_contents(http_llm) == _tool_contents(stdio_llm)
+    assert _tool_definitions(http_llm.requests[0]) == _tool_definitions(
+        stdio_llm.requests[0]
     )
 
 

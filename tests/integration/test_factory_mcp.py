@@ -5,7 +5,11 @@ import sys
 from mcp.client.stdio import StdioServerParameters
 from mcp.types import CallToolResult
 
-from industrial_ai_agent.infrastructure.factory_mcp_client import run_factory_mcp_smoke
+from industrial_ai_agent.infrastructure.factory_mcp_client import (
+    FactoryMcpSmokeResult,
+    StreamableHttpServerParameters,
+    run_factory_mcp_smoke,
+)
 from industrial_ai_agent.infrastructure.factory_mcp_server import (
     FACTORY_MCP_SERVER_NAME,
     FACTORY_MCP_SERVER_VERSION,
@@ -96,6 +100,33 @@ def test_official_mcp_stdio_client_discovers_and_calls_factory_tools() -> None:
         )
     )
 
+    _assert_factory_smoke_result(result)
+
+
+def test_streamable_http_matches_stdio_factory_mcp_protocol_and_results(
+    factory_mcp_http_transport: StreamableHttpServerParameters,
+) -> None:
+    stdio_result = asyncio.run(
+        run_factory_mcp_smoke(
+            StdioServerParameters(
+                command=sys.executable,
+                args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+            )
+        )
+    )
+    http_result = asyncio.run(run_factory_mcp_smoke(factory_mcp_http_transport))
+
+    assert http_result.server_name == stdio_result.server_name
+    assert http_result.server_version == stdio_result.server_version
+    assert http_result.tool_names == stdio_result.tool_names
+    assert http_result.tool_schemas == stdio_result.tool_schemas
+    assert http_result.product_history == stdio_result.product_history
+    assert http_result.machine_status == stdio_result.machine_status
+    assert http_result.unknown_product_history == stdio_result.unknown_product_history
+    assert http_result.unknown_machine_status == stdio_result.unknown_machine_status
+
+
+def _assert_factory_smoke_result(result: FactoryMcpSmokeResult) -> None:
     assert result.server_name == FACTORY_MCP_SERVER_NAME
     assert result.server_version == FACTORY_MCP_SERVER_VERSION
     assert result.protocol_version
@@ -109,6 +140,17 @@ def test_official_mcp_stdio_client_discovers_and_calls_factory_tools() -> None:
         "found": True,
         "state": "FAULTED",
         "active_error_code": "E-STOP-17",
+    }
+    assert result.unknown_product_history == {
+        "product_id": "P9999",
+        "found": False,
+        "steps": [],
+    }
+    assert result.unknown_machine_status == {
+        "station_id": "S99",
+        "found": False,
+        "state": None,
+        "active_error_code": None,
     }
 
 

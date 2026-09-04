@@ -1,0 +1,13 @@
+.git
+.idea
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+.env
+.env.example
+build
+dist
+*.egg-info
+evals/results

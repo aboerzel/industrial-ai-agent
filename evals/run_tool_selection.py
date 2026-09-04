@@ -25,6 +25,10 @@ from industrial_ai_agent.agent.model_routing import (
     TaskRole,
 )
 from industrial_ai_agent.agent.troubleshooting_agent import TroubleshootingAgent
+from industrial_ai_agent.infrastructure.factory_mcp_client import (
+    FactoryMcpTransport,
+    StreamableHttpServerParameters,
+)
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
     InMemoryMachineStatusRepository,
 )
@@ -274,6 +278,8 @@ def _parse_args() -> argparse.Namespace:
         default="direct",
         help="Use MCP only with the LangGraph path.",
     )
+    parser.add_argument("--mcp-transport", choices=("stdio", "http"), default="stdio")
+    parser.add_argument("--mcp-url", default="http://127.0.0.1:8001/mcp")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument(
@@ -314,7 +320,7 @@ def main() -> None:
                 product_history,
                 machine_status,
                 mcp_tool_provider=(
-                    McpLangChainToolProvider(_factory_server_parameters())
+                    McpLangChainToolProvider(_mcp_transport_from_args(args))
                     if args.tool_transport == "mcp"
                     else None
                 ),
@@ -386,7 +392,9 @@ def _route_requested_profile(
     )
 
 
-def _factory_server_parameters() -> StdioServerParameters:
+def _mcp_transport_from_args(args: argparse.Namespace) -> FactoryMcpTransport:
+    if args.mcp_transport == "http":
+        return StreamableHttpServerParameters(url=args.mcp_url)
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
