@@ -20,14 +20,17 @@ Two deterministic domain capabilities are implemented: product history lookup th
 through `MachineStatusCapability.get_machine_status(station_id)`. Both use inner
 repository ports with deterministic in-memory adapters. A provider-independent
 `LLMClient` port and one OpenAI-compatible infrastructure adapter are also available.
-Model selection uses the configured semantic profile `troubleshooting`.
-`TroubleshootingAgent` offers exactly the two known tools to the model and runs an
-explicit sequential tool loop. It validates and dispatches one call per LLM decision,
-preserves structured observations in the current conversation context, and allows at
+Model selection uses explicit task requirements and the deterministic model router.
+The handwritten `TroubleshootingAgent` reference and the parallel
+`LangGraphTroubleshootingAgent` offer exactly the same two known tools. Both preserve
+the bounded sequential semantics: one validated and dispatched call per LLM decision,
+preserve structured observations in the current conversation context, and allow at
 most three successfully executed tools per run. A final model answer returns structured
 `SUCCESS`; a further tool request after the third result returns `LIMIT_REACHED` without
-executing that call or invoking the LLM again. There is no agent framework, dynamic
-tool registry, persistent memory, or context compression.
+executing that call or invoking the LLM again. The LangGraph path uses LangChain Core
+messages and tool contracts through a narrow adapter to the existing security-checked
+`LLMClient`. There is no dynamic tool registry, checkpointer, persistent memory,
+LangSmith integration, or context compression.
 
 Two deterministic evaluation baselines are available. The first measures the agent's
 initial LLM tool selection and argument extraction against twelve versioned cases
@@ -42,7 +45,7 @@ rarity-aware IDF, and BM25 ranking. Results retain document, source, chunk, scor
 metadata provenance. Retrieval is intentionally not yet exposed as a
 `TroubleshootingAgent` tool.
 
-No LLM framework, MCP server, vector database, or multi-agent framework is introduced yet.
+No MCP server, vector database, or multi-agent framework is introduced yet.
 
 ## Manual Model Profile Smoke Tests
 
@@ -58,6 +61,9 @@ python scripts/smoke_test_ollama.py --profile local_fast
 python scripts/smoke_test_ollama.py --profile local_quality
 python scripts/smoke_test_model_routing.py
 python scripts/smoke_test_troubleshooting_agent.py
+python scripts/smoke_test_langgraph.py --profile local_fast
+python scripts/smoke_test_langgraph.py --profile local_quality
+python scripts/smoke_test_langgraph.py --confidential-troubleshooting
 ```
 
 Without `--profile`, the first script calls `local_fast` and `local_quality` sequentially.
@@ -76,6 +82,7 @@ The `public_fast` profile uses Groq through the same `OpenAICompatibleLLMClient`
 
 ```powershell
 python scripts/smoke_test_ollama.py --profile public_fast
+python scripts/smoke_test_langgraph.py --profile public_fast
 ```
 
 Executable entry points load the project-root `.env` explicitly as local runtime
@@ -90,10 +97,11 @@ is not a fallback profile.
 
 ## Manual Tool Selection Eval
 
-Run the versioned tool-selection dataset against the configured semantic profile:
+Run the unchanged versioned tool-selection dataset against either orchestration path:
 
 ```powershell
-python -m evals.run_tool_selection --profile troubleshooting
+python -m evals.run_tool_selection --agent-path manual --profile troubleshooting
+python -m evals.run_tool_selection --agent-path langgraph --profile troubleshooting
 ```
 
 The command prints a structured JSON report with per-case results, Tool Selection
@@ -103,10 +111,11 @@ metric definitions, interpretation, and optional local result output.
 
 ## Manual Trajectory Eval
 
-Run the versioned multi-step dataset through the complete bounded agent loop:
+Run the unchanged versioned multi-step dataset through either complete bounded agent path:
 
 ```powershell
-python -m evals.run_trajectory --profile troubleshooting
+python -m evals.run_trajectory --agent-path manual --profile troubleshooting
+python -m evals.run_trajectory --agent-path langgraph --profile troubleshooting
 ```
 
 The JSON report contains per-case expected and actual trajectories, tool-call counts,

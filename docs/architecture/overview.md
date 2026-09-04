@@ -3,15 +3,17 @@
 ## Current Architecture
 
 The project currently implements product-history retrieval, current machine-status
-retrieval, a provider-independent LLM integration boundary, and an explicit bounded
-single-agent loop over two tools. Focused deterministic baselines evaluate the first
-LLM tool decision and complete bounded trajectories. Two isolated local lexical
-knowledge-retrieval strategies are implemented behind one inner port but are not yet
+retrieval, a provider-independent LLM integration boundary, and two parallel bounded
+single-agent paths over the same two tools: the handwritten `TroubleshootingAgent`
+reference and `LangGraphTroubleshootingAgent`. Focused deterministic baselines evaluate
+the first LLM tool decision and complete bounded trajectories for either path. Local
+lexical knowledge-retrieval strategies are implemented behind one inner port but are not yet
 integrated into the agent. A deterministic, deny-by-default model-egress decorator
 checks explicit request classification against each Model Profile's validated Execution
 Zone before invoking the provider adapter.
-There is no agent framework, dynamic tool registry, persistent agent memory, or general
-evaluation framework.
+LangGraph and LangChain Core are now used narrowly for the parallel orchestration path.
+There is no dynamic tool registry, persistent agent memory, checkpointer, LangSmith
+integration, or general evaluation framework.
 
 The implemented request flow is:
 
@@ -34,6 +36,7 @@ flowchart LR
         MSM["InMemoryMachineStatusRepository"]
         LKR["InMemoryLexicalKnowledgeRetriever"]
         IDF["InMemoryIdfKnowledgeRetriever"]
+        BM25["InMemoryBm25KnowledgeRetriever"]
         KB["Versioned local Markdown knowledge base"]
     end
 
@@ -44,15 +47,17 @@ flowchart LR
     MSM -.->|"implements"| MSR
     LKR -.->|"implements"| KR
     IDF -.->|"implements"| KR
+    BM25 -.->|"implements"| KR
     KB -->|"explicit index build"| LKR
     KB -->|"explicit index build"| IDF
+    KB -->|"explicit index build"| BM25
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR port
-    class PHM,MSM,LKR,IDF,KB adapter
+    class PHM,MSM,LKR,IDF,BM25,KB adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -65,27 +70,30 @@ injection and returns structured passages. The current adapter loads the local M
 knowledge base once during explicit construction; request-time searches use its
 prepared in-memory index.
 
-Distributed services and AI frameworks are deliberately not part of this slice.
+Distributed services are deliberately not part of this slice.
 
 ## Knowledge Retrieval Baseline
 
-The versioned knowledge base contains `station_s04.md`, `error_codes.md`, and
-`maintenance.md`. The explicit ingestion step normalizes each file and creates one
-chunk per Markdown heading section. Unchanged document names and heading order produce
-stable IDs such as `error_codes::chunk-002`.
+The versioned knowledge base contains seven concise Markdown documents. The explicit
+ingestion step normalizes each file and creates one chunk per Markdown heading section,
+currently 25 chunks. Unchanged document names and heading order produce stable IDs such
+as `error_codes::chunk-002`.
 
 ```mermaid
 flowchart LR
-    Docs["3 versioned Markdown documents"] --> Load["Explicit load and normalization"]
-    Load --> Chunk["Heading-section chunks<br/>stable positional IDs"]
+    Docs["7 versioned Markdown documents"] --> Load["Explicit load and normalization"]
+    Load --> Chunk["25 heading-section chunks<br/>stable positional IDs"]
     Chunk --> Index["In-memory token indexes"]
     Query["search_documentation(query)"] --> Port["KnowledgeRetriever port"]
     Port --> Simple["Simple term-overlap ranking<br/>top 3"]
     Port --> IDFSearch["Rarity-aware IDF ranking<br/>top 3"]
+    Port --> BM25Search["BM25 ranking<br/>top 3"]
     Index --> Simple
     Index --> IDFSearch
+    Index --> BM25Search
     Simple --> Results["Structured results<br/>content + provenance + score"]
     IDFSearch --> Results
+    BM25Search --> Results
     Results --> Query
 
     classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
@@ -93,19 +101,20 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class Docs,Load,Chunk data
     class Query,Port,Results core
-    class Index,Simple,IDFSearch adapter
+    class Index,Simple,IDFSearch,BM25Search adapter
 ```
 
 The tokenizer case-folds alphanumeric and hyphenated terms so exact industrial
 identifiers remain intact. The simple adapter scores the fraction of distinct query
 terms found in each chunk. The second adapter weights matching terms with a smoothed
-inverse chunk frequency before normalizing by total query weight. Both omit zero-score
-chunks and resolve ties by `chunk_id`; neither is BM25. Source path, document ID, chunk
-ID, section metadata, and score remain attached to every result.
+inverse chunk frequency before normalizing by total query weight. BM25 adds saturated
+term frequency and chunk-length normalization. All omit zero-score chunks and resolve
+ties by `chunk_id`. Source path, document ID, chunk ID, section metadata, and score
+remain attached to every result.
 
-The focused retrieval eval is separate from the agent evals. Its ten versioned cases
+The focused retrieval eval is separate from the agent evals. Its 28 frozen v2 cases
 measure Hit@1, Hit@3, and Mean Recall@3 using structured relevant-chunk ground truth.
-The same unchanged dataset compares both strategies. Agent query formulation and
+The same unchanged dataset compares all three strategies. Agent query formulation and
 final-answer grounding are outside this slice.
 
 The implemented LLM boundary includes deterministic task-level profile selection and a
@@ -209,10 +218,42 @@ the third observation, exactly one final LLM decision is allowed. Final text ret
 no further LLM request. Unknown tools, invalid arguments, and multiple calls in one
 response remain deterministic failures.
 
+The parallel LangGraph path preserves that behavior while moving orchestration mechanics
+into an explicit graph:
+
+```mermaid
+flowchart LR
+    CR["Composition Root"] -->|"TaskRequirements"| Router["DeterministicModelRouter"]
+    Router -->|"selected ModelProfile"| Security["EgressCheckedLLMClient"]
+    Security --> Adapter["LLMClientChatModel<br/>LangChain message adapter"]
+    Adapter --> Model["model node"]
+    Model --> Route{"conditional route"}
+    Route -->|"final / invalid / limit"| End["END"]
+    Route -->|"one valid request"| Tool["tool node"]
+    Tool -->|"structured observation"| Model
+    Tool --> Product["ProductHistoryCapability"]
+    Tool --> Machine["MachineStatusCapability"]
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class CR,Router,Product,Machine core
+    class Adapter,Model,Route,Tool,End framework
+    class Security security
+```
+
+`TroubleshootingGraphState` holds LangChain messages, the executed-tool count,
+normalized executed calls, run status, and an optional final answer. A custom tool node
+wraps the existing capabilities with LangChain `StructuredTool` contracts. This keeps
+argument validation and sequential one-call dispatch explicit instead of adopting a
+framework default that could change ADR-004 behavior. The Graph does not select a model:
+the Composition Root injects an already routed profile and a client whose final
+ADR-009 egress check remains active.
+
 ## Tool Selection Evaluation Baseline
 
-The repository-local eval measures only the first decision exposed by
-`TroubleshootingAgent.request_tool_selection()`. Each versioned JSONL case starts with a
+The repository-local eval measures only the first decision exposed by either
+troubleshooting path. Each versioned JSONL case starts with a
 fresh message context. The runner uses a configurable semantic Model Profile and passes
 the provider-independent `LLMResponse` to deterministic exact-match scoring.
 
@@ -362,10 +403,11 @@ results. The isolated
 Contains provider-independent LLM contracts and agent orchestration logic.
 
 The current implementation defines `LLMClient`, semantic `ModelProfile` selection,
-small request and response models, and `TroubleshootingAgent`. It also provides explicit
+small request and response models, the handwritten `TroubleshootingAgent`, and the
+parallel `LangGraphTroubleshootingAgent`. It also provides explicit
 `TaskRequirements`, validated routing metadata, and `DeterministicModelRouter`. The
 router reuses `ModelEgressPolicy`, filters by required capabilities and minimum quality,
-and then applies a stable cost/quality ordering. The agent contains the explicit bounded
+and then applies a stable cost/quality ordering. Both agent paths preserve the bounded
 sequential loop and fixed two-tool dispatch. `AgentRunResult` distinguishes `SUCCESS`
 from `LIMIT_REACHED` and reports both the executed-tool count and the normalized executed
 trajectory. The agent does not construct the router, import the OpenAI SDK, or name a
@@ -384,10 +426,13 @@ Contains technical integrations and external implementations.
 
 The current implementations are `InMemoryProductHistoryRepository` and
 `InMemoryMachineStatusRepository`, which provide small deterministic demo data sets,
-`InMemoryLexicalKnowledgeRetriever` and `InMemoryIdfKnowledgeRetriever`, which search
-prebuilt local token indexes with different scoring formulas, and
+`InMemoryLexicalKnowledgeRetriever`, `InMemoryIdfKnowledgeRetriever`, and
+`InMemoryBm25KnowledgeRetriever`, which search prebuilt local token indexes with
+different scoring formulas, and
 `OpenAICompatibleLLMClient`, which translates the provider-independent LLM contract to
-an OpenAI-compatible Chat Completions API.
+an OpenAI-compatible Chat Completions API. `LLMClientChatModel` is the narrow
+Infrastructure adapter between LangChain messages/tools and the existing `LLMClient`;
+it does not construct providers or duplicate profile and security configuration.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores
@@ -407,9 +452,10 @@ Examples may later include:
 
 ### `evals`
 
-Contains separate versioned datasets and focused manual runners for first-decision tool
-selection, complete bounded trajectories, and isolated retrieval quality. Parsing,
-per-case scoring, and aggregation are deterministic and covered by unit tests without a
+Contains separate versioned datasets and focused runners for first-decision tool
+selection, complete bounded trajectories, and isolated retrieval quality. Agent eval
+runners explicitly select `manual` or `langgraph` while keeping datasets and scoring
+unchanged. Parsing, per-case scoring, and aggregation are deterministic and covered by unit tests without a
 live LLM. Generated JSON reports belong under the Git-ignored `evals/results/`
 directory unless deliberately curated.
 

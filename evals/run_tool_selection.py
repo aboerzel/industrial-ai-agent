@@ -6,10 +6,20 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
+    LangGraphTroubleshootingAgent,
+)
 from industrial_ai_agent.agent.llm import LLMResponse, ModelProfile
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     EgressCheckedLLMClient,
+)
+from industrial_ai_agent.agent.model_routing import (
+    CostPreference,
+    DeterministicModelRouter,
+    LLMCapability,
+    TaskRequirements,
+    TaskRole,
 )
 from industrial_ai_agent.agent.troubleshooting_agent import TroubleshootingAgent
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
@@ -19,8 +29,10 @@ from industrial_ai_agent.infrastructure.in_memory_product_history_repository imp
     InMemoryProductHistoryRepository,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
+    LLMConfiguration,
     load_llm_configuration,
 )
+from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
 )
@@ -74,6 +86,7 @@ class ToolSelectionEvalReport(BaseModel):
 
     dataset: str
     model_profile: str
+    orchestration_path: str = "manual"
     total_cases: int
     correct_tool_selections: int
     correct_arguments: int
@@ -150,6 +163,7 @@ def aggregate_results(
     *,
     dataset: str,
     model_profile: str,
+    orchestration_path: str = "manual",
     results: Sequence[ToolSelectionEvalResult],
 ) -> ToolSelectionEvalReport:
     if not results:
@@ -161,6 +175,7 @@ def aggregate_results(
     return ToolSelectionEvalReport(
         dataset=dataset,
         model_profile=model_profile,
+        orchestration_path=orchestration_path,
         total_cases=total_cases,
         correct_tool_selections=correct_tool_selections,
         correct_arguments=correct_arguments,
@@ -176,6 +191,7 @@ def run_tool_selection_eval(
     request_tool_selection: Callable[[str], LLMResponse],
     dataset: str,
     model_profile: str,
+    orchestration_path: str = "manual",
 ) -> ToolSelectionEvalReport:
     results: list[ToolSelectionEvalResult] = []
     for case in cases:
@@ -189,6 +205,7 @@ def run_tool_selection_eval(
     return aggregate_results(
         dataset=dataset,
         model_profile=model_profile,
+        orchestration_path=orchestration_path,
         results=results,
     )
 
@@ -216,6 +233,11 @@ def _parse_args() -> argparse.Namespace:
         description="Evaluate the first troubleshooting LLM tool-selection decision."
     )
     parser.add_argument("--profile", default="troubleshooting")
+    parser.add_argument(
+        "--agent-path",
+        choices=("manual", "langgraph"),
+        default="manual",
+    )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument(
@@ -231,25 +253,43 @@ def main() -> None:
     load_local_environment(PROJECT_ROOT / ".env")
     cases = load_eval_cases(args.dataset)
     configuration = load_llm_configuration(args.config)
-    model_profile = ModelProfile(args.profile)
+    requested_profile = ModelProfile(args.profile)
+    request_classification = DataClassification.INTERNAL
 
     with OpenAICompatibleLLMClient(configuration) as adapter:
         llm_client = EgressCheckedLLMClient(
             adapter,
             configuration,
-            DataClassification.INTERNAL,
+            request_classification,
         )
-        agent = TroubleshootingAgent(
-            llm_client,
-            ProductHistoryCapability(InMemoryProductHistoryRepository()),
-            MachineStatusCapability(InMemoryMachineStatusRepository()),
-            model_profile=model_profile,
-        )
+        product_history = ProductHistoryCapability(InMemoryProductHistoryRepository())
+        machine_status = MachineStatusCapability(InMemoryMachineStatusRepository())
+        if args.agent_path == "langgraph":
+            model_profile = _route_requested_profile(
+                configuration,
+                requested_profile,
+                TaskRole.TOOL_SELECTION,
+                request_classification,
+            )
+            agent = LangGraphTroubleshootingAgent(
+                LLMClientChatModel(llm_client, model_profile),
+                product_history,
+                machine_status,
+            )
+        else:
+            model_profile = requested_profile
+            agent = TroubleshootingAgent(
+                llm_client,
+                product_history,
+                machine_status,
+                model_profile=model_profile,
+            )
         report = run_tool_selection_eval(
             cases=cases,
             request_tool_selection=agent.request_tool_selection,
             dataset=args.dataset.name,
             model_profile=model_profile.name,
+            orchestration_path=args.agent_path,
         )
 
     serialized_report = report.model_dump_json(indent=2)
@@ -260,6 +300,34 @@ def main() -> None:
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(f"{serialized_report}\n", encoding="utf-8")
+
+
+def _route_requested_profile(
+    configuration: LLMConfiguration,
+    requested_profile: ModelProfile,
+    task_role: TaskRole,
+    data_classification: DataClassification,
+) -> ModelProfile:
+    candidates = tuple(
+        profile
+        for profile in configuration.get_routing_profiles()
+        if profile.profile == requested_profile
+    )
+    if not candidates:
+        raise ValueError(f"Unknown model profile: {requested_profile.name}")
+    candidate = candidates[0]
+    return DeterministicModelRouter().route(
+        TaskRequirements(
+            task_role=task_role,
+            required_capabilities=frozenset(
+                {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+            ),
+            minimum_quality=candidate.quality_class,
+            cost_preference=CostPreference.BALANCED,
+            data_classification=data_classification,
+        ),
+        candidates,
+    )
 
 
 if __name__ == "__main__":

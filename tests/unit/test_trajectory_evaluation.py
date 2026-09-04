@@ -303,11 +303,13 @@ def test_run_eval_executes_cases_independently_and_records_final_answer() -> Non
         run_agent=run_agent,
         dataset="test.jsonl",
         model_profile="troubleshooting",
+        orchestration_path="langgraph",
     )
 
     assert report.results[0].error == "RuntimeError: LLM unavailable"
     assert report.results[1].final_answer == "Investigation complete."
     assert report.task_success_rate == 0.5
+    assert report.orchestration_path == "langgraph"
 
 
 def test_agent_run_result_exposes_provider_independent_executed_trajectory() -> None:

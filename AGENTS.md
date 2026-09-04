@@ -162,6 +162,16 @@ For the bounded loop:
 
 See `docs/decisions/ADR-004-agent-orchestration-strategy.md`.
 
+The parallel LangGraph migration is governed by ADR-010. Keep the handwritten agent as
+the reference path until deterministic tests and unchanged evaluations establish
+sufficient equivalence. LangGraph/LangChain may own orchestration, message, and tool
+integration mechanics, but framework defaults must not bypass the bounded sequential
+loop, injected Model Profile, deterministic routing, or final egress enforcement.
+LangChain tool adapters must delegate to existing capabilities rather than own Domain or
+Infrastructure logic.
+
+See `docs/decisions/ADR-010-langgraph-and-langchain-orchestration-migration.md`.
+
 ---
 
 ## LLM Provider and Model Independence
@@ -192,7 +202,7 @@ See `docs/decisions/ADR-002-provider-and-model-independent-llm-architecture.md`.
 
 ## Model Routing and Egress
 
-Future task-level model routing must select semantic Model Profiles deterministically
+Task-level model routing must select semantic Model Profiles deterministically
 from explicit task requirements; agent and use-case code must not select concrete
 providers or model names.
 
@@ -678,6 +688,7 @@ ADR-006  Knowledge retrieval and RAG architecture
 ADR-007  Embedding model abstraction
 ADR-008  Task-level model routing
 ADR-009  Data classification and model egress policy
+ADR-010  LangGraph and LangChain orchestration migration
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision
@@ -851,3 +862,27 @@ Before completing a task that changes documentation, verify:
 3. both versions describe the same technical state when a language pair is required,
 4. links and file references remain valid in both versions where applicable,
 5. affected Mermaid diagrams are updated and technically consistent in both versions.
+
+### Cost-aware Codex execution
+
+Prefer the project's normal cost-efficient Codex configuration for routine
+implementation work.
+
+Use expensive/deep reasoning only when the task materially requires it, such as:
+- architecture decisions or ADR conflicts
+- security boundaries
+- difficult cross-cutting refactorings
+- subtle concurrency or state-machine problems
+- unresolved failures after normal debugging
+- final review of architecture-critical changes
+
+Routine work should not require maximum reasoning depth, including:
+- formatting
+- lint fixes
+- straightforward unit tests
+- documentation synchronization
+- mechanical refactoring
+- running existing quality gates
+
+Do not redo already-established architectural reasoning unless new evidence or
+a concrete conflict requires it.

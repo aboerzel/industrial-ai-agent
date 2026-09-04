@@ -61,7 +61,7 @@ GET_MACHINE_STATUS_TOOL = LLMToolDefinition(
         "required": ["station_id"],
     },
 )
-_SYSTEM_MESSAGE = LLMMessage(
+TROUBLESHOOTING_SYSTEM_MESSAGE = LLMMessage(
     role=MessageRole.SYSTEM,
     content=(
         "You are an industrial troubleshooting assistant. Use get_product_history "
@@ -192,7 +192,7 @@ class TroubleshootingAgent:
 
     def answer(self, user_request: str) -> AgentRunResult:
         user_message = _create_user_message(user_request)
-        messages = [_SYSTEM_MESSAGE, user_message]
+        messages = [TROUBLESHOOTING_SYSTEM_MESSAGE, user_message]
         executed_tool_calls: list[ExecutedToolCall] = []
 
         while True:
@@ -234,7 +234,7 @@ class TroubleshootingAgent:
             executed_tool_calls.append(executed_tool_call)
 
     def _request_tool_selection(self, user_message: LLMMessage) -> LLMResponse:
-        return self._request_decision((_SYSTEM_MESSAGE, user_message))
+        return self._request_decision((TROUBLESHOOTING_SYSTEM_MESSAGE, user_message))
 
     def _request_decision(self, messages: tuple[LLMMessage, ...]) -> LLMResponse:
         return self._llm_client.chat(

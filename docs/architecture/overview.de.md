@@ -3,16 +3,18 @@
 ## Aktuelle Architektur
 
 Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des aktuellen
-Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und einen expliziten
-begrenzten Single-Agent Tool Loop über zwei Tools. Fokussierte deterministische
-Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige begrenzte
-Trajectories. Zwei isolierte lokale lexical Knowledge-Retrieval-Strategien sind hinter
-einem inneren Port implementiert, aber noch nicht in den Agenten integriert. Ein
+Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und zwei parallele
+begrenzte Single-Agent-Pfade über dieselben zwei Tools: den handgeschriebenen
+`TroubleshootingAgent` als Referenz und `LangGraphTroubleshootingAgent`. Fokussierte
+deterministische Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige
+begrenzte Trajectories für beide Pfade. Lokale lexical Knowledge-Retrieval-Strategien
+sind hinter einem inneren Port implementiert, aber noch nicht in den Agenten integriert. Ein
 deterministischer Model-Egress-Decorator mit Deny-by-default prüft die explizite
 Request-Klassifikation gegen die validierte Execution Zone jedes Model Profiles, bevor
-der Provider Adapter aufgerufen wird. Es
-existieren weder Agent-Framework, dynamische Tool Registry, persistentes Agent Memory
-noch allgemeines Eval-Framework.
+der Provider Adapter aufgerufen wird. LangGraph und LangChain Core werden nun gezielt
+für den parallelen Orchestrierungspfad verwendet. Es existieren weder dynamische Tool
+Registry, persistentes Agent Memory, Checkpointer, LangSmith-Integration noch allgemeines
+Eval-Framework.
 
 Der implementierte Request Flow ist:
 
@@ -35,6 +37,7 @@ flowchart LR
         MSM["InMemoryMachineStatusRepository"]
         LKR["InMemoryLexicalKnowledgeRetriever"]
         IDF["InMemoryIdfKnowledgeRetriever"]
+        BM25["InMemoryBm25KnowledgeRetriever"]
         KB["Versionierte lokale Markdown Knowledge Base"]
     end
 
@@ -45,15 +48,17 @@ flowchart LR
     MSM -.->|"implementiert"| MSR
     LKR -.->|"implementiert"| KR
     IDF -.->|"implementiert"| KR
+    BM25 -.->|"implementiert"| KR
     KB -->|"expliziter Index Build"| LKR
     KB -->|"expliziter Index Build"| IDF
+    KB -->|"expliziter Index Build"| BM25
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR port
-    class PHM,MSM,LKR,IDF,KB adapter
+    class PHM,MSM,LKR,IDF,BM25,KB adapter
 ```
 
 Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
@@ -66,27 +71,30 @@ und gibt strukturierte Passagen zurück. Der aktuelle Adapter lädt die lokale M
 Knowledge Base einmalig bei der expliziten Erstellung; Suchen zur Request-Zeit verwenden
 seinen vorbereiteten In-Memory-Index.
 
-Verteilte Services und AI frameworks sind bewusst nicht Teil dieses Slice.
+Verteilte Services sind bewusst nicht Teil dieses Slice.
 
 ## Knowledge-Retrieval-Baseline
 
-Die versionierte Knowledge Base enthält `station_s04.md`, `error_codes.md` und
-`maintenance.md`. Der explizite Ingestion-Schritt normalisiert jede Datei und erzeugt
-einen Chunk pro Markdown-Überschriftsabschnitt. Unveränderte Dokumentnamen und
+Die versionierte Knowledge Base enthält sieben kompakte Markdown-Dokumente. Der
+explizite Ingestion-Schritt normalisiert jede Datei und erzeugt einen Chunk pro
+Markdown-Überschriftsabschnitt, derzeit 25 Chunks. Unveränderte Dokumentnamen und
 Überschriftenreihenfolgen liefern stabile IDs wie `error_codes::chunk-002`.
 
 ```mermaid
 flowchart LR
-    Docs["3 versionierte Markdown-Dokumente"] --> Load["Explizites Laden und Normalisieren"]
-    Load --> Chunk["Überschriftsabschnitt-Chunks<br/>stabile Positions-IDs"]
+    Docs["7 versionierte Markdown-Dokumente"] --> Load["Explizites Laden und Normalisieren"]
+    Load --> Chunk["25 Überschriftsabschnitt-Chunks<br/>stabile Positions-IDs"]
     Chunk --> Index["In-Memory-Token-Indizes"]
     Query["search_documentation(query)"] --> Port["KnowledgeRetriever-Port"]
     Port --> Simple["Einfaches Term-Overlap-Ranking<br/>Top 3"]
     Port --> IDFSearch["Rarity-aware IDF-Ranking<br/>Top 3"]
+    Port --> BM25Search["BM25-Ranking<br/>Top 3"]
     Index --> Simple
     Index --> IDFSearch
+    Index --> BM25Search
     Simple --> Results["Strukturierte Results<br/>Content + Provenance + Score"]
     IDFSearch --> Results
+    BM25Search --> Results
     Results --> Query
 
     classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
@@ -94,20 +102,21 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class Docs,Load,Chunk data
     class Query,Port,Results core
-    class Index,Simple,IDFSearch adapter
+    class Index,Simple,IDFSearch,BM25Search adapter
 ```
 
 Der Tokenizer führt Case Folding für alphanumerische Terme und Identifier mit
 Bindestrichen durch, sodass exakte industrielle Identifier erhalten bleiben. Der
 einfache Adapter bewertet den Anteil unterschiedlicher Query-Terme im Chunk. Der zweite
 Adapter gewichtet übereinstimmende Terme mit geglätteter inverser Chunk Frequency und
-normalisiert anschließend mit dem gesamten Query-Gewicht. Beide lassen Chunks mit Score
-null aus und lösen Ties durch `chunk_id`; keiner ist BM25. Source Path, Document ID,
-Chunk ID, Abschnitts-Metadata und Score bleiben an jedem Result erhalten.
+normalisiert anschließend mit dem gesamten Query-Gewicht. BM25 ergänzt gesättigte Term
+Frequency und Chunk-Length-Normalisierung. Alle lassen Chunks mit Score null aus und
+lösen Ties durch `chunk_id`. Source Path, Document ID, Chunk ID, Abschnitts-Metadata und
+Score bleiben an jedem Result erhalten.
 
-Der fokussierte Retrieval-Eval ist von den Agent-Evals getrennt. Seine zehn
-versionierten Fälle messen Hit@1, Hit@3 und Mean Recall@3 mit strukturierter
-Relevant-Chunk-Ground-Truth. Dasselbe unveränderte Dataset vergleicht beide Strategien.
+Der fokussierte Retrieval-Eval ist von den Agent-Evals getrennt. Seine 28 eingefrorenen
+v2-Fälle messen Hit@1, Hit@3 und Mean Recall@3 mit strukturierter
+Relevant-Chunk-Ground-Truth. Dasselbe unveränderte Dataset vergleicht alle drei Strategien.
 Agent-Query-Formulierung und Grounding der finalen Antwort liegen außerhalb dieses
 Slice.
 
@@ -212,10 +221,43 @@ dritten Observation ist genau eine finale LLM-Entscheidung erlaubt. Finaler Text
 und führt zu keinem weiteren LLM Request. Unbekannte Tools, ungültige Argumente und
 mehrere Calls in einer Response bleiben deterministische Fehler.
 
+Der parallele LangGraph-Pfad erhält dieses Verhalten, verschiebt aber die
+Orchestrierungsmechanik in einen expliziten Graphen:
+
+```mermaid
+flowchart LR
+    CR["Composition Root"] -->|"TaskRequirements"| Router["DeterministicModelRouter"]
+    Router -->|"ausgewähltes ModelProfile"| Security["EgressCheckedLLMClient"]
+    Security --> Adapter["LLMClientChatModel<br/>LangChain Message Adapter"]
+    Adapter --> Model["Model Node"]
+    Model --> Route{"Conditional Route"}
+    Route -->|"final / ungültig / Limit"| End["END"]
+    Route -->|"ein gültiger Request"| Tool["Tool Node"]
+    Tool -->|"strukturierte Observation"| Model
+    Tool --> Product["ProductHistoryCapability"]
+    Tool --> Machine["MachineStatusCapability"]
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class CR,Router,Product,Machine core
+    class Adapter,Model,Route,Tool,End framework
+    class Security security
+```
+
+`TroubleshootingGraphState` enthält LangChain Messages, die Anzahl ausgeführter Tools,
+normalisierte ausgeführte Calls, Run Status und eine optionale finale Antwort. Ein
+eigener Tool Node adaptiert die bestehenden Capabilities über LangChain-
+`StructuredTool`-Verträge. Dadurch bleiben Argumentvalidierung und sequenzieller
+One-Call-Dispatch explizit, statt einen Framework-Default zu übernehmen, der das
+ADR-004-Verhalten verändern könnte. Der Graph wählt kein Modell: Der Composition Root
+injiziert ein bereits geroutetes Profile und einen Client, dessen finaler
+ADR-009-Egress-Check aktiv bleibt.
+
 ## Baseline für die Tool-Selection-Evaluation
 
-Der Repository-lokale Eval misst ausschließlich die von
-`TroubleshootingAgent.request_tool_selection()` exponierte erste Entscheidung. Jeder
+Der Repository-lokale Eval misst ausschließlich die von einem der beiden
+Troubleshooting-Pfade exponierte erste Entscheidung. Jeder
 versionierte JSONL-Fall startet mit einem frischen Message Context. Der Runner verwendet
 ein konfigurierbares semantisches Model Profile und übergibt die provider-unabhängige
 `LLMResponse` an ein deterministisches Exact-Match-Scoring.
@@ -368,11 +410,12 @@ einschließlich strukturierter Not-found-Ergebnisse. Die isolierte
 Enthält provider-unabhängige LLM-Verträge und Agenten-Orchestrierungslogik.
 
 Die aktuelle Implementierung definiert `LLMClient`, die Auswahl über semantische
-`ModelProfile`, kleine Request- und Response-Modelle sowie `TroubleshootingAgent`. Sie
+`ModelProfile`, kleine Request- und Response-Modelle, den handgeschriebenen
+`TroubleshootingAgent` und den parallelen `LangGraphTroubleshootingAgent`. Sie
 stellt außerdem explizite `TaskRequirements`, validierte Routing-Metadata und
 `DeterministicModelRouter` bereit. Der Router verwendet `ModelEgressPolicy`, filtert nach
 erforderlichen Capabilities und Minimum Quality und wendet anschließend eine stabile
-Cost/Quality-Sortierung an. Der Agent enthält den expliziten begrenzten sequenziellen
+Cost/Quality-Sortierung an. Beide Agent-Pfade erhalten den begrenzten sequenziellen
 Loop und den festen Zwei-Tool-Dispatch. `AgentRunResult` unterscheidet `SUCCESS` von
 `LIMIT_REACHED` und gibt die Anzahl ausgeführter Tools sowie die normalisierte
 ausgeführte Trajectory an. Der Agent konstruiert den Router nicht, importiert weder das
@@ -391,11 +434,13 @@ Enthält technische Integrationen und externe Implementierungen.
 
 Die aktuellen Implementierungen sind `InMemoryProductHistoryRepository` und
 `InMemoryMachineStatusRepository`, die kleine deterministische Demo-Datensätze
-bereitstellen, `InMemoryLexicalKnowledgeRetriever` und
-`InMemoryIdfKnowledgeRetriever`, die vorbereitete lokale Token-Indizes mit
+bereitstellen, `InMemoryLexicalKnowledgeRetriever`, `InMemoryIdfKnowledgeRetriever` und
+`InMemoryBm25KnowledgeRetriever`, die vorbereitete lokale Token-Indizes mit
 unterschiedlichen Scoring-Formeln durchsuchen, sowie `OpenAICompatibleLLMClient`, das den
 provider-unabhängigen LLM-Vertrag in eine OpenAI-compatible Chat Completions API
-übersetzt.
+übersetzt. `LLMClientChatModel` ist der schmale Infrastructure Adapter zwischen
+LangChain Messages/Tools und dem bestehenden `LLMClient`; er konstruiert weder Provider
+noch dupliziert er Profile- oder Security-Konfiguration.
 
 Normale Modelleinstellungen und Secret-Werte sind getrennt. Die Konfiguration markiert
 ein Profil explizit als nicht authentifiziert oder API-Key-authentifiziert. Ein
@@ -416,10 +461,11 @@ Spätere Beispiele können sein:
 
 ### `evals`
 
-Enthält separate versionierte Datasets und fokussierte manuelle Runner für die
+Enthält separate versionierte Datasets und fokussierte Runner für die
 First-Decision-Tool-Selection, vollständige begrenzte Trajectories und isolierte
-Retrieval-Qualität. Parsing, Scoring pro Fall und Aggregation sind deterministisch und
-durch Unit Tests ohne live LLM abgedeckt. Generierte JSON Reports gehören in das von
+Retrieval-Qualität. Agent-Eval-Runner wählen explizit `manual` oder `langgraph`, während
+Datasets und Scoring unverändert bleiben. Parsing, Scoring pro Fall und Aggregation sind
+deterministisch und durch Unit Tests ohne live LLM abgedeckt. Generierte JSON Reports gehören in das von
 Git ignorierte Verzeichnis `evals/results/`, sofern sie nicht bewusst kuratiert werden.
 
 ## Weiterentwicklung

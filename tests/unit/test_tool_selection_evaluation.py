@@ -218,6 +218,7 @@ def test_run_eval_continues_after_independent_case_failure() -> None:
         request_tool_selection=request_tool_selection,
         dataset="test.jsonl",
         model_profile="troubleshooting",
+        orchestration_path="langgraph",
     )
 
     assert requested_inputs == [case.user_input for case in cases]
@@ -226,3 +227,4 @@ def test_run_eval_continues_after_independent_case_failure() -> None:
     assert report.results[1].arguments_correct is True
     assert report.tool_selection_accuracy == 0.5
     assert report.argument_accuracy == 0.5
+    assert report.orchestration_path == "langgraph"
