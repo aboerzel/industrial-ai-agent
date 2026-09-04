@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,12 +13,17 @@ from industrial_ai_agent.agent.llm import (
     MessageRole,
     ModelProfile,
 )
-from industrial_ai_agent.infrastructure.llm.configuration import LLMConfiguration
+from industrial_ai_agent.infrastructure.llm.configuration import (
+    LLMConfiguration,
+    load_llm_configuration,
+)
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TROUBLESHOOTING_PROFILE = ModelProfile("troubleshooting")
+PUBLIC_FAST_PROFILE = ModelProfile("public_fast")
 
 
 class FakeCompletions:
@@ -244,6 +250,26 @@ def test_requires_api_key_from_configured_environment_variable() -> None:
         match="Missing API key environment variable: CLOUD_LLM_API_KEY",
     ):
         client.chat(TROUBLESHOOTING_PROFILE, request)
+
+
+def test_public_fast_rejects_missing_groq_api_key_without_network_call() -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+    client = OpenAICompatibleLLMClient(
+        configuration,
+        environment={},
+        client_factory=lambda **_: pytest.fail("client factory must not be called"),
+    )
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="PUBLIC_LLM_OK"),)
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Missing API key environment variable: GROQ_API_KEY",
+    ):
+        client.chat(PUBLIC_FAST_PROFILE, request)
 
 
 def test_reads_authenticated_profile_api_key_from_environment_variable() -> None:

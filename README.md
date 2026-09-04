@@ -44,11 +44,11 @@ metadata provenance. Retrieval is intentionally not yet exposed as a
 
 No LLM framework, MCP server, vector database, or multi-agent framework is introduced yet.
 
-## Manual Ollama Smoke Tests
+## Manual Model Profile Smoke Tests
 
-The smoke test is deliberately separate from automated tests and calls the configured
-local models. Install and start Ollama, make sure both configured models are available,
-and run:
+The smoke test is deliberately separate from automated tests. Its default invocation
+calls only the configured local models. Install and start Ollama, make sure both models
+are available, and run:
 
 ```powershell
 ollama pull qwen3.5:4b
@@ -66,6 +66,22 @@ compatible `troubleshooting` profile, runs a multi-step request, and structurall
 verifies the sequential calls
 `get_product_history(P4711)` and `get_machine_status(S04)` before a successful final
 answer.
+
+The `public_fast` profile uses Groq through the same `OpenAICompatibleLLMClient`. Set
+`GROQ_API_KEY` in the unversioned local `.env` file and invoke it only explicitly:
+
+```powershell
+python scripts/smoke_test_ollama.py --profile public_fast
+```
+
+Executable entry points load the project-root `.env` explicitly as local runtime
+configuration. Existing process Environment Variables take precedence and are never
+overridden by `.env` values.
+
+This public-cloud smoke path sends only the synthetic prompt
+`Reply exactly with PUBLIC_LLM_OK`. Until ADR-009 is implemented, `public_fast` must not
+receive agent, tool, retrieval, production, machine, product, or customer context. It is
+not selected automatically and is not a fallback profile.
 
 ## Manual Tool Selection Eval
 

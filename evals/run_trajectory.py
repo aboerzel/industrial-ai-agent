@@ -4,7 +4,6 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from industrial_ai_agent.agent.llm import ModelProfile
@@ -25,6 +24,9 @@ from industrial_ai_agent.infrastructure.llm.configuration import (
 )
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
+)
+from industrial_ai_agent.infrastructure.local_environment import (
+    load_local_environment,
 )
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
@@ -275,7 +277,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    load_dotenv(PROJECT_ROOT / ".env")
+    load_local_environment(PROJECT_ROOT / ".env")
     cases = load_eval_cases(args.dataset)
     configuration = load_llm_configuration(args.config)
     model_profile = ModelProfile(args.profile)

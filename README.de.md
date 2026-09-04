@@ -47,11 +47,11 @@ nicht als Tool des `TroubleshootingAgent` exponiert.
 
 Es wurden noch kein LLM framework, MCP server, keine vector database und kein multi-agent framework eingeführt.
 
-## Manuelle Ollama Smoke Tests
+## Manuelle Model-Profile-Smoke-Tests
 
-Der Smoke Test ist bewusst von den automatisierten Tests getrennt und ruft die
-konfigurierten lokalen Modelle auf. Installiere und starte Ollama, stelle sicher, dass
-beide konfigurierten Modelle verfügbar sind, und führe Folgendes aus:
+Der Smoke Test ist bewusst von den automatisierten Tests getrennt. Sein Default-Aufruf
+ruft ausschließlich die konfigurierten lokalen Modelle auf. Installiere und starte
+Ollama, stelle sicher, dass beide Modelle verfügbar sind, und führe Folgendes aus:
 
 ```powershell
 ollama pull qwen3.5:4b
@@ -69,6 +69,23 @@ weiterhin das kompatible `troubleshooting`-Profile, führt eine mehrstufige Anfr
 und prüft strukturell die sequenziellen Calls
 `get_product_history(P4711)` und `get_machine_status(S04)` vor einer erfolgreichen
 finalen Antwort.
+
+Das Profile `public_fast` verwendet Groq über denselben
+`OpenAICompatibleLLMClient`. Setze `GROQ_API_KEY` in der unversionierten lokalen
+`.env`-Datei und rufe das Profile ausschließlich explizit auf:
+
+```powershell
+python scripts/smoke_test_ollama.py --profile public_fast
+```
+
+Ausführbare Entry Points laden die `.env` im Project Root explizit als lokale Runtime-
+Konfiguration. Bereits gesetzte Prozess-Environment-Variables haben Vorrang und werden
+niemals durch Werte aus `.env` überschrieben.
+
+Dieser Public-Cloud-Smoke-Pfad sendet ausschließlich den synthetischen Prompt
+`Reply exactly with PUBLIC_LLM_OK`. Bis ADR-009 implementiert ist, darf `public_fast`
+keinen Agent-, Tool-, Retrieval-, Produktions-, Maschinen-, Produkt- oder Kundenkontext
+erhalten. Es wird weder automatisch ausgewählt noch als Fallback Profile verwendet.
 
 ## Manueller Tool-Selection-Eval
 

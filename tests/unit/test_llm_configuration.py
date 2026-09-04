@@ -51,6 +51,17 @@ def test_loads_local_quality_profile() -> None:
     assert profile.api_key_env is None
 
 
+def test_loads_public_fast_profile() -> None:
+    profile = load_project_configuration().get_profile("public_fast")
+
+    assert profile.provider == "groq"
+    assert profile.model == "openai/gpt-oss-20b"
+    assert str(profile.base_url) == "https://api.groq.com/openai/v1"
+    assert profile.temperature == 0
+    assert profile.authentication is AuthenticationMode.API_KEY
+    assert profile.api_key_env == "GROQ_API_KEY"
+
+
 def test_local_profiles_use_different_models() -> None:
     configuration = load_project_configuration()
 
