@@ -64,6 +64,8 @@ python scripts/smoke_test_troubleshooting_agent.py
 python scripts/smoke_test_langgraph.py --profile local_fast
 python scripts/smoke_test_langgraph.py --profile local_quality
 python scripts/smoke_test_langgraph.py --confidential-troubleshooting
+python scripts/smoke_test_langgraph_hitl.py --approval approve
+python scripts/smoke_test_langgraph_hitl.py --approval reject
 ```
 
 Without `--profile`, the first script calls `local_fast` and `local_quality` sequentially.
@@ -76,6 +78,12 @@ selects the compatible local `local_quality` profile, runs a multi-step request,
 structurally verifies the sequential calls
 `get_product_history(P4711)` and `get_machine_status(S04)` before a successful final
 answer.
+
+The HITL smoke runs the LangGraph path with a confidential local profile and an
+in-memory checkpointer. It shows the structured approval request for the harmless
+`create_maintenance_ticket` demonstration action, then resumes the same thread with the
+chosen explicit result. It never calls an external ticket system or performs a machine
+action.
 
 The `public_fast` profile uses Groq through the same `OpenAICompatibleLLMClient`. Set
 `GROQ_API_KEY` in the unversioned local `.env` file and invoke it only explicitly:

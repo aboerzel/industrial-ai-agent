@@ -159,6 +159,8 @@ For the bounded loop:
   superseding architecture decision
 * preserve the provider-independent `LLMClient`, semantic Model Profiles, and the
   existing first-decision eval baseline
+* for LangGraph human approval, keep non-idempotent side effects strictly after an
+  approved `interrupt()` resume; an action requiring approval must never execute before it
 
 See `docs/decisions/ADR-004-agent-orchestration-strategy.md`.
 
@@ -170,7 +172,8 @@ loop, injected Model Profile, deterministic routing, or final egress enforcement
 LangChain tool adapters must delegate to existing capabilities rather than own Domain or
 Infrastructure logic.
 
-See `docs/decisions/ADR-010-langgraph-and-langchain-orchestration-migration.md`.
+See `docs/decisions/ADR-010-langgraph-and-langchain-orchestration-migration.md` and
+`docs/decisions/ADR-011-agent-persistence-and-human-in-the-loop.md`.
 
 ---
 
@@ -689,6 +692,7 @@ ADR-007  Embedding model abstraction
 ADR-008  Task-level model routing
 ADR-009  Data classification and model egress policy
 ADR-010  LangGraph and LangChain orchestration migration
+ADR-011  Agent persistence and human-in-the-loop
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

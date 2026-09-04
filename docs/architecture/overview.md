@@ -4,16 +4,19 @@
 
 The project currently implements product-history retrieval, current machine-status
 retrieval, a provider-independent LLM integration boundary, and two parallel bounded
-single-agent paths over the same two tools: the handwritten `TroubleshootingAgent`
-reference and `LangGraphTroubleshootingAgent`. Focused deterministic baselines evaluate
+single-agent paths over the same two read-only tools: the handwritten
+`TroubleshootingAgent` reference and `LangGraphTroubleshootingAgent`. The graph path can
+also receive an explicitly injected demonstration action capability that pauses for human
+approval. Focused deterministic baselines evaluate
 the first LLM tool decision and complete bounded trajectories for either path. Local
 lexical knowledge-retrieval strategies are implemented behind one inner port but are not yet
 integrated into the agent. A deterministic, deny-by-default model-egress decorator
 checks explicit request classification against each Model Profile's validated Execution
 Zone before invoking the provider adapter.
 LangGraph and LangChain Core are now used narrowly for the parallel orchestration path.
-There is no dynamic tool registry, persistent agent memory, checkpointer, LangSmith
-integration, or general evaluation framework.
+An explicitly injected `InMemorySaver` supports local/test checkpoint and HITL
+demonstrations; it is not durable persistence. There is no dynamic tool registry,
+production persistence backend, LangSmith integration, or general evaluation framework.
 
 The implemented request flow is:
 
@@ -229,26 +232,42 @@ flowchart LR
     Adapter --> Model["model node"]
     Model --> Route{"conditional route"}
     Route -->|"final / invalid / limit"| End["END"]
-    Route -->|"one valid request"| Tool["tool node"]
+    Route -->|"read request"| Tool["tool node"]
+    Route -->|"write request"| Prepare["prepare action"]
     Tool -->|"structured observation"| Model
     Tool --> Product["ProductHistoryCapability"]
     Tool --> Machine["MachineStatusCapability"]
+    Prepare --> Approval["approval node<br/>interrupt(payload)"]
+    Approval -->|"approve"| Execute["execute action"]
+    Approval -->|"reject"| Cancel["cancel action -> END"]
+    Execute -->|"structured observation"| Model
+    Execute --> Ticket["MaintenanceTicketCapability"]
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    class CR,Router,Product,Machine core
-    class Adapter,Model,Route,Tool,End framework
+    class CR,Router,Product,Machine,Ticket core
+    class Adapter,Model,Route,Tool,Prepare,Approval,Execute,Cancel,End framework
     class Security security
 ```
 
 `TroubleshootingGraphState` holds LangChain messages, the executed-tool count,
-normalized executed calls, run status, and an optional final answer. A custom tool node
-wraps the existing capabilities with LangChain `StructuredTool` contracts. This keeps
-argument validation and sequential one-call dispatch explicit instead of adopting a
-framework default that could change ADR-004 behavior. The Graph does not select a model:
-the Composition Root injects an already routed profile and a client whose final
-ADR-009 egress check remains active.
+normalized executed calls, run status, final answer, a pending action, approval result,
+and minimal bound run context. A custom tool node wraps the existing capabilities with
+LangChain `StructuredTool` contracts. This keeps argument validation and sequential
+one-call dispatch explicit instead of adopting a framework default that could change
+ADR-004 behavior. The Graph does not select a model: the Composition Root injects an
+already routed profile and a client whose final ADR-009 egress check remains active.
+
+For a resumable run, the graph is compiled with a native `InMemorySaver` and invoked
+with `configurable.thread_id`. The approval node emits a JSON-serializable
+`action_approval` interrupt and resumes through `Command(resume="approve" | "reject")`
+using the same thread ID. Read tools never interrupt. `create_maintenance_ticket` is an
+in-memory demonstration action: it is prepared before the interrupt, executes only after
+approval, and uses its tool-call ID as an in-memory idempotency key. Nodes before an
+interrupt remain side-effect-free because LangGraph restarts the node from its beginning
+on resume. `InMemorySaver` loses state at process end; durable storage is deferred by
+[ADR-011](../decisions/ADR-011-agent-persistence-and-human-in-the-loop.md).
 
 ## Tool Selection Evaluation Baseline
 
@@ -374,7 +393,9 @@ Contains industrial domain models and rules.
 The current slices define `ProductId`, the shared `StationId`, `ProductionStep`,
 `ProductionStepStatus`, `ProductHistory`, `MachineState`, `MachineStatus`, and
 `KnowledgeRetrievalResult`. The inner ports are `ProductHistoryRepository`,
-`MachineStatusRepository`, and `KnowledgeRetriever`.
+`MachineStatusRepository`, and `KnowledgeRetriever`. The HITL demonstration additionally
+defines `MaintenanceTicketRequestId` and `MaintenanceTicket` plus the
+`MaintenanceTicketRepository` inner port.
 
 Must remain independent from:
 
@@ -397,6 +418,9 @@ The current capabilities are
 results. The isolated
 `DocumentationSearchCapability.search_documentation(query)` returns structured
 `DocumentationSearchResult` data and is not yet offered as an agent tool.
+`MaintenanceTicketCapability.create_maintenance_ticket(...)` is an optional
+LangGraph-only demonstration action. Its deterministic approval boundary executes it
+only after explicit approval; it is not exposed by the handwritten reference path.
 
 ### `agent`
 
@@ -411,11 +435,13 @@ and then applies a stable cost/quality ordering. Both agent paths preserve the b
 sequential loop and fixed two-tool dispatch. `AgentRunResult` distinguishes `SUCCESS`
 from `LIMIT_REACHED` and reports both the executed-tool count and the normalized executed
 trajectory. The agent does not construct the router, import the OpenAI SDK, or name a
-concrete provider or model.
+concrete provider or model. Its optional HITL composition persists an already selected
+profile and explicit run classification in checkpointed graph state; resume rejects a
+mismatched profile or classification rather than rerouting.
 
 Possible later responsibilities include:
 
-* persistent agent state
+* durable production agent persistence
 * context compression
 * Application-state classification propagation
 * policy and guardrail integration
@@ -433,6 +459,8 @@ different scoring formulas, and
 an OpenAI-compatible Chat Completions API. `LLMClientChatModel` is the narrow
 Infrastructure adapter between LangChain messages/tools and the existing `LLMClient`;
 it does not construct providers or duplicate profile and security configuration.
+`InMemoryMaintenanceTicketRepository` is a local, idempotent demonstration adapter for
+the approved action only; it is not an external ticketing integration.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores

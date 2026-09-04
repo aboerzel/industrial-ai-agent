@@ -4,17 +4,20 @@
 
 Das Projekt implementiert derzeit das Abrufen der Produktionshistorie und des aktuellen
 Maschinenstatus, eine provider-unabhängige LLM-Integrationsgrenze und zwei parallele
-begrenzte Single-Agent-Pfade über dieselben zwei Tools: den handgeschriebenen
-`TroubleshootingAgent` als Referenz und `LangGraphTroubleshootingAgent`. Fokussierte
+begrenzte Single-Agent-Pfade über dieselben zwei Read-Only-Tools: den handgeschriebenen
+`TroubleshootingAgent` als Referenz und `LangGraphTroubleshootingAgent`. Der Graph-Pfad
+kann zusätzlich eine explizit injizierte Demonstrations-Action-Capability erhalten, die
+für Human Approval pausiert. Fokussierte
 deterministische Baselines evaluieren die erste LLM-Tool-Entscheidung und vollständige
 begrenzte Trajectories für beide Pfade. Lokale lexical Knowledge-Retrieval-Strategien
 sind hinter einem inneren Port implementiert, aber noch nicht in den Agenten integriert. Ein
 deterministischer Model-Egress-Decorator mit Deny-by-default prüft die explizite
 Request-Klassifikation gegen die validierte Execution Zone jedes Model Profiles, bevor
 der Provider Adapter aufgerufen wird. LangGraph und LangChain Core werden nun gezielt
-für den parallelen Orchestrierungspfad verwendet. Es existieren weder dynamische Tool
-Registry, persistentes Agent Memory, Checkpointer, LangSmith-Integration noch allgemeines
-Eval-Framework.
+für den parallelen Orchestrierungspfad verwendet. Ein explizit injizierter
+`InMemorySaver` unterstützt lokale/Test-Checkpoint- und HITL-Demonstrationen, ist aber
+keine dauerhafte Persistenz. Es existieren weder dynamische Tool Registry, produktives
+Persistenz-Backend, LangSmith-Integration noch allgemeines Eval-Framework.
 
 Der implementierte Request Flow ist:
 
@@ -232,27 +235,45 @@ flowchart LR
     Adapter --> Model["Model Node"]
     Model --> Route{"Conditional Route"}
     Route -->|"final / ungültig / Limit"| End["END"]
-    Route -->|"ein gültiger Request"| Tool["Tool Node"]
+    Route -->|"Read Request"| Tool["Tool Node"]
+    Route -->|"Write Request"| Prepare["Action vorbereiten"]
     Tool -->|"strukturierte Observation"| Model
     Tool --> Product["ProductHistoryCapability"]
     Tool --> Machine["MachineStatusCapability"]
+    Prepare --> Approval["Approval Node<br/>interrupt(payload)"]
+    Approval -->|"approve"| Execute["Action ausführen"]
+    Approval -->|"reject"| Cancel["Action abbrechen -> END"]
+    Execute -->|"strukturierte Observation"| Model
+    Execute --> Ticket["MaintenanceTicketCapability"]
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    class CR,Router,Product,Machine core
-    class Adapter,Model,Route,Tool,End framework
+    class CR,Router,Product,Machine,Ticket core
+    class Adapter,Model,Route,Tool,Prepare,Approval,Execute,Cancel,End framework
     class Security security
 ```
 
 `TroubleshootingGraphState` enthält LangChain Messages, die Anzahl ausgeführter Tools,
-normalisierte ausgeführte Calls, Run Status und eine optionale finale Antwort. Ein
-eigener Tool Node adaptiert die bestehenden Capabilities über LangChain-
-`StructuredTool`-Verträge. Dadurch bleiben Argumentvalidierung und sequenzieller
-One-Call-Dispatch explizit, statt einen Framework-Default zu übernehmen, der das
-ADR-004-Verhalten verändern könnte. Der Graph wählt kein Modell: Der Composition Root
-injiziert ein bereits geroutetes Profile und einen Client, dessen finaler
-ADR-009-Egress-Check aktiv bleibt.
+normalisierte ausgeführte Calls, Run Status, finale Antwort, eine Pending Action,
+Approval Result und minimalen gebundenen Run Context. Ein eigener Tool Node adaptiert die
+bestehenden Capabilities über LangChain-`StructuredTool`-Verträge. Dadurch bleiben
+Argumentvalidierung und sequenzieller One-Call-Dispatch explizit, statt einen Framework-
+Default zu übernehmen, der das ADR-004-Verhalten verändern könnte. Der Graph wählt kein
+Modell: Der Composition Root injiziert ein bereits geroutetes Profile und einen Client,
+dessen finaler ADR-009-Egress-Check aktiv bleibt.
+
+Für einen fortsetzbaren Run wird der Graph mit einem nativen `InMemorySaver` kompiliert
+und mit `configurable.thread_id` aufgerufen. Der Approval Node erzeugt einen
+JSON-serialisierbaren `action_approval`-Interrupt und wird über
+`Command(resume="approve" | "reject")` mit derselben Thread-ID fortgesetzt. Read Tools
+unterbrechen nie. `create_maintenance_ticket` ist eine In-Memory-Demonstrations-Action:
+Sie wird vor dem Interrupt nur vorbereitet, erst nach Approval ausgeführt und verwendet
+ihre Tool-Call-ID als In-Memory-Idempotenzschlüssel. Nodes vor einem Interrupt bleiben
+side-effect-free, weil LangGraph den Node beim Resume von Anfang an erneut startet.
+`InMemorySaver` verliert State beim Prozessende; dauerhafter Storage bleibt gemäß
+[ADR-011](../decisions/ADR-011-agent-persistence-and-human-in-the-loop.de.md)
+zurückgestellt.
 
 ## Baseline für die Tool-Selection-Evaluation
 
@@ -381,7 +402,9 @@ Enthält industrielle Domänenmodelle und Regeln.
 Die aktuellen Slices definieren `ProductId`, die gemeinsam verwendete `StationId`,
 `ProductionStep`, `ProductionStepStatus`, `ProductHistory`, `MachineState`,
 `MachineStatus` und `KnowledgeRetrievalResult`. Die inneren Ports sind
-`ProductHistoryRepository`, `MachineStatusRepository` und `KnowledgeRetriever`.
+`ProductHistoryRepository`, `MachineStatusRepository` und `KnowledgeRetriever`. Die
+HITL-Demonstration definiert zusätzlich `MaintenanceTicketRequestId` und
+`MaintenanceTicket` sowie den inneren Port `MaintenanceTicketRepository`.
 
 Muss unabhängig bleiben von:
 
@@ -404,6 +427,10 @@ Pydantic-Modelle `ProductHistoryResult` und `MachineStatusResult` zurück, jewei
 einschließlich strukturierter Not-found-Ergebnisse. Die isolierte
 `DocumentationSearchCapability.search_documentation(query)` gibt strukturierte
 `DocumentationSearchResult`-Daten zurück und wird noch nicht als Agent Tool angeboten.
+`MaintenanceTicketCapability.create_maintenance_ticket(...)` ist eine optionale
+LangGraph-only Demonstrations-Action. Ihre deterministische Approval-Grenze führt sie
+erst nach expliziter Genehmigung aus; der handgeschriebene Referenzpfad exponiert sie
+nicht.
 
 ### `agent`
 
@@ -419,11 +446,14 @@ Cost/Quality-Sortierung an. Beide Agent-Pfade erhalten den begrenzten sequenziel
 Loop und den festen Zwei-Tool-Dispatch. `AgentRunResult` unterscheidet `SUCCESS` von
 `LIMIT_REACHED` und gibt die Anzahl ausgeführter Tools sowie die normalisierte
 ausgeführte Trajectory an. Der Agent konstruiert den Router nicht, importiert weder das
-OpenAI-SDK noch benennt er einen konkreten Provider oder ein konkretes Modell.
+OpenAI-SDK noch benennt er einen konkreten Provider oder ein konkretes Modell. Seine
+optionale HITL-Komposition speichert bereits ausgewähltes Profile und explizite Run
+Classification im Checkpoint-State; ein Resume mit abweichendem Profile oder abweichender
+Classification wird abgelehnt, statt erneut zu routen.
 
 Mögliche spätere Verantwortlichkeiten sind:
 
-* persistenter Agent State
+* dauerhafte produktive Agent-Persistenz
 * Context Compression
 * Classification Propagation im Application State
 * Integration von Policies und Guardrails
