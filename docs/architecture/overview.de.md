@@ -19,6 +19,10 @@ für den parallelen Orchestrierungspfad verwendet. Ein explizit injizierter
 `InMemorySaver` unterstützt lokale/Test-Checkpoint- und HITL-Demonstrationen, ist aber
 keine dauerhafte Persistenz. Es existieren weder dynamische Tool Registry, produktives
 Persistenz-Backend, LangSmith-Integration noch allgemeines Eval-Framework.
+Ein lokaler schreibgeschuetzter `factory_mcp`-Server exponiert nun die bestehenden
+Produktionshistorie- und Maschinenstatus-Capabilities ueber das offizielle MCP SDK v2.
+Ein offizieller stdio-Client entdeckt und ruft diese Tools auf; MCP ist noch nicht mit
+LangGraph oder einem Agenten verbunden.
 
 Der implementierte Request Flow ist:
 
@@ -51,6 +55,8 @@ flowchart LR
         VEC["LangChain InMemoryVectorStore"]
         KB["Versionierte lokale Markdown Knowledge Base"]
         OLLAMA["Lokales Ollama qwen3-embedding:0.6b"]
+        FMCP["factory_mcp MCP Server"]
+        MCPCLIENT["Offizieller MCP stdio Client"]
     end
 
     PHC -->|"ProductId"| PHR
@@ -76,13 +82,16 @@ flowchart LR
     SEM -->|"embedded über"| EP
     SEM --> VEC
     OEC --> OLLAMA
+    FMCP --> PHC
+    FMCP --> MSC
+    MCPCLIENT --> FMCP
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA adapter
+    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,MCPCLIENT adapter
 ```
 
 Jede Capability wandelt ihren String-Identifier in das passende Domain Value Object um,
@@ -97,7 +106,13 @@ verwenden ihre vorbereiteten In-Memory-Indizes. Der semantische Adapter erhält 
 separaten inneren `EmbeddingClient`-Port, baut Dokumentvektoren in LangChains
 `InMemoryVectorStore` und embedded zur Runtime nur die Query über lokales Ollama.
 
-Verteilte Services sind bewusst nicht Teil dieses Slice.
+`factory_mcp` ist ein Infrastructure-Transportadapter und keine weitere Source of Truth
+fuer Factory-Semantik. Seine zwei Handler delegieren an injizierte Capabilities und
+geben MCP Structured Content zurueck. Der lokale stdio-Transport wird fuer den manuellen
+Smoke verwendet, weil er keinen Listener und keine Deployment-Konfiguration benoetigt.
+Es gibt noch kein Remote Deployment, keine Authentifizierung, keine schreibenden
+MCP-Tools, kein Knowledge MCP, keinen Multi-Server-Router und keine LangGraph-MCP-
+Integration.
 
 ## Knowledge-Retrieval-Baseline
 

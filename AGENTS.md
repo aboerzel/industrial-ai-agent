@@ -262,6 +262,17 @@ Tool schemas should:
 
 ---
 
+## MCP Integration
+
+MCP is an Infrastructure transport boundary. MCP server handlers must delegate to
+injected existing capabilities and must not duplicate Domain or repository logic.
+Clients must discover advertised tools through MCP rather than maintain a static tool
+catalogue. MCP does not replace deterministic model-routing or egress enforcement.
+
+See `docs/decisions/ADR-012-mcp-integration-architecture.md`.
+
+---
+
 ## State and Context
 
 Application state is the source of truth.
@@ -693,6 +704,7 @@ ADR-008  Task-level model routing
 ADR-009  Data classification and model egress policy
 ADR-010  LangGraph and LangChain orchestration migration
 ADR-011  Agent persistence and human-in-the-loop
+ADR-012  MCP integration architecture
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

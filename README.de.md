@@ -31,8 +31,9 @@ Eine finale Modellantwort liefert strukturiertes `SUCCESS`; ein weiterer Tool-Wu
 nach dem dritten Result liefert `LIMIT_REACHED`, ohne diesen Call auszuführen oder das
 LLM erneut aufzurufen. Der LangGraph-Pfad verwendet LangChain-Core-Messages und
 Tool-Verträge über einen schmalen Adapter zum bestehenden Security-geprüften
-`LLMClient`. Es existieren weder dynamische Tool Registry, Checkpointer, persistentes
-Memory, LangSmith-Integration noch Context Compression.
+`LLMClient`. Seine lokale/Test-HITL-Demonstration verwendet einen injizierten
+In-Memory-Checkpointer; es existieren weder dynamische Tool Registry, dauerhaftes
+Persistenz-Backend, LangSmith-Integration noch Context Compression.
 
 Es stehen zwei deterministische Eval-Baselines bereit. Die erste misst anhand von zwölf
 versionierten Fällen die initiale LLM-Tool-Auswahl und Argumentextraktion des Agenten,
@@ -48,7 +49,23 @@ einfaches Term-Overlap-, rarity-aware IDF- und BM25-Ranking. Die Results erhalte
 Document-, Source-, Chunk-, Score- und Metadata-Provenance. Retrieval ist bewusst noch
 nicht als Tool des `TroubleshootingAgent` exponiert.
 
-Es wurden noch kein MCP server, keine vector database und kein multi-agent framework eingeführt.
+Ein erster schreibgeschuetzter `factory_mcp`-Server adaptiert die zwei bestehenden
+Capabilities ueber das offizielle MCP SDK v2. Sein offizieller SDK-Client entdeckt die
+angebotenen Tools und ruft sie ueber stdio auf. Er ist noch keine Agent Tool Source; es
+gibt weder MCP-Routing, Knowledge MCP, Remote Deployment noch MCP Write Actions.
+
+## Manueller MCP-Smoke-Test
+
+Fuehre den lokalen stdio-Client und -Server ohne LLM oder externen Service aus:
+
+```powershell
+python scripts/smoke_test_factory_mcp.py
+```
+
+Der Smoke gibt Server-Identitaet, die ausgehandelte Protokollversion, die entdeckten
+Tool-Namen und strukturierte Results fuer `get_product_history(P4711)` und
+`get_machine_status(S04)` aus. Das aktuelle Release von `langchain-mcp-adapters`
+fordert `mcp<2.0` und wird deshalb in diesem SDK-v2-Slice bewusst nicht installiert.
 
 ## Manuelle Model-Profile-Smoke-Tests
 

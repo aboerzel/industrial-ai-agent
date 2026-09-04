@@ -17,6 +17,9 @@ LangGraph and LangChain Core are now used narrowly for the parallel orchestratio
 An explicitly injected `InMemorySaver` supports local/test checkpoint and HITL
 demonstrations; it is not durable persistence. There is no dynamic tool registry,
 production persistence backend, LangSmith integration, or general evaluation framework.
+A local read-only `factory_mcp` server now exposes the existing product-history and
+machine-status capabilities through the official MCP SDK v2. An official stdio client
+discovers and calls those tools; MCP is not yet connected to LangGraph or an agent.
 
 The implemented request flow is:
 
@@ -49,6 +52,8 @@ flowchart LR
         VEC["LangChain InMemoryVectorStore"]
         KB["Versioned local Markdown knowledge base"]
         OLLAMA["Local Ollama qwen3-embedding:0.6b"]
+        FMCP["factory_mcp MCP server"]
+        MCPCLIENT["Official MCP stdio client"]
     end
 
     PHC -->|"ProductId"| PHR
@@ -74,13 +79,16 @@ flowchart LR
     SEM -->|"embeds through"| EP
     SEM --> VEC
     OEC --> OLLAMA
+    FMCP --> PHC
+    FMCP --> MSC
+    MCPCLIENT --> FMCP
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef port fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA adapter
+    class PHM,MSM,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,MCPCLIENT adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -95,7 +103,11 @@ their prepared in-memory indexes. The semantic adapter receives the separate inn
 `EmbeddingClient` port, builds document vectors in LangChain's `InMemoryVectorStore`,
 and embeds only the query at runtime through local Ollama.
 
-Distributed services are deliberately not part of this slice.
+`factory_mcp` is an Infrastructure transport adapter, not another source of factory
+semantics. Its two handlers delegate to injected capabilities and return MCP structured
+content. The local stdio transport is used for the manual smoke because it needs no
+listener or deployment configuration. No remote deployment, authentication, write MCP
+tool, Knowledge MCP, multi-server router, or LangGraph MCP integration exists yet.
 
 ## Knowledge Retrieval Baseline
 

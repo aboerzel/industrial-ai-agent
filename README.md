@@ -29,8 +29,9 @@ most three successfully executed tools per run. A final model answer returns str
 `SUCCESS`; a further tool request after the third result returns `LIMIT_REACHED` without
 executing that call or invoking the LLM again. The LangGraph path uses LangChain Core
 messages and tool contracts through a narrow adapter to the existing security-checked
-`LLMClient`. There is no dynamic tool registry, checkpointer, persistent memory,
-LangSmith integration, or context compression.
+`LLMClient`. Its local/test HITL demonstration uses an injected in-memory checkpointer;
+there is no dynamic tool registry, durable persistence backend, LangSmith integration,
+or context compression.
 
 Two deterministic evaluation baselines are available. The first measures the agent's
 initial LLM tool selection and argument extraction against twelve versioned cases
@@ -45,7 +46,23 @@ rarity-aware IDF, and BM25 ranking. Results retain document, source, chunk, scor
 metadata provenance. Retrieval is intentionally not yet exposed as a
 `TroubleshootingAgent` tool.
 
-No MCP server, vector database, or multi-agent framework is introduced yet.
+A first read-only `factory_mcp` server now adapts the two existing capabilities through
+the official MCP SDK v2. Its official SDK client discovers the advertised tools and
+calls them through stdio. It is not yet an agent tool source; there is no MCP routing,
+Knowledge MCP, remote deployment, or MCP write action.
+
+## Manual MCP Smoke Test
+
+Run the local stdio client and server without an LLM or external service:
+
+```powershell
+python scripts/smoke_test_factory_mcp.py
+```
+
+The smoke prints the server identity, negotiated protocol version, discovered tool
+names, and structured results for `get_product_history(P4711)` and
+`get_machine_status(S04)`. The current `langchain-mcp-adapters` release requires
+`mcp<2.0`, so it is intentionally not installed alongside this SDK v2 slice.
 
 ## Manual Model Profile Smoke Tests
 
