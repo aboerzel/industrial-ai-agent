@@ -63,9 +63,13 @@ def test_loads_all_versioned_markdown_documents() -> None:
     assert {chunk.document_id for chunk in chunks} == {
         "error_codes",
         "maintenance",
+        "production_quality",
+        "station_s02",
         "station_s04",
+        "troubleshooting_service",
+        "vision_calibration",
     }
-    assert len(chunks) == 9
+    assert len(chunks) == 25
 
 
 def test_markdown_sections_receive_stable_ordered_chunk_ids() -> None:
@@ -79,9 +83,25 @@ def test_markdown_sections_receive_stable_ordered_chunk_ids() -> None:
         "maintenance::chunk-001",
         "maintenance::chunk-002",
         "maintenance::chunk-003",
+        "production_quality::chunk-001",
+        "production_quality::chunk-002",
+        "production_quality::chunk-003",
+        "production_quality::chunk-004",
+        "station_s02::chunk-001",
+        "station_s02::chunk-002",
+        "station_s02::chunk-003",
+        "station_s02::chunk-004",
         "station_s04::chunk-001",
         "station_s04::chunk-002",
         "station_s04::chunk-003",
+        "troubleshooting_service::chunk-001",
+        "troubleshooting_service::chunk-002",
+        "troubleshooting_service::chunk-003",
+        "troubleshooting_service::chunk-004",
+        "vision_calibration::chunk-001",
+        "vision_calibration::chunk-002",
+        "vision_calibration::chunk-003",
+        "vision_calibration::chunk-004",
     ]
     assert first_load == second_load
 

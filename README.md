@@ -89,17 +89,18 @@ exact scoring formulas and interpretation.
 
 ## Manual Retrieval Eval
 
-Run the unchanged versioned retrieval dataset against both local strategies:
+Run the frozen v2 retrieval baseline against both unchanged local strategies:
 
 ```powershell
-python -m evals.run_retrieval --strategy simple
-python -m evals.run_retrieval --strategy idf
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy simple
+python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy idf
 ```
 
 The JSON report contains Hit@1, Hit@3, Mean Recall@3, per-case expected and actual
-chunk IDs, and explicit failure lists. See
+chunk IDs, explicit failure lists, and category-level metrics. The original v1 dataset
+remains available by selecting `knowledge_retrieval_v1.jsonl` explicitly. See
 [Local Knowledge Retrieval Baseline](docs/learning/knowledge-retrieval-baseline.md) for
-the chunking and scoring formulas, initial baseline, and known limitations.
+the chunking and scoring formulas, v1/v2 comparison, freeze rule, and known limitations.
 
 The committed model configuration is in `config/model_profiles.toml`. The local Ollama
 profile requires no API key. Authenticated profiles must read credential values from
