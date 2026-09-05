@@ -150,6 +150,9 @@ def create_demo_mcp_access_control(
 ) -> McpHttpAccessControl:
     """Build the local demo's explicit, server-owned identity policy."""
     industrial_token = _required_environment_value("MCP_INDUSTRIAL_AGENT_TOKEN")
+    internal_agent_token = _required_environment_value(
+        "MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN"
+    )
     codex_token = _required_environment_value("MCP_CODEX_DEVELOPMENT_TOKEN")
     registrations = (
         _registration(
@@ -163,6 +166,17 @@ def create_demo_mcp_access_control(
                     McpPermission.READ_OBSERVABILITY,
                     McpPermission.READ_AGENT_RUNTIME,
                     McpPermission.CREATE_MAINTENANCE_TICKET,
+                }
+            ),
+        ),
+        _registration(
+            token=internal_agent_token,
+            client_id="industrial-agent-internal",
+            clearance=DataClassification.INTERNAL,
+            permissions=frozenset(
+                {
+                    McpPermission.READ_FACTORY,
+                    McpPermission.READ_KNOWLEDGE,
                 }
             ),
         ),

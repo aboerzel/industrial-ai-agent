@@ -142,10 +142,10 @@ class SequentialAgentFactory(RoutedTroubleshootingAgentFactory):
         self,
         *,
         profile: ModelProfile,
-        requirements,
+        run_policy,
         checkpointer: object | None = None,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]:
-        del requirements
+        assert run_policy.data_classification is DataClassification.CONFIDENTIAL
         with self._lock:
             self._opens += 1
             is_start = self._opens % 2 == 1

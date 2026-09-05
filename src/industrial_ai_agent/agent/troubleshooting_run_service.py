@@ -14,13 +14,15 @@ from industrial_ai_agent.agent.agent_run import (
 from industrial_ai_agent.agent.llm import ModelProfile
 from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.model_routing import (
-    CostPreference,
     DeterministicModelRouter,
-    LLMCapability,
     ModelProfileMetadata,
-    QualityClass,
     TaskRequirements,
-    TaskRole,
+)
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunClassificationPolicy,
+    AgentRunProfile,
+    InternalDiagnosticTarget,
+    ResolvedRunPolicy,
 )
 
 
@@ -28,10 +30,28 @@ class McpServiceUnavailableError(RuntimeError):
     """Raised when an MCP service cannot be reached for an agent run."""
 
 
+class InternalDiagnosticTargetUnavailableError(RuntimeError):
+    """Raised without revealing whether an unavailable target is higher classified."""
+
+
 class AgentRunService(Protocol):
     """Application boundary used by external clients to start troubleshooting runs."""
 
     async def run(self, message: str) -> AgentRunResult: ...
+
+    async def resolve_internal_diagnostic(
+        self, target: InternalDiagnosticTarget
+    ) -> ResolvedRunPolicy: ...
+
+    async def run_with_policy(
+        self, message: str, *, run_policy: ResolvedRunPolicy
+    ) -> AgentRunResult: ...
+
+
+class InternalDiagnosticScopeValidator(Protocol):
+    """Verify target visibility through a profile-bounded data access path."""
+
+    async def is_available(self, target: InternalDiagnosticTarget) -> bool: ...
 
 
 class PendingApproval(BaseModel):
@@ -73,7 +93,7 @@ class RoutedTroubleshootingAgentFactory(Protocol):
         self,
         *,
         profile: ModelProfile,
-        requirements: TaskRequirements,
+        run_policy: ResolvedRunPolicy,
         checkpointer: object | None = None,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]: ...
 
@@ -92,23 +112,38 @@ class TroubleshootingRunService:
         profiles: tuple[ModelProfileMetadata, ...],
         agent_factory: RoutedTroubleshootingAgentFactory,
         checkpointer_factory: RuntimeCheckpointerFactory | None = None,
+        classification_policy: AgentRunClassificationPolicy | None = None,
+        internal_diagnostic_scope_validator: InternalDiagnosticScopeValidator | None = None,
     ) -> None:
         self._router = router
         self._profiles = profiles
         self._agent_factory = agent_factory
         self._checkpointer_factory = checkpointer_factory
+        self._classification_policy = (
+            classification_policy or AgentRunClassificationPolicy()
+        )
+        self._internal_diagnostic_scope_validator = internal_diagnostic_scope_validator
 
     @property
     def persistent_hitl_enabled(self) -> bool:
         return self._checkpointer_factory is not None
 
     async def run(self, message: str) -> AgentRunResult:
-        requirements = confidential_troubleshooting_requirements()
-        profile = self._router.route(requirements, self._profiles)
+        return await self.run_with_policy(
+            message,
+            run_policy=self._classification_policy.resolve(
+                AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+            ),
+        )
+
+    async def run_with_policy(
+        self, message: str, *, run_policy: ResolvedRunPolicy
+    ) -> AgentRunResult:
+        profile = self._router.route(run_policy.task_requirements, self._profiles)
         try:
             with self._agent_factory.open_agent(
                 profile=profile,
-                requirements=requirements,
+                run_policy=run_policy,
             ) as agent:
                 return await agent.aanswer_via_mcp(message)
         except BaseExceptionGroup as error:
@@ -121,16 +156,32 @@ class TroubleshootingRunService:
                 raise root_cause from error
             raise
 
+    async def resolve_internal_diagnostic(
+        self, target: InternalDiagnosticTarget
+    ) -> ResolvedRunPolicy:
+        validator = self._internal_diagnostic_scope_validator
+        if validator is None or not await validator.is_available(target):
+            raise InternalDiagnosticTargetUnavailableError(
+                "Internal diagnostic target is unavailable"
+            )
+        return self._classification_policy.resolve(AgentRunProfile.INTERNAL_DIAGNOSTIC)
+
     async def start(
-        self, message: str, *, run_id: UUID
+        self,
+        message: str,
+        *,
+        run_id: UUID,
+        run_policy: ResolvedRunPolicy | None = None,
     ) -> tuple[ModelProfile, RunExecution]:
         if self._checkpointer_factory is None:
             raise RuntimeError("Persistent HITL runs require a PostgreSQL checkpointer")
-        requirements = confidential_troubleshooting_requirements()
-        profile = self._router.route(requirements, self._profiles)
+        resolved = run_policy or self._classification_policy.resolve(
+            AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+        )
+        profile = self._router.route(resolved.task_requirements, self._profiles)
         async with self._checkpointer_factory.open() as saver:
             with self._agent_factory.open_agent(
-                profile=profile, requirements=requirements, checkpointer=saver
+                profile=profile, run_policy=resolved, checkpointer=saver
             ) as agent:
                 state, payload = await agent.astart_via_mcp(
                     message, thread_id=str(run_id)
@@ -143,21 +194,20 @@ class TroubleshootingRunService:
         run_id: UUID,
         model_profile: str,
         data_classification: DataClassification,
+        run_profile: AgentRunProfile,
         decision: str,
     ) -> RunExecution:
         if self._checkpointer_factory is None:
             raise RuntimeError("Persistent HITL runs require a PostgreSQL checkpointer")
-        requirements = confidential_troubleshooting_requirements()
-        if requirements.data_classification is not data_classification:
-            raise RuntimeError(
-                "Persisted run data classification does not match the use case"
-            )
+        resolved = self._classification_policy.resolve_persisted(
+            profile=run_profile, data_classification=data_classification
+        )
         profile = ModelProfile(model_profile)
         if profile not in {metadata.profile for metadata in self._profiles}:
             raise RuntimeError("Persisted run model profile is not configured")
         async with self._checkpointer_factory.open() as saver:
             with self._agent_factory.open_agent(
-                profile=profile, requirements=requirements, checkpointer=saver
+                profile=profile, run_policy=resolved, checkpointer=saver
             ) as agent:
                 state = await agent.aresume_via_mcp(
                     thread_id=str(run_id), approval=decision
@@ -167,14 +217,17 @@ class TroubleshootingRunService:
 
 def confidential_troubleshooting_requirements() -> TaskRequirements:
     """Build the conservative, server-controlled requirements for this API use case."""
-    return TaskRequirements(
-        task_role=TaskRole.TROUBLESHOOTING,
-        required_capabilities=frozenset(
-            {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-        ),
-        minimum_quality=QualityClass.HIGH,
-        cost_preference=CostPreference.PREFER_QUALITY,
-        data_classification=DataClassification.CONFIDENTIAL,
+    return AgentRunClassificationPolicy().resolve(
+        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    ).task_requirements
+
+
+def internal_diagnostic_message(target: InternalDiagnosticTarget) -> str:
+    """Construct the only prompt form accepted by the structured diagnostic path."""
+    return (
+        "Perform a read-only internal diagnostic for product "
+        f"{target.product_id} at station {target.station_id}. "
+        "Use only available internal evidence and report when evidence is unavailable."
     )
 
 

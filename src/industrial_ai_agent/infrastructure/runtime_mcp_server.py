@@ -97,6 +97,7 @@ class _RunProjection(BaseModel):
     created_at: datetime | None
     updated_at: datetime | None
     classification: str
+    run_profile: str
     model_profile: str | None
     thread_id: UUID
     tool_call_count: int = Field(ge=0)
@@ -131,6 +132,7 @@ class _ApprovalProjection(BaseModel):
     requested_at: datetime | None
     decided_at: datetime | None
     classification: str
+    run_profile: str
     model_profile: str | None
 
 
@@ -150,6 +152,7 @@ class _RecentRunProjection(BaseModel):
     status: RunStatus
     created_at: datetime | None
     classification: str
+    run_profile: str
     model_profile: str | None
     tool_call_count: int = Field(ge=0)
     approval_state: Literal["none", "waiting", "approved", "rejected"]
@@ -381,6 +384,7 @@ def _run_payload(inspection: RuntimeRunInspection) -> dict[str, object]:
         "created_at": inspection.created_at,
         "updated_at": inspection.updated_at,
         "classification": inspection.data_classification.name,
+        "run_profile": inspection.run_profile.value,
         "model_profile": inspection.model_profile,
         "thread_id": inspection.thread_id,
         "tool_call_count": inspection.tool_call_count,
@@ -396,6 +400,7 @@ def _recent_payload(inspection: RuntimeRunInspection) -> dict[str, object]:
         "status": inspection.status,
         "created_at": inspection.created_at,
         "classification": inspection.data_classification.name,
+        "run_profile": inspection.run_profile.value,
         "model_profile": inspection.model_profile,
         "tool_call_count": inspection.tool_call_count,
         "approval_state": _approval_state(inspection),
@@ -414,6 +419,7 @@ def _approval_payload(inspection: RuntimeRunInspection) -> dict[str, object]:
         "requested_at": inspection.approval_requested_at,
         "decided_at": inspection.approval_decided_at,
         "classification": inspection.data_classification.name,
+        "run_profile": inspection.run_profile.value,
         "model_profile": inspection.model_profile,
     }
 

@@ -410,10 +410,11 @@ class ObservabilityEvidenceService:
         }
 
     def _trace_from_run_or_trace(self, identifier: str) -> RunTrace:
-        try:
-            return self._tempo.get_run_trace(identifier)
-        except InvalidObservabilityIdentifier:
+        # A 32-hex trace ID is also accepted by uuid.UUID(), so attempting the
+        # run lookup first misclassifies it and prevents the trace lookup.
+        if isinstance(identifier, str) and len(identifier) == 32:
             return self._tempo.get_trace(identifier)
+        return self._tempo.get_run_trace(identifier)
 
     def _logs_for_trace(
         self, trace: RunTrace, service_name: str | None

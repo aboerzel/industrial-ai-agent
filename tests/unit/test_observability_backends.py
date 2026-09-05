@@ -157,6 +157,51 @@ def test_prometheus_rejects_unrepresentable_window_and_backend_failures() -> Non
         adapter.service_health("factory-mcp", "5m")
 
 
+def test_run_metrics_resolves_equivalent_context_for_run_and_trace_identifiers() -> None:
+    tempo = TempoAdapter("http://tempo", client=_client(_tempo_handler))
+    prometheus = PrometheusAdapter("http://prometheus", client=_client(_prometheus_handler))
+    service = ObservabilityEvidenceService(
+        tempo=tempo,
+        loki=LokiAdapter("http://loki", client=_client(lambda _: _json_response({"status": "success", "data": {"result": []}}))),
+        prometheus=prometheus,
+    )
+
+    from_run_id = service.get_run_metrics(RUN_ID)
+    from_trace_id = service.get_run_metrics(TRACE_ID)
+
+    assert from_run_id == from_trace_id
+    assert from_run_id.source == "trace_correlated_window"
+
+
+@pytest.mark.parametrize("identifier", (RUN_ID, TRACE_ID))
+def test_run_metrics_returns_neutral_not_found_for_unknown_valid_identifier(
+    identifier: str,
+) -> None:
+    tempo = TempoAdapter(
+        "http://tempo",
+        client=_client(_unknown_tempo_handler),
+    )
+    service = ObservabilityEvidenceService(
+        tempo=tempo,
+        loki=LokiAdapter("http://loki", client=_client(lambda _: _json_response({"status": "success", "data": {"result": []}}))),
+        prometheus=PrometheusAdapter("http://prometheus", client=_client(_prometheus_handler)),
+    )
+
+    with pytest.raises(ObservabilityNotFoundError):
+        service.get_run_metrics(identifier)
+
+
+def test_run_metrics_rejects_malformed_identifier() -> None:
+    service = ObservabilityEvidenceService(
+        tempo=TempoAdapter("http://tempo", client=_client(lambda _: _json_response({}))),
+        loki=LokiAdapter("http://loki", client=_client(lambda _: _json_response({"status": "success", "data": {"result": []}}))),
+        prometheus=PrometheusAdapter("http://prometheus", client=_client(_prometheus_handler)),
+    )
+
+    with pytest.raises(InvalidObservabilityIdentifier):
+        service.get_run_metrics("not-an-identifier")
+
+
 def test_lookback_and_trace_result_bounds_are_enforced() -> None:
     now = datetime.now(UTC)
     loki = LokiAdapter("http://loki", client=_client(lambda _: _json_response({})))
@@ -185,6 +230,12 @@ def _tempo_handler(request: httpx.Request) -> httpx.Response:
     if request.url.path == "/api/search":
         return _json_response({"traces": [{"traceID": TRACE_ID}]})
     return _json_response(_tempo_trace_payload())
+
+
+def _unknown_tempo_handler(request: httpx.Request) -> httpx.Response:
+    if request.url.path == "/api/search":
+        return _json_response({"traces": []})
+    return httpx.Response(404)
 
 
 def _prometheus_handler(_: httpx.Request) -> httpx.Response:

@@ -350,3 +350,18 @@ Negative:
 * logging and tracing integrations require their own controlled egress treatment
 * later declassification, redaction, tenant policy, or additional zones will require
   deliberate follow-up decisions
+
+## Agent Run Classification Policy Refinement
+
+The FastAPI run boundary resolves an initial classification only from a fixed,
+server-owned `AgentRunProfile`; clients never submit a classification, clearance,
+model profile, MCP identity, or permission. The existing free-form troubleshooting
+request resolves to `CONFIDENTIAL_TROUBLESHOOTING`.
+
+`INTERNAL_DIAGNOSTIC` is available only through a separate bounded target contract.
+It contains validated resource identifiers and no free-form task text. The server
+constructs its prompt and verifies the required target projections using an INTERNAL
+RLS context. Missing, inaccessible, malformed, or higher-classified target evidence
+returns neutral unavailable semantics and never causes a confidential retry or a
+clearance increase. The profile remains INTERNAL for its complete lifetime; dynamic
+classification escalation is explicitly out of scope for this slice.

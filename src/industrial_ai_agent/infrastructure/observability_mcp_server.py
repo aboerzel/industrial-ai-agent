@@ -52,6 +52,16 @@ RunIdentifier = Annotated[
 TraceIdentifier = Annotated[
     str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{32}$")
 ]
+RunOrTraceIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        pattern=(
+            r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$"
+        ),
+    ),
+]
 ServiceName = Literal[
     "industrial-ai-agent",
     "factory-mcp",
@@ -126,7 +136,7 @@ def create_observability_mcp_server(
         annotations=ToolAnnotations(read_only_hint=True),
     )
     def get_run_metrics(
-        run_or_trace_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)],
+        run_or_trace_id: RunOrTraceIdentifier,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         _authorize(ctx, access_control, "get_run_metrics")

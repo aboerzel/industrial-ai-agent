@@ -69,8 +69,8 @@ created.
 ## Local FastAPI API
 
 FastAPI is the local/demo HTTP Application Boundary, not an agent, MCP, routing, or
-egress replacement. It delegates each run to `TroubleshootingRunService`, which fixes
-the first API use case to `CONFIDENTIAL`, selects an eligible semantic model profile
+egress replacement. It delegates each run to `TroubleshootingRunService`, which resolves
+the free-form API use case to the server-owned `CONFIDENTIAL_TROUBLESHOOTING` profile, selects an eligible semantic model profile
 through the existing deterministic router, and invokes the LangGraph multi-MCP path.
 The API never accepts a model, provider, profile, execution zone, or client-controlled
 data classification.
@@ -98,6 +98,18 @@ record. The local demo uses the same PostgreSQL instance as factory data but a s
 runtime schema; records therefore survive API-process recreation. Errors are sanitized:
 unknown IDs return `404`, policy denial returns `403`, and unavailable models or MCP
 services return `503`.
+
+`POST /api/v1/diagnostics` is a separate read-only INTERNAL diagnostic contract. It
+accepts only `product_id` and `station_id`, validates target visibility under INTERNAL
+RLS, constructs the agent request server-side, and uses the separate INTERNAL MCP
+identity. It exposes no free-form prompt, classification, profile, clearance, model,
+permission, or credential field. Unavailable targets return neutral not-found semantics.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/diagnostics `
+  -ContentType 'application/json' `
+  -Body '{"product_id":"P4900","station_id":"S02"}'
+```
 
 The API is local/demo only: it has no authentication, authorization, TLS, rate limiting,
 or streaming. A remotely reachable deployment

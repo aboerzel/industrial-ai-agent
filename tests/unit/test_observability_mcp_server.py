@@ -7,6 +7,9 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult
 
+from industrial_ai_agent.infrastructure.observability_backends import (
+    ObservabilityNotFoundError,
+)
 from industrial_ai_agent.infrastructure.observability_mcp_server import (
     OBSERVABILITY_MCP_SERVER_NAME,
     create_observability_mcp_server,
@@ -35,6 +38,7 @@ def test_observability_mcp_exposes_only_bounded_read_only_tools() -> None:
     assert "promql" not in schemas["get_service_health"]["properties"]
     assert "logql" not in schemas["get_trace_logs"]["properties"]
     assert "traceql" not in schemas["get_run_trace"]["properties"]
+    assert schemas["get_run_metrics"]["properties"]["run_or_trace_id"]["pattern"]
 
 
 def test_observability_mcp_validates_identifiers_before_backend_dispatch() -> None:
@@ -46,9 +50,28 @@ def test_observability_mcp_validates_identifiers_before_backend_dispatch() -> No
             await server.call_tool("get_run_trace", {"run_id": "arbitrary TraceQL"})
         with pytest.raises(ToolError, match="Error executing tool"):
             await server.call_tool("get_trace_logs", {"trace_id": "{ status = error }"})
+        with pytest.raises(ToolError, match="Error executing tool"):
+            await server.call_tool(
+                "get_run_metrics", {"run_or_trace_id": "arbitrary PromQL"}
+            )
 
     asyncio.run(call_invalid())
     assert evidence.calls == []
+
+
+def test_unknown_valid_metric_identifiers_return_neutral_tool_errors() -> None:
+    evidence = _NotFoundEvidenceService()
+    server = create_observability_mcp_server(evidence_service=evidence)  # type: ignore[arg-type]
+
+    async def call_unknown() -> None:
+        for identifier in (RUN_ID, TRACE_ID):
+            with pytest.raises(ToolError, match="Error executing tool"):
+                await server.call_tool(
+                    "get_run_metrics", {"run_or_trace_id": identifier}
+                )
+
+    asyncio.run(call_unknown())
+    assert evidence.calls == [RUN_ID, TRACE_ID]
 
 
 def test_investigate_run_is_a_deterministic_adapter_not_agent_or_write_path() -> None:
@@ -104,6 +127,15 @@ class _FakeEvidenceService:
             "evidence": ["An error span identifies the failure location."],
             "limitations": ["This is deterministic evidence aggregation, not a root-cause conclusion."],
         }
+
+
+class _NotFoundEvidenceService:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def get_run_metrics(self, identifier: str):
+        self.calls.append(identifier)
+        raise ObservabilityNotFoundError("must not escape")
 
 
 class _Model:

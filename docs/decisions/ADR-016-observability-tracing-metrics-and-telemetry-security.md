@@ -156,3 +156,11 @@ span and log correlation attribute, never a metric label. Runtime projections an
 database values are not exported as telemetry. Runtime MCP and Observability MCP remain
 independent read adapters: the former reports persisted application facts; the latter
 reports distributed telemetry; a client such as Codex performs any evidence correlation.
+
+## Agent Run Profile Refinement
+
+Agent, persistence, MCP-discovery, MCP-tool, retrieval, and model-routing telemetry
+uses the resolved run classification and bounded `run.profile` attribute rather than a
+hard-coded confidential value. The attribute is allowlisted for traces and bounded
+metrics. It never changes identity, clearance, authorization, egress, or payload
+capture, and `run_id` remains excluded from metric labels.

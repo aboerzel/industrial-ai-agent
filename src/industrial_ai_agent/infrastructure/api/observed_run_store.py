@@ -6,6 +6,7 @@ from typing import ParamSpec, TypeVar
 from uuid import UUID
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.run_store import (
     AgentRunStore,
@@ -44,6 +45,7 @@ class ObservedAgentRunStore:
         run_id: UUID,
         *,
         data_classification: DataClassification,
+        run_profile: AgentRunProfile,
         model_profile: str,
     ) -> StoredAgentRun:
         return await self._observe(
@@ -52,6 +54,7 @@ class ObservedAgentRunStore:
             self._delegate.bind_execution_context,
             run_id,
             data_classification=data_classification,
+            run_profile=run_profile,
             model_profile=model_profile,
         )
 
@@ -88,16 +91,24 @@ class ObservedAgentRunStore:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> T:
-        attributes = {
+        attributes: dict[str, object] = {
             "run.id": str(run_id),
-            "data.classification": "CONFIDENTIAL",
             "persistence.operation": operation,
         }
         started = perf_counter()
         status = "success"
         try:
-            with self._telemetry.span("persistence.run_store", attributes):
-                return await call(*args, **kwargs)
+            with self._telemetry.span("persistence.run_store", attributes) as span:
+                result = await call(*args, **kwargs)
+                if isinstance(result, StoredAgentRun):
+                    attributes.update(
+                        {
+                            "data.classification": result.data_classification.name,
+                            "run.profile": result.run_profile.value,
+                        }
+                    )
+                    self._telemetry.set_span_attributes(span, attributes)
+                return result
         except Exception:
             status = "failure"
             raise

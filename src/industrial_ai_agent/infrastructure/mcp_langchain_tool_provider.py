@@ -44,6 +44,9 @@ from industrial_ai_agent.infrastructure.telemetry import Telemetry
 DEFAULT_ALLOWED_FACTORY_TOOLS = frozenset(
     {"get_product_history", "get_machine_status", "create_maintenance_ticket"}
 )
+INTERNAL_DIAGNOSTIC_FACTORY_TOOLS = frozenset(
+    {"get_product_history", "get_machine_status"}
+)
 DEFAULT_ALLOWED_KNOWLEDGE_TOOLS = frozenset({"search_documentation"})
 
 
@@ -71,6 +74,8 @@ class McpLangChainToolProvider(McpToolProvider):
         *,
         allowed_tool_names: frozenset[str] = DEFAULT_ALLOWED_FACTORY_TOOLS,
         telemetry: Telemetry | None = None,
+        data_classification: str = "CONFIDENTIAL",
+        run_profile: str = "CONFIDENTIAL_TROUBLESHOOTING",
     ) -> None:
         if isinstance(transport_or_servers, (tuple, list)):
             self._servers = tuple(transport_or_servers)
@@ -88,6 +93,8 @@ class McpLangChainToolProvider(McpToolProvider):
         if len(set(server_ids)) != len(server_ids):
             raise ValueError("MCP server IDs must be unique")
         self._telemetry = telemetry
+        self._data_classification = data_classification
+        self._run_profile = run_profile
 
     def open_session(self) -> AbstractAsyncContextManager[McpToolSession]:
         return self._open_session()
@@ -103,7 +110,11 @@ class McpLangChainToolProvider(McpToolProvider):
                 server_sessions: list[McpServerSession] = []
                 seen_tool_names: set[str] = set()
                 for configuration in self._servers:
-                    discovery_attributes = {"mcp.server": configuration.server_id}
+                    discovery_attributes = {
+                        "mcp.server": configuration.server_id,
+                        "data.classification": self._data_classification,
+                        "run.profile": self._run_profile,
+                    }
                     discovery_status = "success"
                     try:
                         with self._span("mcp.discovery", discovery_attributes):
@@ -165,6 +176,8 @@ class McpLangChainToolProvider(McpToolProvider):
                                 tool.name
                             ).operation.value,
                             telemetry=self._telemetry,
+                            data_classification=self._data_classification,
+                            run_profile=self._run_profile,
                         )
                         for tool in listed_tools.tools
                         if tool.name in configuration.allowed_tool_names
@@ -218,6 +231,8 @@ def _create_langchain_tool(
     server_id: str,
     operation: str,
     telemetry: Telemetry | None,
+    data_classification: str = "CONFIDENTIAL",
+    run_profile: str = "CONFIDENTIAL_TROUBLESHOOTING",
 ) -> BaseTool:
     arguments_schema = _create_arguments_schema(tool)
 
@@ -226,7 +241,8 @@ def _create_langchain_tool(
             "mcp.server": server_id,
             "mcp.tool": tool.name,
             "mcp.operation": operation,
-            "data.classification": "CONFIDENTIAL",
+            "data.classification": data_classification,
+            "run.profile": run_profile,
         }
         started = perf_counter()
         status = "success"
@@ -240,7 +256,8 @@ def _create_langchain_tool(
                             "retrieval.search",
                             {
                                 "retrieval.strategy": "mcp",
-                                "data.classification": "CONFIDENTIAL",
+                                "data.classification": data_classification,
+                                "run.profile": run_profile,
                             },
                         ):
                             response = await client.call_tool(
@@ -249,7 +266,10 @@ def _create_langchain_tool(
                     elif tool.name == "create_maintenance_ticket":
                         with telemetry.span(
                             "maintenance_ticket.create",
-                            {"data.classification": "CONFIDENTIAL"},
+                            {
+                                "data.classification": data_classification,
+                                "run.profile": run_profile,
+                            },
                         ):
                             response = await client.call_tool(
                                 tool.name, dict(arguments)
@@ -282,7 +302,8 @@ def _create_langchain_tool(
             telemetry.record_retrieval(
                 attributes={
                     "retrieval.strategy": "mcp",
-                    "data.classification": "CONFIDENTIAL",
+                    "data.classification": data_classification,
+                    "run.profile": run_profile,
                     "operation.status": status,
                 }
             )

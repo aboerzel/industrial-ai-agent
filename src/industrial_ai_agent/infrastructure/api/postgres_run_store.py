@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.run_store import (
     AgentRunStore,
@@ -41,6 +42,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         *,
         request_text: str = "",
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
+        run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
         model_profile: str | None = None,
     ) -> StoredAgentRun:
         return await asyncio.to_thread(
@@ -48,6 +50,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             run_id,
             request_text,
             data_classification,
+            run_profile,
             model_profile,
         )
 
@@ -56,6 +59,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         run_id: UUID,
         request_text: str,
         data_classification: DataClassification,
+        run_profile: AgentRunProfile,
         model_profile: str | None,
     ) -> StoredAgentRun:
         with self._session_factory.session(self._security_context) as session:
@@ -64,6 +68,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 thread_id=run_id,
                 status=RunStatus.RUNNING.value,
                 data_classification=int(data_classification),
+                run_profile=run_profile.value,
                 model_profile=model_profile,
                 request_text=request_text,
                 final_answer=None,
@@ -115,22 +120,30 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         run_id: UUID,
         *,
         data_classification: DataClassification,
+        run_profile: AgentRunProfile,
         model_profile: str,
     ) -> StoredAgentRun:
         return await asyncio.to_thread(
-            self._bind_execution_context, run_id, data_classification, model_profile
+            self._bind_execution_context,
+            run_id,
+            data_classification,
+            run_profile,
+            model_profile,
         )
 
     def _bind_execution_context(
         self,
         run_id: UUID,
         data_classification: DataClassification,
+        run_profile: AgentRunProfile,
         model_profile: str,
     ) -> StoredAgentRun:
         with self._session_factory.session(self._security_context) as session:
             record = _require_record(session, run_id)
-            if int(data_classification) < record.data_classification:
-                raise ValueError("Run data classification must not be downgraded")
+            if int(data_classification) != record.data_classification:
+                raise ValueError("Run data classification must not change")
+            if record.run_profile != run_profile.value:
+                raise ValueError("Run profile must not change")
             if (
                 record.model_profile is not None
                 and record.model_profile != model_profile
@@ -257,6 +270,7 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
         thread_id=record.thread_id,
         status=RunStatus(record.status),
         data_classification=DataClassification(record.data_classification),
+        run_profile=AgentRunProfile(record.run_profile),
         model_profile=record.model_profile,
         request_text=record.request_text,
         result=result,
@@ -285,6 +299,7 @@ def _inspection(record: AgentRunRecord) -> RuntimeRunInspection:
         thread_id=record.thread_id,
         status=RunStatus(record.status),
         data_classification=DataClassification(record.data_classification),
+        run_profile=AgentRunProfile(record.run_profile),
         model_profile=record.model_profile,
         tool_call_count=len(record.tool_call_summary)
         if isinstance(record.tool_call_summary, list)

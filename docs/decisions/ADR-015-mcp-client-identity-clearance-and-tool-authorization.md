@@ -50,6 +50,7 @@ The demo registrations are:
 | Identity | Clearance | Permissions |
 |---|---|---|
 | `industrial-agent` | `CONFIDENTIAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME`, `CREATE_MAINTENANCE_TICKET` |
+| `industrial-agent-internal` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE` |
 | `codex-development` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME` |
 
 MCP permission authorizes a client to invoke a tool. It does not replace the Industrial
@@ -110,3 +111,10 @@ enforced by PostgreSQL RLS; neither an MCP argument nor a trace header can selec
 clearance, identity, or permission. The server applies a separate output allowlist over
 the RLS-filtered record, so access to a record never authorizes prompt, answer, tool
 payload, approval payload, exception, or checkpoint disclosure.
+
+## Internal Agent Profile Refinement
+
+The `industrial-agent-internal` identity is selected only by the server-resolved
+`INTERNAL_DIAGNOSTIC` run policy. It has a separate opaque environment credential,
+INTERNAL RLS clearance, and no `CREATE_MAINTENANCE_TICKET` permission. A client cannot
+select this identity, its clearance, or its credential through API or trace headers.

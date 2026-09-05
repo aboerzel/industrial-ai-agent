@@ -44,6 +44,19 @@ class CreateRunRequest(BaseModel):
         return normalized_message
 
 
+class InternalDiagnosticRequest(BaseModel):
+    """Bounded source references; no free text can enter the INTERNAL path."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    product_id: Annotated[
+        str, StringConstraints(pattern=r"^P[0-9]{4}$", strict=True)
+    ]
+    station_id: Annotated[
+        str, StringConstraints(pattern=r"^S[0-9]{2}$", strict=True)
+    ]
+
+
 class PublicToolName(StrEnum):
     GET_PRODUCT_HISTORY = "get_product_history"
     GET_MACHINE_STATUS = "get_machine_status"

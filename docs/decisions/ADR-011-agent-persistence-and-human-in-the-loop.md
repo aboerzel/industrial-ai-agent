@@ -192,3 +192,13 @@ deterministic tests for approval, rejection, replay, and isolation. ADR-008 owns
 deterministic model selection; ADR-009 owns security eligibility and final egress.
 ADR-010 owns LangGraph orchestration migration; this ADR implements its deliberately
 deferred checkpointing and HITL boundaries for the parallel path only.
+
+## Agent Run Profile Refinement
+
+Every durable run also persists its server-resolved `run_profile`. The profile and
+effective classification form one immutable resume binding alongside the selected
+semantic model profile. Resume reconstructs the profile through deterministic policy
+and rejects a profile, classification, MCP identity/scope, or model-profile mismatch
+before resuming the checkpoint. `INTERNAL_DIAGNOSTIC` has no write tool and therefore
+cannot create an approval interruption; existing confidential HITL behavior is
+unchanged.

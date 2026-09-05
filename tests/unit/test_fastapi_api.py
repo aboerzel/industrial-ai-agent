@@ -1,3 +1,6 @@
+import asyncio
+from uuid import UUID
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -8,10 +11,18 @@ from industrial_ai_agent.agent.agent_run import (
 )
 from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
 from industrial_ai_agent.agent.model_routing import NoEligibleModelError
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunClassificationPolicy,
+    AgentRunProfile,
+    InternalDiagnosticTarget,
+    ResolvedRunPolicy,
+)
 from industrial_ai_agent.agent.troubleshooting_run_service import (
+    InternalDiagnosticTargetUnavailableError,
     McpServiceUnavailableError,
     confidential_troubleshooting_requirements,
 )
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.app import create_app as _create_app
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
 from industrial_ai_agent.infrastructure.api.schemas import RunResponse
@@ -30,11 +41,32 @@ class FakeRunService:
         self._result = result
         self._error = error
         self.messages: list[str] = []
+        self.policies: list[ResolvedRunPolicy] = []
+        self.internal_target_available = True
 
     async def run(self, message: str) -> AgentRunResult:
         self.messages.append(message)
         if self._error is not None:
             raise self._error
+        assert self._result is not None
+        return self._result
+
+    async def resolve_internal_diagnostic(
+        self, target: InternalDiagnosticTarget
+    ) -> ResolvedRunPolicy:
+        if not self.internal_target_available:
+            raise InternalDiagnosticTargetUnavailableError("unavailable")
+        assert target.product_id == "P4900"
+        assert target.station_id == "S02"
+        return AgentRunClassificationPolicy().resolve(
+            AgentRunProfile.INTERNAL_DIAGNOSTIC
+        )
+
+    async def run_with_policy(
+        self, message: str, *, run_policy: ResolvedRunPolicy
+    ) -> AgentRunResult:
+        self.messages.append(message)
+        self.policies.append(run_policy)
         assert self._result is not None
         return self._result
 
@@ -148,11 +180,61 @@ def test_create_run_rejects_unknown_request_fields_fail_closed() -> None:
 
     response = client.post(
         "/api/v1/runs",
-        json={"message": "Investigate P4711.", "model": "public_fast"},
+        json={"message": "Investigate P4711.", "classification": "INTERNAL"},
     )
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["type"] == "extra_forbidden"
+
+
+@pytest.mark.parametrize("field", ("profile", "clearance", "mcp_identity", "model"))
+def test_create_run_rejects_all_client_controlled_security_fields(field: str) -> None:
+    client = TestClient(create_app(FakeRunService(result=_success_result())))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P4711.", field: "INTERNAL"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_structured_internal_diagnostic_uses_only_server_resolved_policy() -> None:
+    service = FakeRunService(result=_success_result())
+    app = create_app(service)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/diagnostics", json={"product_id": "P4900", "station_id": "S02"}
+    )
+
+    assert response.status_code == 200
+    run_id = response.json()["run_id"]
+    stored = asyncio.run(app.state.run_store.get(UUID(run_id)))
+    assert stored is not None
+    assert stored.run_profile is AgentRunProfile.INTERNAL_DIAGNOSTIC
+    assert stored.data_classification is DataClassification.INTERNAL
+    assert service.policies == [
+        AgentRunClassificationPolicy().resolve(AgentRunProfile.INTERNAL_DIAGNOSTIC)
+    ]
+    assert "P4900" in service.messages[0]
+    assert "S02" in service.messages[0]
+
+
+def test_internal_diagnostic_does_not_expose_unavailable_target() -> None:
+    service = FakeRunService(result=_success_result())
+    service.internal_target_available = False
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/diagnostics", json={"product_id": "P4711", "station_id": "S04"}
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "code": "diagnostic_target_unavailable",
+        "message": "The requested diagnostic target is unavailable.",
+    }
 
 
 def test_resume_rejects_unknown_decision_before_run_lookup() -> None:

@@ -7,6 +7,7 @@ from uuid import UUID
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.run_store import (
     RecentRuntimeRunsQuery,
@@ -52,6 +53,7 @@ def test_runtime_mcp_projects_a_successful_run_without_internal_payloads() -> No
         "created_at": "2026-09-05T00:00:00Z",
         "updated_at": "2026-09-05T00:01:00Z",
         "classification": "INTERNAL",
+        "run_profile": "INTERNAL_DIAGNOSTIC",
         "model_profile": "local_quality",
         "thread_id": str(RUN_ID),
         "tool_call_count": 2,
@@ -204,6 +206,7 @@ def _inspection(
         thread_id=RUN_ID,
         status=status,
         data_classification=DataClassification.INTERNAL,
+        run_profile=AgentRunProfile.INTERNAL_DIAGNOSTIC,
         model_profile="local_quality",
         tool_call_count=len(tool_names),
         tool_names=tool_names,

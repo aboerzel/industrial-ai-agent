@@ -90,6 +90,8 @@ local-demo opaque bearer token, resolves a server-owned identity to a request-sp
 `SecurityContext` and immutable MCP permissions, and does not accept client-selected
 identity, clearance, or permission headers. `industrial-agent` resolves to
 `CONFIDENTIAL` with Factory/Knowledge/Observability read and maintenance-ticket permission;
+`industrial-agent-internal` resolves to `INTERNAL` with Factory and Knowledge read-only
+permissions; and
 `codex-development` resolves to `INTERNAL` with Factory/Knowledge/Observability read
 permissions only. Tool filtering runs for both `tools/list` and `tools/call`; it supplements, but
 does not replace, LangGraph `ToolPolicy`, PostgreSQL RLS, ADR-009 egress checks, or the
@@ -114,9 +116,9 @@ flowchart LR
 ```
 
 FastAPI now provides the local/demo external Application Boundary. Its versioned
-`POST /api/v1/runs` endpoint creates a UUID, records lifecycle state in the PostgreSQL
+`POST /api/v1/runs` free-form endpoint creates a UUID, records lifecycle state in the PostgreSQL
 `agent_runtime` schema, and awaits an injected troubleshooting run service. That service creates
-server-owned `CONFIDENTIAL` task requirements, routes a semantic profile, and invokes
+server-owned `CONFIDENTIAL_TROUBLESHOOTING` requirements, routes a semantic profile, and invokes
 the existing LangGraph MCP path. Public Pydantic API contracts contain only the run ID,
 status, final answer, and normalized tool calls; they do not expose LangGraph state,
 LangChain messages, MCP types, prompts, or raw tool payloads. `GET /health` is
@@ -129,13 +131,23 @@ wildcard, authentication, TLS, rate limiting, or streaming endpoint. Its explici
 `reject` decision contract for a persisted pending action.
 Swagger UI at `/docs` remains the generated API contract explorer.
 
+`POST /api/v1/diagnostics` is the only INTERNAL run entry point. It accepts only
+bounded product and station identifiers, verifies the required projections through an
+INTERNAL RLS context, constructs its prompt server-side, and resolves
+`INTERNAL_DIAGNOSTIC`. That profile uses the separate `industrial-agent-internal` MCP
+identity and the three read-only Factory/Knowledge tools; it can neither discover nor
+execute the maintenance-ticket action. Unavailable targets remain neutral and never
+trigger a higher-clearance retry.
+
 ```mermaid
 flowchart LR
     Browser["Static browser frontend\nHTTP/JSON only"] --> API["FastAPI /api/v1"]
     Client["Local client / Swagger UI"] --> API
     API --> Service["TroubleshootingRunService"]
     API --> Store["PostgreSqlAgentRunStore\nagent_runtime.agent_runs + RLS"]
-    Service --> Requirements["CONFIDENTIAL TaskRequirements"]
+    API --> Diagnostic["Structured /diagnostics\nINTERNAL RLS preflight"]
+    Diagnostic --> Service
+    Service --> Requirements["Server-resolved RunProfile\nTaskRequirements + MCP scope"]
     Requirements --> Router["DeterministicModelRouter"]
     Router --> Graph["LangGraphTroubleshootingAgent"]
     Graph --> Provider["MCP Tool Provider"]

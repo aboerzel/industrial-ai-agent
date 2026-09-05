@@ -7,6 +7,7 @@ from typing import Protocol
 from uuid import UUID
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.schemas import RunStatus
 
@@ -17,6 +18,7 @@ class StoredAgentRun:
     thread_id: UUID
     status: RunStatus
     data_classification: DataClassification
+    run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
     model_profile: str | None = None
     request_text: str = ""
     result: AgentRunResult | None = None
@@ -38,6 +40,7 @@ class RuntimeRunInspection:
     thread_id: UUID
     status: RunStatus
     data_classification: DataClassification
+    run_profile: AgentRunProfile
     model_profile: str | None
     tool_call_count: int
     tool_names: tuple[str, ...]
@@ -70,6 +73,7 @@ class AgentRunStore(Protocol):
         *,
         request_text: str = "",
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
+        run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
         model_profile: str | None = None,
     ) -> StoredAgentRun: ...
 
@@ -84,6 +88,7 @@ class AgentRunStore(Protocol):
         run_id: UUID,
         *,
         data_classification: DataClassification,
+        run_profile: AgentRunProfile,
         model_profile: str,
     ) -> StoredAgentRun: ...
 
@@ -117,6 +122,7 @@ class InMemoryAgentRunStore:
         *,
         request_text: str = "",
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
+        run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
         model_profile: str | None = None,
     ) -> StoredAgentRun:
         record = StoredAgentRun(
@@ -124,6 +130,7 @@ class InMemoryAgentRunStore:
             thread_id=run_id,
             status=RunStatus.RUNNING,
             data_classification=data_classification,
+            run_profile=run_profile,
             model_profile=model_profile,
             request_text=request_text,
             created_at=datetime.now(UTC),
@@ -142,6 +149,7 @@ class InMemoryAgentRunStore:
             thread_id=existing.thread_id,
             status=_to_public_status(result),
             data_classification=existing.data_classification,
+            run_profile=existing.run_profile,
             model_profile=existing.model_profile,
             request_text=existing.request_text,
             result=result,
@@ -162,6 +170,7 @@ class InMemoryAgentRunStore:
             thread_id=existing.thread_id,
             status=RunStatus.FAILED,
             data_classification=existing.data_classification,
+            run_profile=existing.run_profile,
             model_profile=existing.model_profile,
             request_text=existing.request_text,
             error_code=error_code,
@@ -236,17 +245,21 @@ class InMemoryAgentRunStore:
         run_id: UUID,
         *,
         data_classification: DataClassification,
+        run_profile: AgentRunProfile,
         model_profile: str,
     ) -> StoredAgentRun:
         existing = await self._require(run_id)
-        if data_classification < existing.data_classification:
-            raise ValueError("Run data classification must not be downgraded")
+        if data_classification is not existing.data_classification:
+            raise ValueError("Run data classification must not change")
+        if run_profile is not existing.run_profile:
+            raise ValueError("Run profile must not change")
         return await self._replace_existing(
             StoredAgentRun(
                 run_id=existing.run_id,
                 thread_id=existing.thread_id,
                 status=existing.status,
                 data_classification=data_classification,
+                run_profile=run_profile,
                 model_profile=model_profile,
                 request_text=existing.request_text,
                 result=existing.result,
@@ -287,6 +300,7 @@ def _inspection(record: StoredAgentRun) -> RuntimeRunInspection:
         thread_id=record.thread_id,
         status=record.status,
         data_classification=record.data_classification,
+        run_profile=record.run_profile,
         model_profile=record.model_profile,
         tool_call_count=len(record.result.executed_tool_calls)
         if record.result is not None

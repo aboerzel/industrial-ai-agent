@@ -154,3 +154,15 @@ This ADR does not introduce a browser application, SSE or WebSocket streaming, a
 resume API, a database, Redis, a durable LangGraph checkpointer, an agent Docker image,
 authentication, authorization, TLS, CORS policy, rate limiting, remote production
 deployment, or any new model, tool, retrieval, or MCP service.
+
+## Structured Internal Diagnostic Refinement
+
+`POST /api/v1/runs` remains the original free-form contract and always resolves to the
+server-owned `CONFIDENTIAL_TROUBLESHOOTING` profile. It accepts no classification,
+clearance, profile, model, identity, or permission field.
+
+`POST /api/v1/diagnostics` is a separate strictly structured contract with bounded
+`product_id` and `station_id` identifiers and no free-form prompt. A deterministic
+server policy verifies the target under INTERNAL RLS before it may resolve
+`INTERNAL_DIAGNOSTIC`; unavailable targets receive a neutral response. FastAPI still
+delegates to the application service and never selects an MCP credential itself.

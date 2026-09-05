@@ -18,6 +18,7 @@ from industrial_ai_agent.agent.model_routing import (
     ModelProfileMetadata,
     QualityClass,
 )
+from industrial_ai_agent.agent.run_classification_policy import ResolvedRunPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpBackedTroubleshootingAgent,
     RoutedTroubleshootingAgentFactory,
@@ -40,24 +41,26 @@ class CapturingFactory(RoutedTroubleshootingAgentFactory):
     def __init__(self) -> None:
         self.profile: ModelProfile | None = None
         self.classification: DataClassification | None = None
+        self.run_policy: ResolvedRunPolicy | None = None
 
     def open_agent(
         self,
         *,
         profile: ModelProfile,
-        requirements,
+        run_policy: ResolvedRunPolicy,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]:
-        return self._open_agent(profile=profile, requirements=requirements)
+        return self._open_agent(profile=profile, run_policy=run_policy)
 
     @contextmanager
     def _open_agent(
         self,
         *,
         profile: ModelProfile,
-        requirements,
+        run_policy: ResolvedRunPolicy,
     ) -> Iterator[McpBackedTroubleshootingAgent]:
         self.profile = profile
-        self.classification = requirements.data_classification
+        self.classification = run_policy.data_classification
+        self.run_policy = run_policy
         yield FakeAgent()
 
 
@@ -86,10 +89,11 @@ class FailingFactory(CapturingFactory):
         self,
         *,
         profile: ModelProfile,
-        requirements,
+        run_policy: ResolvedRunPolicy,
     ) -> Iterator[McpBackedTroubleshootingAgent]:
         self.profile = profile
-        self.classification = requirements.data_classification
+        self.classification = run_policy.data_classification
+        self.run_policy = run_policy
         yield FailingAgent()
 
 

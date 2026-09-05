@@ -18,8 +18,8 @@ from industrial_ai_agent.agent.model_egress import (
 )
 from industrial_ai_agent.agent.model_routing import (
     DeterministicModelRouter,
-    TaskRequirements,
 )
+from industrial_ai_agent.agent.run_classification_policy import ResolvedRunPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpBackedTroubleshootingAgent,
     RoutedTroubleshootingAgentFactory,
@@ -68,12 +68,12 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
         self,
         *,
         configuration: LLMConfiguration,
-        mcp_tool_provider: McpLangChainToolProvider,
+        mcp_tool_provider_factory,
         egress_policy: ModelEgressPolicy,
         telemetry: Telemetry | None = None,
     ) -> None:
         self._configuration = configuration
-        self._mcp_tool_provider = mcp_tool_provider
+        self._mcp_tool_provider_factory = mcp_tool_provider_factory
         self._egress_policy = egress_policy
         self._telemetry = telemetry
 
@@ -81,11 +81,11 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
         self,
         *,
         profile: ModelProfile,
-        requirements: TaskRequirements,
+        run_policy: ResolvedRunPolicy,
         checkpointer: object | None = None,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]:
         return self._open_agent(
-            profile=profile, requirements=requirements, checkpointer=checkpointer
+            profile=profile, run_policy=run_policy, checkpointer=checkpointer
         )
 
     @contextmanager
@@ -93,21 +93,21 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
         self,
         *,
         profile: ModelProfile,
-        requirements: TaskRequirements,
+        run_policy: ResolvedRunPolicy,
         checkpointer: object | None,
     ) -> Iterator[McpBackedTroubleshootingAgent]:
         with OpenAICompatibleLLMClient(self._configuration) as adapter:
             checked_client = EgressCheckedLLMClient(
                 adapter,
                 self._configuration,
-                requirements.data_classification,
+                run_policy.data_classification,
                 policy=self._egress_policy,
             )
             llm_client = (
                 ObservedLLMClient(
                     checked_client,
                     configuration=self._configuration,
-                    data_classification=requirements.data_classification,
+                    data_classification=run_policy.data_classification,
                     telemetry=self._telemetry,
                 )
                 if self._telemetry is not None
@@ -115,9 +115,9 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
             )
             yield LangGraphTroubleshootingAgent(
                 LLMClientChatModel(llm_client, profile),
-                mcp_tool_provider=self._mcp_tool_provider,
+                mcp_tool_provider=self._mcp_tool_provider_factory(run_policy),
                 checkpointer=checkpointer,
-                run_classification=requirements.data_classification,
+                run_classification=run_policy.data_classification,
             )
 
 
@@ -129,30 +129,42 @@ def create_default_troubleshooting_run_service(
     knowledge_mcp_url: str | None = None,
     runtime_database_url: str | None = None,
     telemetry: Telemetry | None = None,
+    internal_diagnostic_scope_validator=None,
 ) -> TroubleshootingRunService:
     """Compose the local demo service without exposing deployment details to FastAPI."""
     configuration = load_llm_configuration(model_configuration_path)
     policy = ModelEgressPolicy()
-    provider = McpLangChainToolProvider(
-        _mcp_server_configurations(
-            mcp_transport=mcp_transport or os.getenv("AGENT_MCP_TRANSPORT", "http"),
-            factory_mcp_url=factory_mcp_url
-            or os.getenv("FACTORY_MCP_URL", DEFAULT_FACTORY_MCP_URL),
-            knowledge_mcp_url=knowledge_mcp_url
-            or os.getenv("KNOWLEDGE_MCP_URL", DEFAULT_KNOWLEDGE_MCP_URL),
-            factory_database_url=runtime_database_url,
-        ),
-        telemetry=telemetry,
+    transport = mcp_transport or os.getenv("AGENT_MCP_TRANSPORT", "http")
+    resolved_factory_mcp_url = factory_mcp_url or os.getenv(
+        "FACTORY_MCP_URL", DEFAULT_FACTORY_MCP_URL
     )
+    resolved_knowledge_mcp_url = knowledge_mcp_url or os.getenv(
+        "KNOWLEDGE_MCP_URL", DEFAULT_KNOWLEDGE_MCP_URL
+    )
+
+    def mcp_tool_provider_factory(policy: ResolvedRunPolicy) -> McpLangChainToolProvider:
+        return McpLangChainToolProvider(
+            _mcp_server_configurations(
+                mcp_transport=transport,
+                factory_mcp_url=resolved_factory_mcp_url,
+                knowledge_mcp_url=resolved_knowledge_mcp_url,
+                factory_database_url=runtime_database_url,
+                run_policy=policy,
+            ),
+            telemetry=telemetry,
+            data_classification=policy.data_classification.name,
+            run_profile=policy.run_profile.value,
+        )
     return TroubleshootingRunService(
         router=DeterministicModelRouter(policy),
         profiles=configuration.get_routing_profiles(),
         agent_factory=_LangGraphTroubleshootingAgentFactory(
             configuration=configuration,
-            mcp_tool_provider=provider,
+            mcp_tool_provider_factory=mcp_tool_provider_factory,
             egress_policy=policy,
             telemetry=telemetry,
         ),
+        internal_diagnostic_scope_validator=internal_diagnostic_scope_validator,
         checkpointer_factory=(
             PostgreSqlCheckpointerFactory(runtime_database_url)
             if runtime_database_url
@@ -167,17 +179,20 @@ def _mcp_server_configurations(
     factory_mcp_url: str,
     knowledge_mcp_url: str,
     factory_database_url: str | None,
+    run_policy: ResolvedRunPolicy,
 ) -> tuple[McpServerConfiguration, ...]:
     if mcp_transport == "http":
         factory_transport: McpTransport = StreamableHttpServerParameters(
             url=factory_mcp_url,
-            bearer_token=_required_mcp_bearer_token(),
+            bearer_token=_required_mcp_bearer_token(run_policy.mcp_client_identity),
         )
         knowledge_transport: McpTransport = StreamableHttpServerParameters(
             url=knowledge_mcp_url,
-            bearer_token=_required_mcp_bearer_token(),
+            bearer_token=_required_mcp_bearer_token(run_policy.mcp_client_identity),
         )
     elif mcp_transport == "stdio":
+        if run_policy.mcp_client_identity != "industrial-agent":
+            raise RuntimeError("INTERNAL diagnostics require authenticated HTTP MCP")
         factory_transport = StdioServerParameters(
             command=sys.executable,
             args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
@@ -198,18 +213,35 @@ def _mcp_server_configurations(
         McpServerConfiguration(
             server_id="factory",
             transport=factory_transport,
-            allowed_tool_names=DEFAULT_ALLOWED_FACTORY_TOOLS,
+            allowed_tool_names=frozenset(
+                tool
+                for tool in DEFAULT_ALLOWED_FACTORY_TOOLS
+                if tool in run_policy.allowed_tool_names
+            ),
         ),
         McpServerConfiguration(
             server_id="knowledge",
             transport=knowledge_transport,
-            allowed_tool_names=DEFAULT_ALLOWED_KNOWLEDGE_TOOLS,
+            allowed_tool_names=frozenset(
+                tool
+                for tool in DEFAULT_ALLOWED_KNOWLEDGE_TOOLS
+                if tool in run_policy.allowed_tool_names
+            ),
         ),
     )
 
 
-def _required_mcp_bearer_token() -> str:
-    token = os.getenv(MCP_INDUSTRIAL_AGENT_TOKEN_ENV)
+def _required_mcp_bearer_token(client_identity: str) -> str:
+    token_name = (
+        MCP_INDUSTRIAL_AGENT_TOKEN_ENV
+        if client_identity == "industrial-agent"
+        else "MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN"
+        if client_identity == "industrial-agent-internal"
+        else None
+    )
+    if token_name is None:
+        raise RuntimeError("Unknown server-selected MCP client identity")
+    token = os.getenv(token_name)
     if token is None or not token.strip():
-        raise RuntimeError(f"{MCP_INDUSTRIAL_AGENT_TOKEN_ENV} is required for HTTP MCP")
+        raise RuntimeError(f"{token_name} is required for HTTP MCP")
     return token

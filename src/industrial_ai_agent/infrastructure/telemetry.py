@@ -61,6 +61,7 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "retrieval.strategy",
         "reranker.model",
         "run.id",
+        "run.profile",
         "telemetry.metadata_only",
         "token.input_count",
         "token.output_count",
@@ -79,6 +80,7 @@ _METRIC_ATTRIBUTE_KEYS = frozenset(
         "operation.type",
         "persistence.operation",
         "retrieval.strategy",
+        "run.profile",
     }
 )
 _ALLOWED_LOG_EVENTS = frozenset(

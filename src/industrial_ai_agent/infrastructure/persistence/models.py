@@ -167,6 +167,7 @@ class AgentRunRecord(Base):
     thread_id: Mapped[UUID] = mapped_column(unique=True)
     status: Mapped[str] = mapped_column(String)
     data_classification: Mapped[int] = mapped_column(SmallInteger)
+    run_profile: Mapped[str] = mapped_column(String)
     model_profile: Mapped[str | None] = mapped_column(String)
     request_text: Mapped[str] = mapped_column(Text)
     final_answer: Mapped[str | None] = mapped_column(Text)

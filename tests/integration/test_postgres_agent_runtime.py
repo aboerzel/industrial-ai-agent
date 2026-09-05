@@ -12,12 +12,19 @@ from sqlalchemy import text
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
 from industrial_ai_agent.agent.model_egress import DataClassification
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunProfile,
+    InternalDiagnosticTarget,
+)
 from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
 )
 from industrial_ai_agent.infrastructure.api.schemas import RunStatus
+from industrial_ai_agent.infrastructure.internal_diagnostic_scope import (
+    PostgreSqlInternalDiagnosticScopeValidator,
+)
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlSessionFactory,
 )
@@ -76,6 +83,7 @@ def test_agent_run_store_survives_store_recreation_and_rls() -> None:
             first_store.bind_execution_context(
                 run_id,
                 data_classification=DataClassification.CONFIDENTIAL,
+                run_profile=AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
                 model_profile="local_quality",
             )
         )
@@ -127,6 +135,28 @@ def test_agent_runtime_rls_and_framework_checkpoint_schema_exist() -> None:
 
     assert rls_enabled is True
     assert bypass_rls is False
+
+
+def test_internal_diagnostic_preflight_uses_internal_rls_before_agent_execution() -> None:
+    assert DATABASE_URL is not None
+    factory = PostgreSqlSessionFactory(DATABASE_URL)
+    validator = PostgreSqlInternalDiagnosticScopeValidator(factory)
+    try:
+        internal_target = asyncio.run(
+            validator.is_available(
+                InternalDiagnosticTarget(product_id="P4900", station_id="S02")
+            )
+        )
+        confidential_target = asyncio.run(
+            validator.is_available(
+                InternalDiagnosticTarget(product_id="P4711", station_id="S04")
+            )
+        )
+    finally:
+        factory.dispose()
+
+    assert internal_target is True
+    assert confidential_target is False
 
 
 def test_agent_runtime_rls_filters_each_clearance_level() -> None:

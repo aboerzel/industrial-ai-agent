@@ -15,6 +15,9 @@ from industrial_ai_agent.infrastructure.api.observed_run_store import (
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
 )
+from industrial_ai_agent.infrastructure.internal_diagnostic_scope import (
+    PostgreSqlInternalDiagnosticScopeValidator,
+)
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
 from industrial_ai_agent.infrastructure.observed_run_service import observed_run_service
 from industrial_ai_agent.infrastructure.persistence.postgres import (
@@ -53,6 +56,9 @@ def create_default_app():
     run_service = create_default_troubleshooting_run_service(
         runtime_database_url=database_url,
         telemetry=telemetry,
+        internal_diagnostic_scope_validator=PostgreSqlInternalDiagnosticScopeValidator(
+            PostgreSqlSessionFactory(database_url)
+        ),
     )
     return create_app(
         observed_run_service(run_service, telemetry),

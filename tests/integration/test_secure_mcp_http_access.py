@@ -15,6 +15,7 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
 )
 
 _INDUSTRIAL_TOKEN = "industrial-http-test-token"
+_INTERNAL_AGENT_TOKEN = "industrial-internal-http-test-token"
 _CODEX_TOKEN = "codex-http-test-token"
 _SERVER_SOURCE = """
 import os
@@ -62,6 +63,7 @@ def secure_factory_server() -> Iterator[str]:
         **os.environ,
         "TEST_MCP_PORT": str(port),
         "MCP_INDUSTRIAL_AGENT_TOKEN": _INDUSTRIAL_TOKEN,
+        "MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN": _INTERNAL_AGENT_TOKEN,
         "MCP_CODEX_DEVELOPMENT_TOKEN": _CODEX_TOKEN,
     }
     process = subprocess.Popen(
@@ -128,6 +130,14 @@ def test_codex_client_discovers_only_read_tools_and_cannot_call_write_tool(
 
     assert names == {"get_product_history", "get_machine_status"}
     assert outcome == "denied"
+
+
+def test_internal_agent_discovers_only_read_tools_and_cannot_call_write_tool(
+    secure_factory_server: str,
+) -> None:
+    names = asyncio.run(_tool_names(secure_factory_server, _INTERNAL_AGENT_TOKEN))
+
+    assert names == {"get_product_history", "get_machine_status"}
 
 
 def test_missing_and_malformed_authorization_are_denied(

@@ -14,12 +14,19 @@ from industrial_ai_agent.agent.model_egress import (
     ModelEgressDeniedError,
 )
 from industrial_ai_agent.agent.model_routing import NoEligibleModelError
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunClassificationPolicy,
+    AgentRunProfile,
+    InternalDiagnosticTarget,
+    ResolvedRunPolicy,
+)
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
+    InternalDiagnosticTargetUnavailableError,
     McpServiceUnavailableError,
     RunExecution,
+    internal_diagnostic_message,
 )
-from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.output_sanitization import (
     sanitize_public_text,
     sanitize_public_value,
@@ -33,6 +40,7 @@ from industrial_ai_agent.infrastructure.api.schemas import (
     ApprovalRequestResponse,
     CreateRunRequest,
     HealthResponse,
+    InternalDiagnosticRequest,
     PublicToolName,
     ResumeRunRequest,
     RunResponse,
@@ -68,6 +76,7 @@ def create_app(
     )
     app.state.run_service = run_service
     app.state.run_store = run_store
+    app.state.classification_policy = AgentRunClassificationPolicy()
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
     if allowed_origins:
         # noinspection PyTypeChecker
@@ -100,64 +109,41 @@ def create_app(
         summary="Start one confidential troubleshooting run",
     )
     async def create_run(payload: CreateRunRequest, request: Request) -> RunResponse:
-        store = _run_store(request)
-        run_id = uuid4()
-        await store.create(
-            run_id,
-            request_text=payload.message,
-            data_classification=DataClassification.CONFIDENTIAL,
+        policy = _classification_policy(request).resolve(
+            AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
         )
-        # noinspection PyBroadException
-        try:
-            service = _run_service(request)
-            if _persistent_hitl_enabled(service):
-                profile, execution = await service.start(payload.message, run_id=run_id)
-                await store.bind_execution_context(
-                    run_id,
-                    data_classification=DataClassification.CONFIDENTIAL,
-                    model_profile=profile.name,
-                )
-                record = await _persist_execution(store, run_id, execution)
-                return _to_run_response(record)
-            result = await service.run(payload.message)
-        except NoEligibleModelError:
-            await store.fail(run_id, "no_eligible_model")
-            _raise_api_run_error(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                code="no_eligible_model",
-                message="No eligible model is available for this request.",
-            )
-        except (ModelEgressDeniedError, DataClassificationBoundaryError):
-            await store.fail(run_id, "model_egress_denied")
-            _raise_api_run_error(
-                status_code=status.HTTP_403_FORBIDDEN,
-                code="model_egress_denied",
-                message="Model execution is not permitted for this request.",
-            )
-        except McpServiceUnavailableError:
-            await store.fail(run_id, "mcp_service_unavailable")
-            _raise_api_run_error(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                code="mcp_service_unavailable",
-                message="A required MCP service is unavailable.",
-            )
-        # noinspection PyBroadException
-        except Exception:  # noqa: BLE001 - public API must sanitize unexpected errors.
-            await store.fail(run_id, "internal_error")
-            _raise_api_run_error(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                code="internal_error",
-                message="The agent run could not be completed.",
-            )
+        return await _start_run(request, message=payload.message, policy=policy)
 
-        if result.model_profile_name is not None:
-            await store.bind_execution_context(
-                run_id,
-                data_classification=DataClassification.CONFIDENTIAL,
-                model_profile=result.model_profile_name,
+    @runs.post(
+        "/diagnostics",
+        response_model=RunResponse,
+        responses={
+            status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse},
+            status.HTTP_403_FORBIDDEN: {"model": ApiErrorResponse},
+            status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ApiErrorResponse},
+            status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ApiErrorResponse},
+        },
+        summary="Start one structured read-only internal diagnostic",
+    )
+    async def create_internal_diagnostic(
+        payload: InternalDiagnosticRequest, request: Request
+    ) -> RunResponse:
+        target = InternalDiagnosticTarget(
+            product_id=payload.product_id, station_id=payload.station_id
+        )
+        try:
+            policy = await _run_service(request).resolve_internal_diagnostic(target)
+        except InternalDiagnosticTargetUnavailableError:
+            _raise_api_run_error(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="diagnostic_target_unavailable",
+                message="The requested diagnostic target is unavailable.",
             )
-        record = await store.complete(run_id, result)
-        return _to_run_response(record)
+        return await _start_run(
+            request,
+            message=internal_diagnostic_message(target),
+            policy=policy,
+        )
 
     @runs.get(
         "/runs/{run_id}",
@@ -215,6 +201,7 @@ def create_app(
                 run_id=run_id,
                 model_profile=claimed.model_profile,
                 data_classification=claimed.data_classification,
+                run_profile=claimed.run_profile,
                 decision=payload.decision.value,
             )
             return _to_run_response(await _persist_execution(store, run_id, execution))
@@ -265,9 +252,79 @@ def _run_store(request: Request) -> AgentRunStore:
     return request.app.state.run_store
 
 
+def _classification_policy(request: Request) -> AgentRunClassificationPolicy:
+    return request.app.state.classification_policy
+
+
 def _persistent_hitl_enabled(service: AgentRunService) -> bool:
     """Allow an Infrastructure observability decorator around the application service."""
     return bool(getattr(service, "persistent_hitl_enabled", False))
+
+
+async def _start_run(
+    request: Request, *, message: str, policy: ResolvedRunPolicy
+) -> RunResponse:
+    store = _run_store(request)
+    run_id = uuid4()
+    await store.create(
+        run_id,
+        request_text=message,
+        data_classification=policy.data_classification,
+        run_profile=policy.run_profile,
+    )
+    service = _run_service(request)
+    try:
+        if _persistent_hitl_enabled(service):
+            profile, execution = await service.start(
+                message, run_id=run_id, run_policy=policy
+            )
+            await store.bind_execution_context(
+                run_id,
+                data_classification=policy.data_classification,
+                run_profile=policy.run_profile,
+                model_profile=profile.name,
+            )
+            return _to_run_response(await _persist_execution(store, run_id, execution))
+        if policy.run_profile is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING:
+            result = await service.run(message)
+        else:
+            result = await service.run_with_policy(message, run_policy=policy)
+    except NoEligibleModelError:
+        await store.fail(run_id, "no_eligible_model")
+        _raise_api_run_error(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="no_eligible_model",
+            message="No eligible model is available for this request.",
+        )
+    except (ModelEgressDeniedError, DataClassificationBoundaryError):
+        await store.fail(run_id, "model_egress_denied")
+        _raise_api_run_error(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="model_egress_denied",
+            message="Model execution is not permitted for this request.",
+        )
+    except McpServiceUnavailableError:
+        await store.fail(run_id, "mcp_service_unavailable")
+        _raise_api_run_error(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="mcp_service_unavailable",
+            message="A required MCP service is unavailable.",
+        )
+    except Exception:  # noqa: BLE001 - public API must sanitize unexpected errors.
+        await store.fail(run_id, "internal_error")
+        _raise_api_run_error(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="internal_error",
+            message="The agent run could not be completed.",
+        )
+    if result.model_profile_name is not None:
+        await store.bind_execution_context(
+            run_id,
+            data_classification=policy.data_classification,
+            run_profile=policy.run_profile,
+            model_profile=result.model_profile_name,
+        )
+    return _to_run_response(await store.complete(run_id, result))
 
 
 def _to_run_response(record: StoredAgentRun) -> RunResponse:
