@@ -195,7 +195,7 @@ def create_app(
                 code="run_not_found",
                 message="The requested run does not exist.",
             )
-        claimed = await store.claim_resume(run_id)
+        claimed = await store.claim_resume(run_id, decision=payload.decision.value)
         if claimed is None:
             _raise_api_run_error(
                 status_code=status.HTTP_409_CONFLICT,

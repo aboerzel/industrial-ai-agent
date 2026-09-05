@@ -49,8 +49,8 @@ The demo registrations are:
 
 | Identity | Clearance | Permissions |
 |---|---|---|
-| `industrial-agent` | `CONFIDENTIAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `CREATE_MAINTENANCE_TICKET` |
-| `codex-development` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY` |
+| `industrial-agent` | `CONFIDENTIAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME`, `CREATE_MAINTENANCE_TICKET` |
+| `codex-development` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME` |
 
 MCP permission authorizes a client to invoke a tool. It does not replace the Industrial
 Agent's `ToolPolicy` or LangGraph approval interrupt: maintenance-ticket execution still
@@ -98,3 +98,15 @@ a replaceable future adapter.
 ADR-009 remains the model-egress policy, ADR-011 remains the HITL authority, ADR-012
 remains the MCP transport decision, and ADR-014 remains the RLS and classification
 authority.
+
+## Runtime MCP Refinement
+
+The read-only `runtime_mcp` uses the same request-scoped authentication, identity
+resolution, permission filtering, dispatch authorization, and PostgreSQL RLS boundary.
+`READ_AGENT_RUNTIME` authorizes its fixed read-only inspection tools. The local demo
+grants it to `industrial-agent` at `CONFIDENTIAL` clearance and to
+`codex-development` at `INTERNAL` clearance. Runtime-record classification remains
+enforced by PostgreSQL RLS; neither an MCP argument nor a trace header can select a
+clearance, identity, or permission. The server applies a separate output allowlist over
+the RLS-filtered record, so access to a record never authorizes prompt, answer, tool
+payload, approval payload, exception, or checkpoint disclosure.

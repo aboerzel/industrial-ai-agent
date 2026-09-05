@@ -145,3 +145,14 @@ LangGraph loop and approval semantics. ADR-012 retains MCP discovery and transpo
 boundaries. ADR-013 retains FastAPI as the public boundary. ADR-014 retains PostgreSQL
 and RLS as persistent-data and authorization enforcement; observability never replaces
 or weakens those controls.
+
+## Runtime MCP Refinement
+
+The independent `runtime-mcp` service instruments only its bounded read operations:
+`runtime.run.lookup`, `runtime.run.list`, `runtime.trajectory.lookup`,
+`runtime.approval.lookup`, and `runtime.failure.lookup`. It uses the same telemetry
+allowlist and optional failure behavior as the other MCP services. A run UUID may be a
+span and log correlation attribute, never a metric label. Runtime projections and
+database values are not exported as telemetry. Runtime MCP and Observability MCP remain
+independent read adapters: the former reports persisted application facts; the latter
+reports distributed telemetry; a client such as Codex performs any evidence correlation.

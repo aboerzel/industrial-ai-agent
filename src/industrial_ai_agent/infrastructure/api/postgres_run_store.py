@@ -12,6 +12,8 @@ from industrial_ai_agent.agent.agent_run import AgentRunResult
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.run_store import (
     AgentRunStore,
+    RecentRuntimeRunsQuery,
+    RuntimeRunInspection,
     StoredAgentRun,
     _to_public_status,
 )
@@ -69,6 +71,10 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 error_message=None,
                 tool_call_summary=[],
                 approval_payload=None,
+                approval_action=None,
+                approval_decision=None,
+                approval_requested_at=None,
+                approval_decided_at=None,
                 interrupted_at=None,
                 completed_at=None,
             )
@@ -158,13 +164,19 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             record = _require_record(session, run_id)
             record.status = RunStatus.WAITING_FOR_APPROVAL.value
             record.approval_payload = approval_request
+            record.approval_action = _approval_action(approval_request)
+            record.approval_decision = None
             record.interrupted_at = datetime.now(UTC)
+            record.approval_requested_at = record.interrupted_at
+            record.approval_decided_at = None
             return _stored(record)
 
-    async def claim_resume(self, run_id: UUID) -> StoredAgentRun | None:
-        return await asyncio.to_thread(self._claim_resume, run_id)
+    async def claim_resume(
+        self, run_id: UUID, *, decision: str
+    ) -> StoredAgentRun | None:
+        return await asyncio.to_thread(self._claim_resume, run_id, decision)
 
-    def _claim_resume(self, run_id: UUID) -> StoredAgentRun | None:
+    def _claim_resume(self, run_id: UUID, decision: str) -> StoredAgentRun | None:
         with self._session_factory.session(self._security_context) as session:
             changed = session.execute(
                 update(AgentRunRecord)
@@ -172,11 +184,49 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                     AgentRunRecord.run_id == run_id,
                     AgentRunRecord.status == RunStatus.WAITING_FOR_APPROVAL.value,
                 )
-                .values(status=RunStatus.RUNNING.value)
+                .values(
+                    status=RunStatus.RUNNING.value,
+                    approval_payload=None,
+                    approval_decision=decision,
+                    approval_decided_at=datetime.now(UTC),
+                )
             ).rowcount
             if changed != 1:
                 return None
             return _stored(_require_record(session, run_id))
+
+    async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None:
+        return await asyncio.to_thread(self._inspect, run_id)
+
+    def _inspect(self, run_id: UUID) -> RuntimeRunInspection | None:
+        with self._session_factory.session(self._security_context) as session:
+            record = session.scalar(
+                select(AgentRunRecord).where(AgentRunRecord.run_id == run_id)
+            )
+            return _inspection(record) if record is not None else None
+
+    async def list_recent(
+        self, query: RecentRuntimeRunsQuery
+    ) -> tuple[RuntimeRunInspection, ...]:
+        return await asyncio.to_thread(self._list_recent, query)
+
+    def _list_recent(
+        self, query: RecentRuntimeRunsQuery
+    ) -> tuple[RuntimeRunInspection, ...]:
+        statement = select(AgentRunRecord).where(
+            AgentRunRecord.created_at >= query.created_after
+        )
+        if query.status is not None:
+            statement = statement.where(AgentRunRecord.status == query.status.value)
+        if query.data_classification is not None:
+            statement = statement.where(
+                AgentRunRecord.data_classification == int(query.data_classification)
+            )
+        if query.model_profile is not None:
+            statement = statement.where(AgentRunRecord.model_profile == query.model_profile)
+        statement = statement.order_by(AgentRunRecord.created_at.desc()).limit(query.limit)
+        with self._session_factory.session(self._security_context) as session:
+            return tuple(_inspection(record) for record in session.scalars(statement))
 
 
 def _require_record(session, run_id: UUID) -> AgentRunRecord:
@@ -212,6 +262,12 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
         result=result,
         error_code=record.error_code,
         approval_request=record.approval_payload,
+        approval_action=record.approval_action,
+        approval_decision=record.approval_decision,
+        approval_requested_at=record.approval_requested_at,
+        approval_decided_at=record.approval_decided_at,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 
@@ -221,3 +277,60 @@ def _safe_error_message(error_code: str) -> str:
         "model_egress_denied": "Model execution is not permitted for this request.",
         "mcp_service_unavailable": "A required MCP service is unavailable.",
     }.get(error_code, "The agent run could not be completed.")
+
+
+def _inspection(record: AgentRunRecord) -> RuntimeRunInspection:
+    return RuntimeRunInspection(
+        run_id=record.run_id,
+        thread_id=record.thread_id,
+        status=RunStatus(record.status),
+        data_classification=DataClassification(record.data_classification),
+        model_profile=record.model_profile,
+        tool_call_count=len(record.tool_call_summary)
+        if isinstance(record.tool_call_summary, list)
+        else 0,
+        tool_names=_safe_tool_names(record.tool_call_summary),
+        error_code=record.error_code,
+        approval_action=_safe_approval_action(record.approval_action)
+        or _approval_action(record.approval_payload),
+        approval_decision=_safe_approval_decision(record.approval_decision),
+        approval_requested_at=record.approval_requested_at or record.interrupted_at,
+        approval_decided_at=record.approval_decided_at,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+_KNOWN_TOOL_NAMES = frozenset(
+    {
+        "get_product_history",
+        "get_machine_status",
+        "search_documentation",
+        "create_maintenance_ticket",
+    }
+)
+
+
+def _safe_tool_names(summary: object) -> tuple[str, ...]:
+    if not isinstance(summary, list):
+        return ()
+    return tuple(
+        entry["tool"]
+        for entry in summary
+        if isinstance(entry, dict) and entry.get("tool") in _KNOWN_TOOL_NAMES
+    )
+
+
+def _safe_approval_action(value: object) -> str | None:
+    return value if value == "create_maintenance_ticket" else None
+
+
+def _safe_approval_decision(value: object) -> str | None:
+    return value if value in {"approve", "reject"} else None
+
+
+def _approval_action(approval_request: object) -> str | None:
+    if not isinstance(approval_request, dict):
+        return None
+    action = approval_request.get("action")
+    return _safe_approval_action(action)

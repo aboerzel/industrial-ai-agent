@@ -178,11 +178,22 @@ and unknown attributes even if a backend contains them. `investigate_run` determ
 combines trace, logs, and metric context, identifies the first recorded error location,
 and explicitly states that this does not prove the underlying cause.
 
+## Runtime and Observability RCA Split
+
+The bounded read-only Runtime MCP is implemented alongside Observability MCP. Runtime
+MCP reads only the RLS-filtered `agent_runtime.agent_runs` projection and exposes
+`get_agent_run`, `get_run_tool_trajectory`, `get_run_approval`, `get_run_failure`, and
+`list_recent_agent_runs`. It never exposes prompts, answers, arguments, results,
+approval free text, exception details, or LangGraph checkpoint data, and it has no
+resume, approval, rejection, retry, cancellation, mutation, or deletion operation.
+
+Runtime MCP answers persisted application-runtime questions. Observability MCP answers
+distributed telemetry questions from Tempo, Loki, and Prometheus. Both are independent
+read adapters; Codex/another consumer correlates evidence by `run_id` and must separate
+observed facts from conclusions.
+
 ## Future MCP Roadmap
 
-Factory MCP, Knowledge MCP, and the bounded read-only Observability MCP are implemented.
-Vision MCP, Runtime / Agent Operations MCP, and Cost / Usage MCP remain planned only.
-Runtime / Agent Operations MCP
-may offer `get_agent_run`, `get_run_tool_calls`, `get_run_model_calls`,
-`get_run_approval_history`, and `get_run_failure`. Cost / Usage MCP may offer
+Factory MCP, Knowledge MCP, Observability MCP, and Runtime MCP are implemented. Vision
+MCP and Cost / Usage MCP remain planned only. Cost / Usage MCP may offer
 `get_model_usage`, `get_model_costs`, `get_token_usage`, and `get_cost_by_model_profile`.

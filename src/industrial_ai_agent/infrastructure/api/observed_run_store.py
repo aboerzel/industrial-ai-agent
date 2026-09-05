@@ -69,9 +69,15 @@ class ObservedAgentRunStore:
             approval_request,
         )
 
-    async def claim_resume(self, run_id: UUID) -> StoredAgentRun | None:
+    async def claim_resume(
+        self, run_id: UUID, *, decision: str
+    ) -> StoredAgentRun | None:
         return await self._observe(
-            "claim_resume", run_id, self._delegate.claim_resume, run_id
+            "claim_resume",
+            run_id,
+            self._delegate.claim_resume,
+            run_id,
+            decision=decision,
         )
 
     async def _observe(

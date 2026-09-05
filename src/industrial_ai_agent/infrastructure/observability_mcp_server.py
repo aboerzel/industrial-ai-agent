@@ -53,7 +53,11 @@ TraceIdentifier = Annotated[
     str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{32}$")
 ]
 ServiceName = Literal[
-    "industrial-ai-agent", "factory-mcp", "knowledge-mcp", "observability-mcp"
+    "industrial-ai-agent",
+    "factory-mcp",
+    "knowledge-mcp",
+    "observability-mcp",
+    "runtime-mcp",
 ]
 ServiceHealthWindow = Literal["5m", "15m", "1h"]
 

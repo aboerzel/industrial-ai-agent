@@ -161,6 +161,7 @@ def create_demo_mcp_access_control(
                     McpPermission.READ_FACTORY,
                     McpPermission.READ_KNOWLEDGE,
                     McpPermission.READ_OBSERVABILITY,
+                    McpPermission.READ_AGENT_RUNTIME,
                     McpPermission.CREATE_MAINTENANCE_TICKET,
                 }
             ),
@@ -174,6 +175,7 @@ def create_demo_mcp_access_control(
                     McpPermission.READ_FACTORY,
                     McpPermission.READ_KNOWLEDGE,
                     McpPermission.READ_OBSERVABILITY,
+                    McpPermission.READ_AGENT_RUNTIME,
                 }
             ),
         ),

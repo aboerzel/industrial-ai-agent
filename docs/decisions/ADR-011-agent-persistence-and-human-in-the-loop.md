@@ -58,6 +58,12 @@ profile, normalized tool-call summary, final answer when present, sanitized erro
 metadata, and lifecycle timestamps. It is implemented by an Infrastructure SQLAlchemy
 2.x repository adapter. Retention is deliberately open.
 
+For safe read-only runtime operations, the same project-owned record also persists a
+minimal approval audit: the known action name, approval request timestamp, explicit
+approve/reject decision, and decision timestamp. It never persists a new checkpoint
+projection or exposes approval arguments, summary, or other free-text payload through
+that operational projection.
+
 The application role receives RLS protection for `agent_runtime.agent_runs` using the
 existing transaction-local clearance context. Framework-owned checkpoint tables are not
 altered with project RLS policies because that would risk framework compatibility. Their

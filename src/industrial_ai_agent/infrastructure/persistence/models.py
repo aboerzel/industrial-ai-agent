@@ -174,6 +174,10 @@ class AgentRunRecord(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     tool_call_summary: Mapped[list[dict[str, object]]] = mapped_column(JSON)
     approval_payload: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    approval_action: Mapped[str | None] = mapped_column(String)
+    approval_decision: Mapped[str | None] = mapped_column(String)
+    approval_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approval_decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     interrupted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

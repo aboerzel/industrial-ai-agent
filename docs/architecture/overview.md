@@ -47,17 +47,33 @@ invoking the provider adapter. LangGraph and LangChain Core are used narrowly fo
 orchestration. The runtime uses LangGraph's official PostgreSQL async checkpointer for
 durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
 dynamic tool registry, LangSmith integration, or general evaluation framework.
-Three MCP services expose bounded capabilities through the official MCP SDK v2.
+Four MCP services expose bounded capabilities through the official MCP SDK v2.
 `factory_mcp` provides product history, machine status, and the approval-gated
 maintenance-ticket action; `knowledge_mcp` provides documentation search; and the
 read-only `observability_mcp` provides safe RCA evidence over Tempo, Loki, and
-Prometheus. The Industrial Agent discovers only Factory and Knowledge tools; it has no
-runtime dependency on Observability MCP. All retain stdio for process-coupled development
+Prometheus. The read-only `runtime_mcp` reports RLS-filtered persisted run facts only:
+safe lifecycle metadata, tool trajectory, approval state, failure metadata, and bounded
+recent runs. Runtime MCP never reads LangGraph checkpoint tables and has no write or
+resume operation. The Industrial Agent discovers only Factory and Knowledge tools; it has no
+runtime dependency on Runtime MCP or Observability MCP. All retain stdio for process-coupled development
 and deterministic tests, and run as separate Streamable HTTP `/mcp` Docker services.
 `LangGraphTroubleshootingAgent` opens one session per explicitly configured server,
 discovers and authorizes tools through the temporary LangChain bridge, executes the
 bounded sequential loop, then closes all sessions. Transport selection is made by an
 outer Composition Root.
+
+Runtime and Observability MCP are intentionally separate evidence sources:
+
+```mermaid
+flowchart LR
+    Codex --> Runtime["runtime_mcp\npersisted application facts"]
+    Codex --> Observability["observability_mcp\ndistributed telemetry"]
+    Runtime --> Runs["agent_runtime.agent_runs\nPostgreSQL RLS"]
+    Observability --> Backends["Tempo / Loki / Prometheus"]
+```
+
+Codex or another consumer may correlate returned evidence by `run_id`; neither MCP
+performs LLM reasoning, RCA orchestration, or cross-MCP calls.
 
 ADR-014 adds persistent classified factory data. PostgreSQL is the source of truth for
 structured factory records and document-catalog metadata. Local PDF, DOCX, PPTX, XLSX,

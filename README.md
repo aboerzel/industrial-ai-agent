@@ -448,3 +448,22 @@ traces, connection URLs, credentials, local paths, or checkpoint data. PostgreSQ
 remains the primary data-access control; the agent also rejects a read result whose
 classification is absent or exceeds the run clearance before it can become model context.
 See [Guardrails and Boundary Validation](docs/learning/guardrails-and-boundary-validation.md).
+
+## Runtime MCP Operations
+
+`runtime-mcp` is an independent, non-root Docker service at
+`http://localhost:8004/mcp`. It is an operational read adapter over RLS-filtered
+`agent_runtime.agent_runs`, not part of Industrial Agent execution. Stopping it does not
+affect agent-api, Factory MCP, Knowledge MCP, or Observability MCP.
+
+Codex uses the local `[mcp_servers.runtime]` entry in `.codex/config.toml` with its
+server-owned `MCP_CODEX_DEVELOPMENT_TOKEN`. At `INTERNAL` clearance it can use the five
+read-only tools: `get_agent_run`, `get_run_tool_trajectory`, `get_run_approval`,
+`get_run_failure`, and `list_recent_agent_runs`. It receives no resume, approval, reject,
+retry, cancellation, mutation, deletion, prompt, answer, tool payload, exception, or
+checkpoint operation/data. `READ_AGENT_RUNTIME` is verified server-side under ADR-015;
+client headers and trace context do not affect identity, clearance, or permissions.
+
+For RCA, query Runtime MCP for persisted application facts and Observability MCP for
+Tempo/Loki/Prometheus evidence separately, then correlate on `run_id`. Neither MCP
+performs reasoning or calls the other MCP.

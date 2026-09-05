@@ -16,7 +16,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from industrial_ai_agent.infrastructure.telemetry import safe_attributes
 
 KNOWN_OBSERVABILITY_SERVICES = frozenset(
-    {"industrial-ai-agent", "factory-mcp", "knowledge-mcp", "observability-mcp"}
+    {
+        "industrial-ai-agent",
+        "factory-mcp",
+        "knowledge-mcp",
+        "observability-mcp",
+        "runtime-mcp",
+    }
 )
 MAX_TRACE_SPANS = 200
 MAX_LOG_EVENTS = 100
