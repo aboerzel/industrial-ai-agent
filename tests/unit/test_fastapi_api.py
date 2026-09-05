@@ -14,6 +14,7 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
 )
 from industrial_ai_agent.infrastructure.api.app import create_app as _create_app
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
+from industrial_ai_agent.infrastructure.api.schemas import RunResponse
 from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     create_default_troubleshooting_run_service,
 )
@@ -112,11 +113,20 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
 
     assert response.status_code == 200
     payload = response.json()
+    assert set(payload) == {
+        "run_id",
+        "status",
+        "answer",
+        "tool_calls",
+        "approval_request",
+    }
+    assert RunResponse.model_validate(payload).model_dump(mode="json") == payload
     assert payload["status"] == "success"
     assert payload["answer"] == "P4711 failed at S04."
     assert payload["tool_calls"] == [
         {"tool": "get_product_history", "arguments": {"product_id": "P4711"}}
     ]
+    assert payload["approval_request"] is None
     assert service.messages == ["Investigate product P4711."]
 
     stored_response = client.get(f"/api/v1/runs/{payload['run_id']}")

@@ -48,10 +48,11 @@ async function request(path, options = {}) {
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
+    const publicError = isApiErrorResponse(payload) ? payload : null;
     throw new ApiClientError(
       response.status,
-      payload?.code ?? "request_failed",
-      errorMessageFor(response.status, payload?.message),
+      publicError?.code ?? "request_failed",
+      errorMessageFor(response.status, publicError?.message),
     );
   }
   if (!isRunResponse(payload)) {
@@ -61,27 +62,98 @@ async function request(path, options = {}) {
       "The agent API returned an invalid run response.",
     );
   }
-  return payload;
+  return {
+    ...payload,
+    answer: payload.answer ?? null,
+    tool_calls: payload.tool_calls ?? [],
+    approval_request: payload.approval_request ?? null,
+  };
 }
 
 function isRunResponse(value) {
   return (
-    value !== null &&
-    typeof value === "object" &&
-    typeof value.run_id === "string" &&
+    isRecord(value) &&
+    hasOnlyKeys(value, ["run_id", "status", "answer", "tool_calls", "approval_request"]) &&
+    isUuid(value.run_id) &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
-    (value.answer === null || typeof value.answer === "string") &&
-    Array.isArray(value.tool_calls) &&
-    value.tool_calls.every(
-      (call) =>
-        call !== null &&
-        typeof call === "object" &&
-        typeof call.tool === "string" &&
-        call.arguments !== null &&
-        typeof call.arguments === "object" &&
-        !Array.isArray(call.arguments),
-    ) &&
-    (value.approval_request === null || typeof value.approval_request === "object")
+    (value.answer === undefined || value.answer === null || isBoundedString(value.answer, 8_000)) &&
+    (value.tool_calls === undefined ||
+      (Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall))) &&
+    (value.approval_request === undefined ||
+      value.approval_request === null ||
+      isApprovalRequest(value.approval_request))
+  );
+}
+
+function isApiErrorResponse(value) {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["code", "message"]) &&
+    typeof value.code === "string" &&
+    typeof value.message === "string"
+  );
+}
+
+function isToolCall(value) {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["tool", "arguments"]) &&
+    isPublicToolName(value.tool) &&
+    isRecord(value.arguments)
+  );
+}
+
+function isApprovalRequest(value) {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      "action",
+      "summary",
+      "arguments",
+      "classification",
+      "model_profile",
+      "status",
+      "created_at",
+    ]) &&
+    isPublicToolName(value.action) &&
+    isBoundedString(value.summary, 500, true) &&
+    isRecord(value.arguments) &&
+    isBoundedString(value.classification, 32, true) &&
+    isBoundedString(value.model_profile, 128, true) &&
+    ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
+    typeof value.created_at === "string"
+  );
+}
+
+function isPublicToolName(value) {
+  return [
+    "get_product_history",
+    "get_machine_status",
+    "search_documentation",
+    "create_maintenance_ticket",
+  ].includes(value);
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value, allowedKeys) {
+  return Object.keys(value).every((key) => allowedKeys.includes(key));
+}
+
+function isBoundedString(value, maxLength, requireContent = false) {
+  return (
+    typeof value === "string" &&
+    value.length <= maxLength &&
+    (!requireContent || value.length > 0)
+  );
+}
+
+function isUuid(value) {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
   );
 }
 
