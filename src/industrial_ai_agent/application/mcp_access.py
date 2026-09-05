@@ -12,6 +12,7 @@ class McpPermission(StrEnum):
 
     READ_FACTORY = "read_factory"
     READ_KNOWLEDGE = "read_knowledge"
+    READ_OBSERVABILITY = "read_observability"
     CREATE_MAINTENANCE_TICKET = "create_maintenance_ticket"
 
 

@@ -11,3 +11,8 @@ disabled_tools = ["create_maintenance_ticket"]
 url = "http://localhost:8002/mcp"
 bearer_token_env_var = "MCP_CODEX_DEVELOPMENT_TOKEN"
 enabled_tools = ["search_documentation"]
+
+[mcp_servers.observability]
+url = "http://localhost:8003/mcp"
+bearer_token_env_var = "MCP_CODEX_DEVELOPMENT_TOKEN"
+enabled_tools = ["get_run_trace", "get_trace_logs", "get_run_metrics", "get_service_health", "investigate_run"]

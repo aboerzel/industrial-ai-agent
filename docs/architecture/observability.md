@@ -140,14 +140,49 @@ Langfuse is intentionally absent. A possible next slice is classification-govern
 LLM/agent observability for provider token usage, costs, prompts/responses, sessions,
 generations, and evaluations.
 
+## Read-only Observability MCP
+
+`observability_mcp` is a separately deployed, authenticated Streamable HTTP MCP service
+at `http://localhost:8003/mcp`. It reads the existing Tempo, Loki, and Prometheus stores;
+the Industrial Agent API neither calls nor depends on it.
+
+```mermaid
+flowchart LR
+    Codex["Codex / future RCA consumer"] --> MCP["observability_mcp\nbounded read-only tools"]
+    MCP --> Tempo["Tempo\ntrace lookup"]
+    MCP --> Loki["Loki\nmetadata-only logs"]
+    MCP --> Prometheus["Prometheus\nfixed aggregates"]
+```
+
+All five tools are `read_only_hint=true` and require the server-owned ADR-015
+`READ_OBSERVABILITY` permission: `get_run_trace(run_id)`,
+`get_trace_logs(trace_id, service_name?)`, `get_run_metrics(run_or_trace_id)`,
+`get_service_health(service_name, time_window?)`, and `investigate_run(run_id)`.
+Known services are fixed to `industrial-ai-agent`, `factory-mcp`, `knowledge-mcp`, and
+`observability-mcp`; health windows are `5m`, `15m`, or `1h`.
+
+The service uses Tempo `GET /api/search` with a server-built `run.id` filter followed by
+`GET /api/v2/traces/{trace_id}`, Loki `GET /loki/api/v1/query_range` with a fixed trace
+selector, and Prometheus `GET /api/v1/query_range` with fixed aggregate query templates.
+It never accepts query text. A trace search has a 48-hour retention/lookback bound;
+trace spans, logs, and metric points are capped at 200, 100, and 60 respectively. Metric
+context is a trace-derived window with five-minute padding, capped at 30 minutes. It is
+not exact per-run Prometheus data because ADR-016 forbids run/trace identifiers as metric
+labels.
+
+The MCP response projection returns only safe operation metadata, run/trace/span IDs,
+timestamps, durations, status, known service names, sanitized error type/code, and the
+fixed log fields. It discards raw log lines, prompts, model responses, tool payloads,
+documents, headers, tokens, SQL, source paths, stack traces, URLs, environment values,
+and unknown attributes even if a backend contains them. `investigate_run` deterministically
+combines trace, logs, and metric context, identifies the first recorded error location,
+and explicitly states that this does not prove the underlying cause.
+
 ## Future MCP Roadmap
 
-Factory MCP and Knowledge MCP are implemented. Vision MCP, Observability MCP, Runtime /
-Agent Operations MCP, and Cost / Usage MCP are planned only. Observability MCP may offer
-`get_run_trace`, `get_recent_errors`, `get_latency_breakdown`, `get_tool_usage`,
-`get_service_health`, `search_logs`, and `get_error_rate`. Runtime / Agent Operations MCP
+Factory MCP, Knowledge MCP, and the bounded read-only Observability MCP are implemented.
+Vision MCP, Runtime / Agent Operations MCP, and Cost / Usage MCP remain planned only.
+Runtime / Agent Operations MCP
 may offer `get_agent_run`, `get_run_tool_calls`, `get_run_model_calls`,
 `get_run_approval_history`, and `get_run_failure`. Cost / Usage MCP may offer
 `get_model_usage`, `get_model_costs`, `get_token_usage`, and `get_cost_by_model_profile`.
-`analyze_run_failure(run_id)` may later orchestrate these boundaries; this does not decide
-that an RCA MCP server is required.

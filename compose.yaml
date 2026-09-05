@@ -100,6 +100,38 @@ services:
       otel-collector:
         condition: service_healthy
 
+  observability-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.observability-mcp
+    environment:
+      TEMPO_URL: http://tempo:3200
+      LOKI_URL: http://loki:3100
+      PROMETHEUS_URL: http://prometheus:9090
+      OBSERVABILITY_BACKEND_TIMEOUT_SECONDS: "2"
+      MCP_INDUSTRIAL_AGENT_TOKEN: ${MCP_INDUSTRIAL_AGENT_TOKEN:?Set MCP_INDUSTRIAL_AGENT_TOKEN in .env}
+      MCP_CODEX_DEVELOPMENT_TOKEN: ${MCP_CODEX_DEVELOPMENT_TOKEN:?Set MCP_CODEX_DEVELOPMENT_TOKEN in .env}
+      OTEL_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SERVICE_NAME: observability-mcp
+    ports:
+      - "8003:8003"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8003), 2).close()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      tempo:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      otel-collector:
+        condition: service_healthy
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.153.0
     command: ["--config=/etc/otelcol-contrib/otel-collector.yaml"]

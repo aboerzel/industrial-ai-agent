@@ -30,6 +30,19 @@ Tempo stores distributed traces, Prometheus stores metrics, and Loki stores stru
 logs. Docker Compose provisions all configuration. Honeycomb, Grafana Cloud, and other
 OTLP-compatible targets are optional future Collector exporters.
 
+The local stack also has one dedicated `observability_mcp` service. It is a read-only
+Infrastructure query adapter, not an observability store and not an agent loop. Its
+fixed tools retrieve a run trace, metadata-only trace logs, trace-correlated metric
+context, bounded service health, and deterministic evidence aggregation. It uses only
+Tempo trace search/by-ID, Loki range query, and Prometheus range-query APIs with
+server-constructed queries, fixed known-service names, a 48-hour maximum lookback, and
+bounded results. It exposes neither TraceQL, LogQL, PromQL, raw HTTP, nor arbitrary
+telemetry attributes. `investigate_run` reports evidence and limitations; it never
+claims an unproven root cause. The response boundary repeats the telemetry allowlist,
+because stored telemetry remains potentially sensitive. It reuses ADR-015's
+server-derived identity and a `READ_OBSERVABILITY` permission; trace context never
+establishes identity, clearance, or permission.
+
 Every application run retains its UUID `run_id` as a business identifier. It is a safe
 span/log attribute. OTel `trace_id` and `span_id` remain OTel identifiers; neither
 replaces `run_id`. FastAPI auto-instrumentation creates inbound request spans.
@@ -98,6 +111,8 @@ runs, errors, LLM calls, MCP calls, retrieval calls, and approvals.
 * Collector/backend outages do not fail valid business work but degrade observability.
 * Each MCP service configures the same optional bootstrap with its own stable resource
   service name and exports its bounded metrics through the Collector.
+* `observability_mcp` has stable resource service name `observability-mcp`; observing
+  its own calls is permitted, but its fixed tools never recursively initiate RCA.
 * Raw prompts and results require a separate classification-governed decision. Langfuse
   is explicitly out of scope for this slice.
 

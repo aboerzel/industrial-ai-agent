@@ -19,7 +19,7 @@ Identity, clearance, and permission answer different questions:
 * Clearance: which data classification that identity may read, for example `INTERNAL`
   or `CONFIDENTIAL`.
 * Permission: which MCP operation it may use, for example `READ_FACTORY`,
-  `READ_KNOWLEDGE`, or `CREATE_MAINTENANCE_TICKET`.
+  `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, or `CREATE_MAINTENANCE_TICKET`.
 
 ## Decision
 
@@ -49,8 +49,8 @@ The demo registrations are:
 
 | Identity | Clearance | Permissions |
 |---|---|---|
-| `industrial-agent` | `CONFIDENTIAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `CREATE_MAINTENANCE_TICKET` |
-| `codex-development` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE` |
+| `industrial-agent` | `CONFIDENTIAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `CREATE_MAINTENANCE_TICKET` |
+| `codex-development` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY` |
 
 MCP permission authorizes a client to invoke a tool. It does not replace the Industrial
 Agent's `ToolPolicy` or LangGraph approval interrupt: maintenance-ticket execution still
@@ -88,6 +88,9 @@ a replaceable future adapter.
 * Tokens are environment-only, are never persisted, logged, or included in errors.
 * Codex can later receive only `INTERNAL` tools and data, even when it directly invokes
   MCP protocol methods.
+* Observability MCP tool discovery and dispatch use the same server-derived permission
+  model. Trace headers and telemetry fields remain unrelated to identity, clearance,
+  and permissions.
 * The local-demo token remains a shared-secret mechanism. A client able to obtain the
   Industrial Agent token can impersonate it; production requires stronger identity,
   secret distribution, TLS, and deployment isolation.

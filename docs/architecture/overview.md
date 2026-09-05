@@ -47,10 +47,13 @@ invoking the provider adapter. LangGraph and LangChain Core are used narrowly fo
 orchestration. The runtime uses LangGraph's official PostgreSQL async checkpointer for
 durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
 dynamic tool registry, LangSmith integration, or general evaluation framework.
-Two MCP services expose existing capabilities through the official MCP SDK v2.
+Three MCP services expose bounded capabilities through the official MCP SDK v2.
 `factory_mcp` provides product history, machine status, and the approval-gated
-maintenance-ticket action; `knowledge_mcp` provides documentation search. Both retain stdio for process-coupled development and
-deterministic tests, and run as separate Streamable HTTP `/mcp` Docker services.
+maintenance-ticket action; `knowledge_mcp` provides documentation search; and the
+read-only `observability_mcp` provides safe RCA evidence over Tempo, Loki, and
+Prometheus. The Industrial Agent discovers only Factory and Knowledge tools; it has no
+runtime dependency on Observability MCP. All retain stdio for process-coupled development
+and deterministic tests, and run as separate Streamable HTTP `/mcp` Docker services.
 `LangGraphTroubleshootingAgent` opens one session per explicitly configured server,
 discovers and authorizes tools through the temporary LangChain bridge, executes the
 bounded sequential loop, then closes all sessions. Transport selection is made by an
@@ -70,9 +73,9 @@ ADR-015 adds an authenticated HTTP MCP client boundary. The transport adapter ve
 local-demo opaque bearer token, resolves a server-owned identity to a request-specific
 `SecurityContext` and immutable MCP permissions, and does not accept client-selected
 identity, clearance, or permission headers. `industrial-agent` resolves to
-`CONFIDENTIAL` with Factory/Knowledge read and maintenance-ticket permission;
-`codex-development` resolves to `INTERNAL` with Factory/Knowledge read permissions
-only. Tool filtering runs for both `tools/list` and `tools/call`; it supplements, but
+`CONFIDENTIAL` with Factory/Knowledge/Observability read and maintenance-ticket permission;
+`codex-development` resolves to `INTERNAL` with Factory/Knowledge/Observability read
+permissions only. Tool filtering runs for both `tools/list` and `tools/call`; it supplements, but
 does not replace, LangGraph `ToolPolicy`, PostgreSQL RLS, ADR-009 egress checks, or the
 approval interrupt. Knowledge performs catalog RLS filtering before parsing, indexing,
 embedding, reranking, and result construction, and caches each retrieval pipeline by the

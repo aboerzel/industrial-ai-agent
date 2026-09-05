@@ -46,9 +46,11 @@ Results retain document, source, chunk, score, and metadata provenance. LangGrap
 receives retrieval only through `knowledge_mcp`, never through direct retriever
 injection.
 
-Two MCP services adapt existing capabilities through the official MCP SDK v2.
+Three MCP services adapt bounded capabilities through the official MCP SDK v2.
 `factory_mcp` exposes `get_product_history`, `get_machine_status`, and the approval-gated
-`create_maintenance_ticket`; `knowledge_mcp` exposes `search_documentation`. Both support process-coupled stdio for development/tests
+`create_maintenance_ticket`; `knowledge_mcp` exposes `search_documentation`; and
+`observability_mcp` exposes bounded, read-only RCA evidence. The Industrial Agent does
+not discover or depend on Observability MCP. All support process-coupled stdio for development/tests
 and Streamable HTTP at `/mcp` for deployment. The asynchronous LangGraph path discovers
 and authorizes all configured server tools, rejects duplicate tool names, opens one
 session per server for the run, and calls tools sequentially. There is no generalized
@@ -109,6 +111,14 @@ Grafana. Start the complete self-hosted demo with `docker compose up --build -d`
 is available at `http://localhost:3000` with provisioned datasources and the `Industrial
 AI Agent Overview` dashboard. See [Observability](docs/architecture/observability.md)
 for telemetry security, `run_id`/trace correlation, and the operator RCA workflow.
+The read-only Observability MCP is available at `http://localhost:8003/mcp` after
+`docker compose up --build -d observability-mcp`. It requires the existing Codex or
+Industrial Agent opaque bearer token and exposes only `get_run_trace`, `get_trace_logs`,
+`get_run_metrics`, `get_service_health`, and `investigate_run`. It accepts no arbitrary
+Tempo, Loki, or Prometheus queries. Useful Codex prompts are `Investigate run <run-id>
+and show me the evidence for the failure.`, `Show me the distributed trace for run
+<run-id>.`, `Were there elevated MCP errors around the time this run failed?`, and
+`Explain what telemetry proves about run <run-id>, and what it does not prove.`
 
 ## Persistent Factory Demo Data
 
@@ -198,7 +208,7 @@ python scripts/smoke_test_langgraph.py --confidential-troubleshooting
 ## Codex Project MCP
 
 The versioned project-local `.codex/config.toml` configures Streamable HTTP servers
-named `factory` and `knowledge`. It references the local
+named `factory`, `knowledge`, and `observability`. It references the local
 `MCP_CODEX_DEVELOPMENT_TOKEN` environment variable; it contains no token value. Codex
 does not load dotenv files itself, so launch Codex from a shell in which the ignored
 `.env` has supplied that variable:
@@ -210,7 +220,8 @@ codex
 ```
 
 The Codex identity is server-side `INTERNAL` and read-only. It may discover and use
-`get_product_history`, `get_machine_status`, and `search_documentation`; it cannot
+`get_product_history`, `get_machine_status`, `search_documentation`, and the five bounded
+Observability MCP read tools; it cannot
 discover or invoke `create_maintenance_ticket`. Prefer MCP evidence instead of inventing
 factory state. Useful prompts include `Show me the production history of P4900.`,
 `What is the current state of station S02?`, and `Search the factory documentation for
