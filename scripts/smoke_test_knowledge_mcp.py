@@ -3,7 +3,9 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
+from pathlib import Path
 
 from mcp.client.stdio import StdioServerParameters
 
@@ -12,8 +14,10 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
     StreamableHttpServerParameters,
     open_mcp_session,
 )
+from industrial_ai_agent.infrastructure.local_environment import load_local_environment
 
 SMOKE_QUERY = "E-STOP-17 emergency stop at station S04"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 async def run_smoke(transport: McpTransport) -> dict[str, object]:
@@ -40,6 +44,7 @@ async def run_smoke(transport: McpTransport) -> dict[str, object]:
 
 
 def main() -> None:
+    load_local_environment(PROJECT_ROOT / ".env")
     args = _parse_args()
     result = asyncio.run(run_smoke(_transport_from_args(args)))
     print(f"Server: {result['server']}")
@@ -57,11 +62,21 @@ def _parse_args() -> argparse.Namespace:
 
 def _transport_from_args(args: argparse.Namespace) -> McpTransport:
     if args.transport == "http":
-        return StreamableHttpServerParameters(url=args.mcp_url)
+        return StreamableHttpServerParameters(
+            url=args.mcp_url,
+            bearer_token=_required_industrial_agent_token(),
+        )
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "industrial_ai_agent.infrastructure.knowledge_mcp_server"],
     )
+
+
+def _required_industrial_agent_token() -> str:
+    token = os.getenv("MCP_INDUSTRIAL_AGENT_TOKEN")
+    if not token:
+        raise RuntimeError("MCP_INDUSTRIAL_AGENT_TOKEN must be configured")
+    return token
 
 
 if __name__ == "__main__":

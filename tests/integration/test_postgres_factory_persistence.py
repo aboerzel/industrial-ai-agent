@@ -7,7 +7,12 @@ from zipfile import ZipFile
 import pytest
 from sqlalchemy import select, text
 
-from industrial_ai_agent.domain.product_history import ProductId, ProductionStepStatus
+from industrial_ai_agent.domain.machine_status import MachineState
+from industrial_ai_agent.domain.product_history import (
+    ProductId,
+    ProductionStepStatus,
+    StationId,
+)
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.persistence.models import (
     MaintenanceEventRecord,
@@ -17,6 +22,7 @@ from industrial_ai_agent.infrastructure.persistence.models import (
 )
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlDocumentCatalogRepository,
+    PostgreSqlMachineStatusRepository,
     PostgreSqlProductHistoryRepository,
     PostgreSqlSessionFactory,
 )
@@ -59,7 +65,7 @@ def test_application_role_rls_enforces_clearance_without_repository_filtering() 
             _count(session_factory, DataClassification.INTERNAL, "document_catalog")
             == 6
         )
-        assert _count(session_factory, DataClassification.CONFIDENTIAL, "product") == 5
+        assert _count(session_factory, DataClassification.CONFIDENTIAL, "product") == 6
         assert (
             _count(
                 session_factory, DataClassification.CONFIDENTIAL, "process_parameter"
@@ -131,6 +137,69 @@ def test_schema_seed_and_repository_mapping_are_available_to_application_role() 
     )
 
 
+def test_internal_clearance_exposes_only_the_synthetic_internal_scenario() -> None:
+    assert DATABASE_URL is not None
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    internal_context = _context(DataClassification.INTERNAL)
+    confidential_context = _context(DataClassification.CONFIDENTIAL)
+    try:
+        internal_history = PostgreSqlProductHistoryRepository(
+            session_factory, internal_context
+        ).get_product_history(ProductId("P4900"))
+        confidential_history = PostgreSqlProductHistoryRepository(
+            session_factory, confidential_context
+        ).get_product_history(ProductId("P4711"))
+        hidden_history = PostgreSqlProductHistoryRepository(
+            session_factory, internal_context
+        ).get_product_history(ProductId("P4711"))
+        internal_status = PostgreSqlMachineStatusRepository(
+            session_factory, internal_context
+        ).get_machine_status(StationId("S02"))
+        internal_documents = PostgreSqlDocumentCatalogRepository(
+            session_factory, internal_context
+        ).list_documents()
+    finally:
+        session_factory.dispose()
+
+    assert internal_history is not None
+    assert internal_history.classification is DataClassification.INTERNAL
+    assert [step.station_id.value for step in internal_history.steps] == ["S01", "S02"]
+    assert confidential_history is not None
+    assert confidential_history.classification is DataClassification.CONFIDENTIAL
+    assert hidden_history is None
+    assert internal_status is not None
+    assert internal_status.state is MachineState.RUNNING
+    assert internal_status.classification is DataClassification.INTERNAL
+    assert all(
+        document.classification <= DataClassification.INTERNAL
+        for document in internal_documents
+    )
+    assert {document.title for document in internal_documents}.isdisjoint(
+        {
+            "Positioning Error Troubleshooting",
+            "Process Recipe",
+            "Robot Calibration Parameters",
+        }
+    )
+
+
+def test_rls_clearance_does_not_leak_between_repository_requests() -> None:
+    assert DATABASE_URL is not None
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    internal = PostgreSqlProductHistoryRepository(
+        session_factory, _context(DataClassification.INTERNAL)
+    )
+    confidential = PostgreSqlProductHistoryRepository(
+        session_factory, _context(DataClassification.CONFIDENTIAL)
+    )
+    try:
+        assert internal.get_product_history(ProductId("P4711")) is None
+        assert confidential.get_product_history(ProductId("P4711")) is not None
+        assert internal.get_product_history(ProductId("P4711")) is None
+    finally:
+        session_factory.dispose()
+
+
 def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
     """Guard the data links that make the portfolio documents operationally useful."""
     assert DATABASE_URL is not None
@@ -143,7 +212,7 @@ def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
                 session.scalars(
                     select(ProductRecord.product_code).where(
                         ProductRecord.product_code.in_(
-                            ("P4711", "P4801", "P4802", "P4805", "P4811")
+                            ("P4711", "P4801", "P4802", "P4805", "P4811", "P4900")
                         )
                     )
                 )
@@ -167,8 +236,8 @@ def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
         session_factory.dispose()
 
     asset_text = _demo_asset_text()
-    assert product_codes == {"P4711", "P4801", "P4802", "P4805", "P4811"}
-    assert len(positioning_events) == 5
+    assert product_codes == {"P4711", "P4801", "P4802", "P4805", "P4811", "P4900"}
+    assert len(positioning_events) == 6
     assert maintenance_actions == {
         "encoder replacement",
         "homing",

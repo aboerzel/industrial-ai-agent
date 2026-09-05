@@ -55,6 +55,15 @@ session per server for the run, and calls tools sequentially. There is no genera
 MCP router. The only write tool is the explicitly authorized,
 approval-gated `create_maintenance_ticket` Factory-MCP action.
 
+HTTP MCP access is authenticated at the server boundary. A verified opaque bearer token
+resolves to a request-specific identity, `SecurityContext`, and immutable MCP
+permissions under ADR-015; callers cannot select a clearance or permission through
+headers. `industrial-agent` has `CONFIDENTIAL` read access and the maintenance-ticket
+permission, while `codex-development` has `INTERNAL` factory and knowledge read access
+only. Discovery and dispatch both enforce this mapping. The Industrial Agent still
+requires its existing `ToolPolicy` and LangGraph approval interrupt before a ticket is
+created.
+
 ## Local FastAPI API
 
 FastAPI is the local/demo HTTP Application Boundary, not an agent, MCP, routing, or
@@ -102,8 +111,9 @@ maintenance, and an explicitly `RESTRICTED` S03 process parameter. The accompany
 local `demo_factory/` assets are real PDF, DOCX, PPTX, XLSX, and PNG files. Their
 cataloged checksum and classification, rather than folder names, govern ingestion.
 
-Copy `.env.example` to a local unversioned `.env` and replace the two PostgreSQL demo
-password placeholders. Then start the persistent services:
+Copy `.env.example` to a local unversioned `.env` and replace the PostgreSQL demo
+password placeholders and both distinct opaque MCP token placeholders. Then start the
+persistent services:
 
 ```powershell
 docker compose up --build -d factory-db factory-mcp knowledge-mcp
@@ -116,15 +126,23 @@ Factory service, so it never reads a partial catalog. A multi-replica or product
 deployment should use a separate migration job again. Runtime MCP services use the
 non-superuser `factory_app` database role. Each transaction sets a
 parameterized, transaction-local `app.clearance`, and PostgreSQL Row-Level Security
-filters classified rows independently of Python repository code. The server-injected
-demo `SecurityContext` is `demo-engineer` with `CONFIDENTIAL` clearance; there is no
-authentication yet. A future FastAPI JWT/OIDC adapter can construct the same context.
+filters classified rows independently of Python repository code. Each HTTP MCP request
+receives server-derived clearance: `codex-development` is `INTERNAL` and
+`industrial-agent` is `CONFIDENTIAL`. Opaque bearer tokens are local-demo authentication
+only; a future JWT/OIDC, mTLS, or workload-identity adapter can establish the same
+identity without changing capabilities, repositories, RLS, LangGraph, or HITL.
 
 Knowledge MCP reads only RLS-eligible catalog rows before Docling parses, chunks,
 embeds, or reranks documents. Classification propagates unchanged from catalog document
 to parsed document, chunk, MCP result, and the run's effective classification. That
 classification may rise but never silently fall; ADR-009 then rejects a public-cloud
 model for confidential or restricted context. MCP network traffic is not model egress.
+Knowledge builds a separately cached pipeline per complete `SecurityContext`; an
+INTERNAL request can never reuse a higher-clearance index. The internal synthetic
+demonstration scenario is `P4900` at `S02`: its product history and current `RUNNING`
+state are INTERNAL and it is supported by existing internal S02 documentation.
+`P4711`, `S04`, their rejection records, and confidential/restricted documents remain
+outside Codex development clearance.
 
 The named Hugging Face cache volume is intentionally outside the Knowledge image and is
 writable for an initial local model-cache population. No model artifact, document, query,
@@ -169,6 +187,34 @@ python scripts/smoke_test_knowledge_mcp.py
 python scripts/smoke_test_langgraph.py --confidential-troubleshooting
 ```
 
+## Codex Project MCP
+
+The versioned project-local `.codex/config.toml` configures Streamable HTTP servers
+named `factory` and `knowledge`. It references the local
+`MCP_CODEX_DEVELOPMENT_TOKEN` environment variable; it contains no token value. Codex
+does not load dotenv files itself, so launch Codex from a shell in which the ignored
+`.env` has supplied that variable:
+
+```powershell
+$line = Get-Content .env | Where-Object { $_ -match '^MCP_CODEX_DEVELOPMENT_TOKEN=' }
+$env:MCP_CODEX_DEVELOPMENT_TOKEN = $line.Split('=', 2)[1]
+codex
+```
+
+The Codex identity is server-side `INTERNAL` and read-only. It may discover and use
+`get_product_history`, `get_machine_status`, and `search_documentation`; it cannot
+discover or invoke `create_maintenance_ticket`. Prefer MCP evidence instead of inventing
+factory state. Useful prompts include `Show me the production history of P4900.`,
+`What is the current state of station S02?`, and `Search the factory documentation for
+information relevant to station S02.` Through these MCP servers, P4711/S04 and
+confidential or restricted documentation are intentionally unavailable to this identity.
+This does not restrict Codex' separate repository filesystem access; do not keep real
+classified material in a workspace granted to an external development agent.
+
+If either server is unavailable, start it with `docker compose up -d factory-mcp
+knowledge-mcp`, then check `docker compose ps`. Do not substitute guessed factory state
+or documentation for an unavailable MCP response.
+
 The server smokes print discovery and structured results. The LangGraph smoke uses only
 `local_quality` for its confidential run and verifies
 `get_product_history(P4711) -> get_machine_status(S04) -> search_documentation(...)`.
@@ -188,9 +234,10 @@ run as non-root and contain neither `.env` nor secrets. The Knowledge image cont
 model artifact: Compose uses the host Ollama endpoint for `qwen3-embedding:0.6b`, defaults
 the reranker to CPU, and uses a persistent named Hugging Face cache volume for local
 model artifacts; local in-process execution still selects CUDA when available. Docker deploys processes, while
-MCP provides tool protocol and discovery. The unauthenticated HTTP endpoints are accepted
-only for this local demo; remote or production deployment requires MCP authentication and
-transport security. MCP network transport does not authorize model egress: confidential
+MCP provides tool protocol and discovery. HTTP requests require
+`Authorization: Bearer <opaque-token>`; the local smoke scripts load only the Industrial
+Agent token from the ignored `.env` and never print it. Missing, malformed, and unknown
+tokens fail closed. MCP network transport does not authorize model egress: confidential
 troubleshooting uses the local profile under ADR-009, and Knowledge queries, chunks,
 embeddings, and reranker inputs never reach `public_fast` or a public provider.
 

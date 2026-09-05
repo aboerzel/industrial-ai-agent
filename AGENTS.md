@@ -274,6 +274,15 @@ when that compatibility exists.
 
 See `docs/decisions/ADR-012-mcp-integration-architecture.md`.
 
+## MCP Client Access
+
+HTTP MCP clients must be resolved by the ADR-015 server-side client-context boundary.
+Keep identity, clearance, and MCP permissions separate; callers must never select any of
+them through HTTP headers. Codex development access, when configured later, is
+read-only `INTERNAL` access. It may use Factory and Knowledge evidence when needed but
+must not invent factory state when a permitted MCP query can answer it, must never invoke
+`create_maintenance_ticket`, and must respect classifications in returned MCP data.
+
 ## Persistent Factory Data and Classification
 
 Structured factory records and document metadata use PostgreSQL as their persistent

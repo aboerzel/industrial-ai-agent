@@ -1,2 +1,13 @@
   [mcp_servers.pycharm]
     url = "http://127.0.0.1:64462/stream"
+
+[mcp_servers.factory]
+url = "http://localhost:8001/mcp"
+bearer_token_env_var = "MCP_CODEX_DEVELOPMENT_TOKEN"
+enabled_tools = ["get_product_history", "get_machine_status"]
+disabled_tools = ["create_maintenance_ticket"]
+
+[mcp_servers.knowledge]
+url = "http://localhost:8002/mcp"
+bearer_token_env_var = "MCP_CODEX_DEVELOPMENT_TOKEN"
+enabled_tools = ["search_documentation"]

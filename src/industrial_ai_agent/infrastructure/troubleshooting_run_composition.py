@@ -51,6 +51,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL_CONFIGURATION_PATH = PROJECT_ROOT / "config" / "model_profiles.toml"
 DEFAULT_FACTORY_MCP_URL = "http://127.0.0.1:8001/mcp"
 DEFAULT_KNOWLEDGE_MCP_URL = "http://127.0.0.1:8002/mcp"
+MCP_INDUSTRIAL_AGENT_TOKEN_ENV = "MCP_INDUSTRIAL_AGENT_TOKEN"
 
 
 class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
@@ -147,10 +148,12 @@ def _mcp_server_configurations(
 ) -> tuple[McpServerConfiguration, ...]:
     if mcp_transport == "http":
         factory_transport: McpTransport = StreamableHttpServerParameters(
-            url=factory_mcp_url
+            url=factory_mcp_url,
+            bearer_token=_required_mcp_bearer_token(),
         )
         knowledge_transport: McpTransport = StreamableHttpServerParameters(
-            url=knowledge_mcp_url
+            url=knowledge_mcp_url,
+            bearer_token=_required_mcp_bearer_token(),
         )
     elif mcp_transport == "stdio":
         factory_transport = StdioServerParameters(
@@ -181,3 +184,10 @@ def _mcp_server_configurations(
             allowed_tool_names=DEFAULT_ALLOWED_KNOWLEDGE_TOOLS,
         ),
     )
+
+
+def _required_mcp_bearer_token() -> str:
+    token = os.getenv(MCP_INDUSTRIAL_AGENT_TOKEN_ENV)
+    if token is None or not token.strip():
+        raise RuntimeError(f"{MCP_INDUSTRIAL_AGENT_TOKEN_ENV} is required for HTTP MCP")
+    return token

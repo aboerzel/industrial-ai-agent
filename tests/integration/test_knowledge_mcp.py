@@ -106,15 +106,17 @@ def test_knowledge_capability_result_does_not_depend_on_mcp_or_infrastructure() 
 def test_knowledge_mcp_stdio_and_http_have_equivalent_discovery_and_results(
     knowledge_mcp_http_transport: StreamableHttpServerParameters,
 ) -> None:
-    stdio_result = asyncio.run(
-        _discover_and_search(
+    async def discover_both() -> tuple[dict[str, object], dict[str, object]]:
+        stdio_result = await _discover_and_search(
             StdioServerParameters(
                 command=sys.executable,
                 args=["-c", _TEST_SERVER_SOURCE, "stdio"],
             )
         )
-    )
-    http_result = asyncio.run(_discover_and_search(knowledge_mcp_http_transport))
+        http_result = await _discover_and_search(knowledge_mcp_http_transport)
+        return stdio_result, http_result
+
+    stdio_result, http_result = asyncio.run(discover_both())
 
     assert http_result == stdio_result
     assert http_result["server_name"] == KNOWLEDGE_MCP_SERVER_NAME

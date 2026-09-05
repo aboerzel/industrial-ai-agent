@@ -12,6 +12,20 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
     StreamableHttpServerParameters,
 )
 
+_IN_MEMORY_FACTORY_HTTP_SERVER = """
+import os
+import sys
+from industrial_ai_agent.infrastructure.factory_mcp_server import create_default_factory_mcp_server
+
+os.environ.pop('FACTORY_DATABASE_URL', None)
+create_default_factory_mcp_server().run(
+    transport='streamable-http',
+    host='127.0.0.1',
+    port=int(sys.argv[1]),
+    streamable_http_path='/mcp',
+)
+"""
+
 
 @pytest.fixture(scope="module")
 def factory_mcp_http_transport() -> Iterator[StreamableHttpServerParameters]:
@@ -21,17 +35,7 @@ def factory_mcp_http_transport() -> Iterator[StreamableHttpServerParameters]:
         port = listener.getsockname()[1]
 
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "industrial_ai_agent.infrastructure.factory_mcp_server",
-            "--transport",
-            "streamable-http",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-        ],
+        [sys.executable, "-c", _IN_MEMORY_FACTORY_HTTP_SERVER, str(port)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

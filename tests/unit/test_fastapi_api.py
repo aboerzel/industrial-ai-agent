@@ -238,7 +238,10 @@ def test_mcp_unavailability_maps_to_service_unavailable() -> None:
     }
 
 
-def test_streamable_http_connection_failure_maps_to_service_unavailable() -> None:
+def test_streamable_http_connection_failure_maps_to_service_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MCP_INDUSTRIAL_AGENT_TOKEN", "unit-test-token")
     service = create_default_troubleshooting_run_service(
         factory_mcp_url="http://127.0.0.1:1/mcp",
         knowledge_mcp_url="http://127.0.0.1:1/mcp",

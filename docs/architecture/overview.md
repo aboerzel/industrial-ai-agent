@@ -66,6 +66,34 @@ the non-superuser application role receives a parameterized transaction-local
 MCP results, and the LangGraph run's effective classification. It is separate from
 subject authorization and from ADR-009 model egress eligibility.
 
+ADR-015 adds an authenticated HTTP MCP client boundary. The transport adapter verifies a
+local-demo opaque bearer token, resolves a server-owned identity to a request-specific
+`SecurityContext` and immutable MCP permissions, and does not accept client-selected
+identity, clearance, or permission headers. `industrial-agent` resolves to
+`CONFIDENTIAL` with Factory/Knowledge read and maintenance-ticket permission;
+`codex-development` resolves to `INTERNAL` with Factory/Knowledge read permissions
+only. Tool filtering runs for both `tools/list` and `tools/call`; it supplements, but
+does not replace, LangGraph `ToolPolicy`, PostgreSQL RLS, ADR-009 egress checks, or the
+approval interrupt. Knowledge performs catalog RLS filtering before parsing, indexing,
+embedding, reranking, and result construction, and caches each retrieval pipeline by the
+complete `SecurityContext` so a higher-clearance index cannot be reused for an INTERNAL
+request.
+
+```mermaid
+flowchart LR
+    Industrial["Industrial Agent\nBearer identity"] --> HTTP["MCP HTTP boundary"]
+    Codex["Codex Development\nBearer identity"] --> HTTP
+    HTTP --> Resolver["McpClientContextResolver"]
+    Resolver --> IndustrialAccess["industrial-agent\nCONFIDENTIAL + read/write permission"]
+    Resolver --> CodexAccess["codex-development\nINTERNAL + read permission"]
+    IndustrialAccess --> Discovery["Tool discovery and dispatch authorization"]
+    CodexAccess --> Discovery
+    Discovery --> Capability["Request-scoped capability"]
+    Capability --> RLS["PostgreSQL RLS\ntransaction-local app.clearance"]
+    Capability --> Retrieval["Clearance-isolated knowledge pipeline"]
+    Industrial --> HITL["ToolPolicy + interrupt()\nbefore maintenance write"]
+```
+
 FastAPI now provides the local/demo external Application Boundary. Its versioned
 `POST /api/v1/runs` endpoint creates a UUID, records lifecycle state in the PostgreSQL
 `agent_runtime` schema, and awaits an injected troubleshooting run service. That service creates
@@ -218,8 +246,9 @@ The MCP path does not replace ADR-009: every graph model call still goes through
 service transport, not permission to egress tool data to a public model. Knowledge MCP
 uses local Ollama embeddings and a local Hugging Face cache for reranking; queries,
 chunks, embeddings, and reranker inputs do not reach a public provider. The local Docker
-demo has no MCP authentication; remote or production exposure requires explicit future
-authentication and transport security. The write tool remains fixed, strict, and
+demo uses distinct environment-only opaque bearer tokens for its two authenticated MCP
+identities; remote or production exposure requires stronger identity, secret
+distribution, TLS, and deployment isolation. The write tool remains fixed, strict, and
 approval-gated; this slice does not add generalized multi-server routing or automatic
 fallback.
 

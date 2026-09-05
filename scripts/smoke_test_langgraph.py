@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -195,10 +196,12 @@ def _mcp_servers_from_args(
 ) -> tuple[McpServerConfiguration, ...]:
     if args.mcp_transport == "http":
         factory_transport: FactoryMcpTransport = StreamableHttpServerParameters(
-            url=args.mcp_url
+            url=args.mcp_url,
+            bearer_token=_required_industrial_agent_token(),
         )
         knowledge_transport: FactoryMcpTransport = StreamableHttpServerParameters(
-            url=args.knowledge_mcp_url
+            url=args.knowledge_mcp_url,
+            bearer_token=_required_industrial_agent_token(),
         )
     else:
         factory_transport = StdioServerParameters(
@@ -221,6 +224,13 @@ def _mcp_servers_from_args(
             allowed_tool_names=DEFAULT_ALLOWED_KNOWLEDGE_TOOLS,
         ),
     )
+
+
+def _required_industrial_agent_token() -> str:
+    token = os.getenv("MCP_INDUSTRIAL_AGENT_TOKEN")
+    if not token:
+        raise RuntimeError("MCP_INDUSTRIAL_AGENT_TOKEN must be configured")
+    return token
 
 
 if __name__ == "__main__":

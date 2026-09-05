@@ -41,6 +41,7 @@ PRODUCTS = {
     "P4802": "00000000-0000-0000-0000-000000004802",
     "P4805": "00000000-0000-0000-0000-000000004805",
     "P4811": "00000000-0000-0000-0000-000000004811",
+    "P4900": "00000000-0000-0000-0000-000000004900",
 }
 
 
@@ -88,7 +89,7 @@ def _seed_factory(session: Session) -> None:
                 id=_uuid(identifier),
                 factory_id=_uuid(FACTORY_ID),
                 product_code=code,
-                classification=2,
+                classification=1 if code == "P4900" else 2,
             )
         )
 
@@ -103,6 +104,8 @@ def _seed_product_events(session: Session) -> None:
         ("P4802", "S02", "2026-01-16T08:11:00+00:00", "WARNING", "POSITION-ENC-02"),
         ("P4805", "S02", "2026-01-16T08:22:00+00:00", "WARNING", "POSITION-ENC-02"),
         ("P4811", "S02", "2026-01-16T08:33:00+00:00", "WARNING", "POSITION-ENC-02"),
+        ("P4900", "S01", "2026-01-20T08:00:00+00:00", "COMPLETED", None),
+        ("P4900", "S02", "2026-01-20T08:04:00+00:00", "WARNING", "POSITION-ENC-02"),
     )
     for index, (product_code, station_code, event_at, status, error_code) in enumerate(
         events, start=1
@@ -115,7 +118,7 @@ def _seed_product_events(session: Session) -> None:
                 event_at=datetime.fromisoformat(event_at),
                 status=status,
                 error_code=error_code,
-                classification=2,
+                classification=1 if product_code == "P4900" else 2,
             )
         )
 
@@ -133,6 +136,7 @@ def _seed_operational_records(session: Session) -> None:
         (
             ("S02", "2026-01-16T09:00:00+00:00", "FAULTED", "POSITION-ENC-02"),
             ("S04", "2026-01-15T08:10:00+00:00", "FAULTED", "QUALITY-09"),
+            ("S02", "2026-01-20T08:05:00+00:00", "RUNNING", None),
         ),
         start=201,
     ):
@@ -143,7 +147,7 @@ def _seed_operational_records(session: Session) -> None:
                 observed_at=datetime.fromisoformat(observed_at),
                 state=state,
                 active_error_code=error_code,
-                classification=2,
+                classification=1 if observed_at == "2026-01-20T08:05:00+00:00" else 2,
             )
         )
     session.merge(

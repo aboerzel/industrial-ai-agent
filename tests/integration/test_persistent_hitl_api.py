@@ -70,8 +70,20 @@ pytestmark = pytest.mark.skipif(
     reason="requires FACTORY_DATABASE_URL for the local PostgreSQL integration service",
 )
 
-if sys.platform == "win32":
+
+@pytest.fixture(scope="module", autouse=True)
+def _windows_selector_event_loop_policy() -> Iterator[None]:
+    """Limit the PostgreSQL test-loop workaround to this module."""
+    if sys.platform != "win32":
+        yield
+        return
+    previous_policy = asyncio.get_event_loop_policy()
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    try:
+        yield
+    finally:
+        asyncio.set_event_loop_policy(previous_policy)
+
 
 _KNOWLEDGE_SERVER_SOURCE = """
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult

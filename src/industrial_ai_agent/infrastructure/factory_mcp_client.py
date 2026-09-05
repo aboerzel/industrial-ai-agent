@@ -1,13 +1,14 @@
 """Official-SDK client path for factory MCP transports."""
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import Tool
 
 
@@ -16,6 +17,11 @@ class StreamableHttpServerParameters:
     """Network endpoint for one stateful Streamable HTTP MCP session."""
 
     url: str
+    bearer_token: str | None = field(default=None, repr=False)
+    request_headers: Mapping[str, str] = field(
+        default_factory=dict,
+        repr=False,
+    )
 
 
 type McpTransport = StdioServerParameters | StreamableHttpServerParameters
@@ -49,8 +55,14 @@ async def open_mcp_session(
                 stdio_client(transport)
             )
         else:
+            headers = dict(transport.request_headers)
+            if transport.bearer_token:
+                headers["Authorization"] = f"Bearer {transport.bearer_token}"
+            http_client = await stack.enter_async_context(
+                create_mcp_http_client(headers or None)
+            )
             read_stream, write_stream = await stack.enter_async_context(
-                streamable_http_client(transport.url)
+                streamable_http_client(transport.url, http_client=http_client)
             )
         session = await stack.enter_async_context(
             ClientSession(read_stream, write_stream)
