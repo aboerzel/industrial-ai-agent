@@ -11,6 +11,7 @@ dependencies = [
     "httpx2>=2.0,<3.0",
     "langchain-core>=1.2,<2.0",
     "langchain-ollama>=1.0,<2.0",
+    "langfuse>=4.15,<5.0",
     "langgraph>=1.2,<2.0",
     "langgraph-checkpoint-postgres>=3.1.2,<3.2",
     "mcp>=2.0,<3.0",

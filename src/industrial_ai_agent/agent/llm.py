@@ -84,12 +84,23 @@ class LLMRequest(BaseModel):
     tools: tuple[LLMToolDefinition, ...] = ()
 
 
+class LLMUsage(BaseModel):
+    """Provider-reported token usage; omitted when the provider does not supply it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+
+
 class LLMResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     text: str | None
     tool_calls: tuple[LLMToolCall, ...] = ()
     finish_reason: FinishReason
+    usage: LLMUsage | None = None
 
 
 class LLMClient(Protocol):

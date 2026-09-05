@@ -23,12 +23,41 @@ Application -> OTLP -> OpenTelemetry Collector -> Tempo (traces)
                                         -> Prometheus (metrics)
                                         -> Loki (logs)
 Grafana -> Tempo + Prometheus + Loki
+Application -> shared OTel TracerProvider -> Langfuse (LLM/agent observations)
 ```
 
 The Collector is the central telemetry boundary. Grafana is the local analysis UI,
 Tempo stores distributed traces, Prometheus stores metrics, and Loki stores structured
 logs. Docker Compose provisions all configuration. Honeycomb, Grafana Cloud, and other
 OTLP-compatible targets are optional future Collector exporters.
+
+Langfuse v4 is a complementary local LLM/agent observability system, not a replacement
+for the OTel/Collector/Grafana stack. Its current official self-hosted Compose topology
+uses `langfuse-web`, `langfuse-worker`, PostgreSQL, ClickHouse, Redis, and MinIO with
+persistent named volumes. The local UI is `http://localhost:3001`; the separate port
+avoids Grafana's `3000`. It is configured through non-committed environment variables.
+
+The current Python `langfuse` v4 SDK attaches its `LangfuseSpanProcessor` to the already
+owned OTel `TracerProvider`; it neither installs a replacement global provider nor adds
+an OTel Collector exporter. A strict SDK `should_export_span` callback permits only the
+project-owned `agent.run` span as a Langfuse `agent` observation and its `llm.call` child
+as a Langfuse `generation`. HTTP, SQL, persistence, framework, MCP, retrieval, and
+other OTel spans remain in Tempo only. The shared OTel trace ID is therefore the
+Langfuse trace identifier, while `run_id` is copied to allowlisted Langfuse observation
+metadata. This preserves `run_id` -> OTel trace -> Langfuse trace/observation
+correlation without turning any identifier into a Prometheus label.
+
+The `ObservedLLMClient` infrastructure decorator is the sole Langfuse data boundary. It
+captures profile, configured provider/model, classification, status, call latency, and
+only token fields present in an actual provider response. The OpenAI-compatible adapter
+maps `prompt_tokens`, `completion_tokens`, and `total_tokens` when supplied; absent or
+malformed values remain explicitly `unavailable` and are never estimated. The local
+Ollama profiles explicitly configure API monetary cost as USD `0`; that means no billed
+model API call, not electricity, hardware, or total cost of ownership. External provider
+cost remains unavailable in the application unless a reliable Langfuse model definition
+matches it or an explicit profile cost is configured. Langfuse may calculate matching
+model-definition costs from ingested usage; it is not an authorization or accounting
+enforcement source.
 
 The local stack also has one dedicated `observability_mcp` service. It is a read-only
 Infrastructure query adapter, not an observability store and not an agent loop. Its
@@ -87,6 +116,16 @@ Collector adds an attribute deletion policy. OTel does not bypass ADR-009 model 
 ADR-014 RLS, MCP authorization, or HITL. Exporter failure is non-fatal when telemetry is
 optional.
 
+Langfuse starts metadata-only. Its allowed data is `run.id`, model profile/provider/name,
+classification, success/failure, latency, provider-reported token counts, and an
+explicit API-cost status/value when configured. It receives no prompts, model outputs,
+tool arguments/results, retrieval content/chunks, SQL, credentials, authorization
+headers, database URLs, stack traces, or arbitrary exception messages. The same Python
+allowlist builds its Langfuse GenAI/metadata attributes, so Langfuse cannot bypass the
+ADR-016 privacy boundary. Langfuse unavailability, incomplete credentials, processor
+initialization failure, flush failure, or backend export failure fails open for business
+execution.
+
 The telemetry span helper disables SDK exception recording and writes only the
 allowlisted sanitized error type/code. The Collector also deletes accidental SQL,
 source-code-path, exception-stacktrace, and raw/dynamic HTTP request attributes, plus
@@ -113,8 +152,13 @@ runs, errors, LLM calls, MCP calls, retrieval calls, and approvals.
   service name and exports its bounded metrics through the Collector.
 * `observability_mcp` has stable resource service name `observability-mcp`; observing
   its own calls is permitted, but its fixed tools never recursively initiate RCA.
-* Raw prompts and results require a separate classification-governed decision. Langfuse
-  is explicitly out of scope for this slice.
+* Langfuse enables local LLM usage/cost exploration and later dataset/evaluation links,
+  while versioned repository eval datasets and deterministic scoring remain unchanged.
+  A later slice may connect a curated, classification-governed subset to Langfuse
+  datasets/experiments; it must not migrate or weaken the existing eval framework.
+* Langfuse's model API cost is distinct from infrastructure cost and total cost of
+  ownership. A Cost MCP remains unimplemented until real consumption requirements show
+  that Langfuse's usage/cost source is insufficient.
 
 ## Alternatives Considered
 
@@ -129,8 +173,15 @@ external data egress. The Collector preserves the future OTLP export path.
 
 ### Store full prompts and results for debugging
 
-Rejected. It conflicts with classification and data minimization. A later Langfuse slice
-may introduce governed prompt/response observability under a dedicated policy.
+Rejected. It conflicts with classification and data minimization. Langfuse remains
+metadata-only until a separate governed prompt/response decision is accepted.
+
+### Isolated Langfuse TracerProvider
+
+Rejected. The current SDK documents that isolated providers can create incomplete or
+orphaned trees when sharing OTel context. Attaching a strictly filtered processor to the
+existing owned provider preserves the agent/generation hierarchy and avoids exporting
+infrastructure spans to Langfuse.
 
 ### Use only logs or only traces
 

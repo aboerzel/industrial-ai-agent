@@ -11,6 +11,7 @@ from industrial_ai_agent.agent.llm import (
     LLMRequest,
     LLMResponse,
     LLMToolCall,
+    LLMUsage,
     ModelProfile,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
@@ -79,6 +80,7 @@ class OpenAICompatibleLLMClient:
                 choice.finish_reason,
                 FinishReason.UNKNOWN,
             ),
+            usage=_parse_usage(getattr(completion, "usage", None)),
         )
 
     def close(self) -> None:
@@ -122,6 +124,31 @@ def _parse_tool_call(tool_call: Any) -> LLMToolCall:
         id=tool_call.id,
         name=tool_call.function.name,
         arguments=arguments,
+    )
+
+
+def _parse_usage(usage: Any) -> LLMUsage | None:
+    """Map only token counts supplied by an OpenAI-compatible provider."""
+    if usage is None:
+        return None
+    input_tokens = _token_count(usage, "prompt_tokens")
+    output_tokens = _token_count(usage, "completion_tokens")
+    total_tokens = _token_count(usage, "total_tokens")
+    if input_tokens is None and output_tokens is None and total_tokens is None:
+        return None
+    return LLMUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+def _token_count(usage: Any, name: str) -> int | None:
+    value = getattr(usage, name, None)
+    return (
+        value
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        else None
     )
 
 

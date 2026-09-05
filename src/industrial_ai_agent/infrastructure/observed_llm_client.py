@@ -34,14 +34,22 @@ class ObservedLLMClient:
         attributes = {
             "model.profile": profile.name,
             "model.name": profile_config.model,
+            "model.provider": profile_config.provider,
             "execution.zone": profile_config.execution_zone.value,
             "data.classification": self._data_classification.name,
         }
         started = perf_counter()
         status = "success"
         try:
-            with self._telemetry.span("llm.call", attributes):
-                return self._delegate.chat(profile, request)
+            with self._telemetry.span("llm.call", attributes) as span:
+                response = self._delegate.chat(profile, request)
+                self._telemetry.set_span_attributes(
+                    span,
+                    _response_telemetry_attributes(
+                        response, profile_config.api_cost_usd
+                    ),
+                )
+                return response
         except Exception:
             status = "failure"
             raise
@@ -59,3 +67,25 @@ class ObservedLLMClient:
         )
         if callable(raise_classification):
             raise_classification(classification)
+
+
+def _response_telemetry_attributes(
+    response: LLMResponse, api_cost_usd: object | None
+) -> dict[str, object]:
+    """Expose only provider usage and explicitly configured API monetary cost."""
+    attributes: dict[str, object] = {
+        "telemetry.usage_status": "unavailable",
+        "telemetry.cost_status": "unavailable",
+    }
+    if response.usage is not None:
+        attributes["telemetry.usage_status"] = "provider_reported"
+        if response.usage.input_tokens is not None:
+            attributes["token.input_count"] = response.usage.input_tokens
+        if response.usage.output_tokens is not None:
+            attributes["token.output_count"] = response.usage.output_tokens
+        if response.usage.total_tokens is not None:
+            attributes["token.total_count"] = response.usage.total_tokens
+    if api_cost_usd is not None:
+        attributes["cost.api_usd"] = float(api_cost_usd)
+        attributes["telemetry.cost_status"] = "configured_api_cost"
+    return attributes

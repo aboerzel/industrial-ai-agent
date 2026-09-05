@@ -12,7 +12,7 @@ docker compose up --build -d
 Grafana is available at `http://localhost:3000`, Prometheus at
 `http://localhost:9090`, Loki at `http://localhost:3100`, and Tempo at
 `http://localhost:3200`. The OpenTelemetry Collector accepts OTLP/gRPC on `4317` and
-OTLP/HTTP on `4318`.
+OTLP/HTTP on `4318`. Langfuse v4 is available at `http://localhost:3001`.
 
 The Compose API service uses `config/model_profiles.docker.toml`. Its local Ollama
 profiles deliberately address `host.docker.internal`, which resolves the developer's
@@ -28,13 +28,40 @@ flowchart LR
     Grafana["Grafana"] --> Tempo
     Grafana --> Prometheus
     Grafana --> Loki
+    OTel --> Langfuse["Langfuse\nagent + generation only"]
 ```
 
 Grafana provisions Prometheus, Tempo, and Loki datasources and the `Industrial AI Agent
 Overview` dashboard from repository files. No dashboard setup through the UI is required.
 The dashboard contains run/error, MCP, LLM, execution-zone, retrieval, approval,
 run-rate, HTTP-latency, recent-error, and service-health panels. Its cost panel
-deliberately states that cost is not yet emitted.
+deliberately remains separate from Langfuse model API cost.
+
+## Langfuse LLM Observability
+
+Langfuse complements, rather than consumes or replaces, the technical stack. It runs
+locally as the official v4 Compose deployment (`langfuse-web`, `langfuse-worker`,
+PostgreSQL, ClickHouse, Redis, and MinIO), each with persistent named storage. The Agent
+API has no Compose dependency on it. `LANGFUSE_ENABLED`, project keys, deployment
+secrets, and headless-initialization values are local `.env` values; `.env.example`
+contains placeholders only.
+
+The existing `TracerProvider` exports all bounded technical spans to the Collector and
+also hosts the Langfuse SDK's strictly filtered processor. Langfuse receives only
+`agent.run` as an `agent` observation and `llm.call` as a nested `generation`; arbitrary
+HTTP, SQL, persistence, framework, MCP, and retrieval spans are rejected. The OTel
+`trace_id` is shared and `run_id` is allowlisted metadata on both observations, enabling
+cross-navigation without adding identifiers to Prometheus labels.
+
+`ObservedLLMClient` records provider/model/profile/classification, status, latency, and
+only actual OpenAI-compatible response counts (`prompt_tokens`, `completion_tokens`,
+`total_tokens`). Missing response usage is tagged as unavailable and is not estimated.
+The local Ollama `qwen3.5:4b` and `qwen3.5:9b` profiles explicitly declare a USD `0`
+model API cost. This excludes electricity, hardware, and total cost of ownership.
+External-provider cost is available only when Langfuse reliably matches its model pricing
+or a profile explicitly declares an API cost. Versioned eval datasets/results remain in
+the repository; a later classified curation step can link selected cases to Langfuse
+datasets/experiments without replacing deterministic scoring.
 
 ## MCP Distributed Traces
 
@@ -136,9 +163,10 @@ The local/self-hosted demonstration retains ADR-015 bearer authentication for MC
 The Collector can later add OTLP exporters for Honeycomb, Grafana Cloud, or another
 OTel-compatible backend; no cloud credentials are configured here.
 
-Langfuse is intentionally absent. A possible next slice is classification-governed
-LLM/agent observability for provider token usage, costs, prompts/responses, sessions,
-generations, and evaluations.
+This slice adds metadata-only Langfuse agent/generation observations. A later slice may
+consider classification-governed prompt/response capture, curated Langfuse datasets or
+evaluations, and a Cost / Usage MCP only after confirming that Langfuse cannot provide
+the required model-usage and API-cost view.
 
 ## Read-only Observability MCP
 

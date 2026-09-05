@@ -51,6 +51,12 @@ def create_default_app():
             enabled=_environment_bool("OTEL_ENABLED", False),
             otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317"),
             service_name=os.getenv("OTEL_SERVICE_NAME", "industrial-ai-agent"),
+            langfuse_enabled=_environment_bool("LANGFUSE_ENABLED", False),
+            langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+            langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+            langfuse_base_url=os.getenv("LANGFUSE_BASE_URL", "http://127.0.0.1:3001"),
+            langfuse_environment=os.getenv("LANGFUSE_ENVIRONMENT", "local"),
+            langfuse_release=os.getenv("LANGFUSE_RELEASE"),
         )
     )
     run_service = create_default_troubleshooting_run_service(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
@@ -48,10 +49,28 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "error.code",
         "error.type",
         "execution.zone",
+        "cost.api_usd",
+        "gen_ai.operation.name",
+        "gen_ai.provider.name",
+        "gen_ai.request.model",
+        "gen_ai.usage.cost",
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.usage.total_tokens",
+        "langfuse.observation.metadata.classification",
+        "langfuse.observation.metadata.cost_status",
+        "langfuse.observation.metadata.model_profile",
+        "langfuse.observation.metadata.provider",
+        "langfuse.observation.metadata.run_id",
+        "langfuse.observation.metadata.success",
+        "langfuse.observation.metadata.usage_status",
+        "langfuse.observation.model.name",
+        "langfuse.observation.type",
         "mcp.operation",
         "mcp.server",
         "mcp.tool",
         "model.name",
+        "model.provider",
         "model.profile",
         "operation.status",
         "operation.type",
@@ -63,9 +82,19 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "run.id",
         "run.profile",
         "telemetry.metadata_only",
+        "telemetry.cost_status",
+        "telemetry.usage_status",
         "token.input_count",
         "token.output_count",
+        "token.total_count",
     }
+)
+_LANGFUSE_OBSERVATION_TYPES = {
+    "agent.run": "agent",
+    "llm.call": "generation",
+}
+_ACTIVE_RUN_ID: ContextVar[str | None] = ContextVar(
+    "telemetry_active_run_id", default=None
 )
 _METRIC_ATTRIBUTE_KEYS = frozenset(
     {
@@ -101,6 +130,12 @@ class TelemetryConfiguration:
     otlp_endpoint: str = "127.0.0.1:4317"
     service_name: str = "industrial-ai-agent"
     service_version: str = "0.1.0"
+    langfuse_enabled: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_base_url: str = "http://127.0.0.1:3001"
+    langfuse_environment: str = "local"
+    langfuse_release: str | None = None
 
 
 class Telemetry:
@@ -113,11 +148,13 @@ class Telemetry:
         tracer_provider: TracerProvider | None = None,
         meter_provider: MeterProvider | None = None,
         logger_provider: LoggerProvider | None = None,
+        langfuse_client: object | None = None,
     ) -> None:
         self._configuration = configuration
         self._tracer_provider = tracer_provider
         self._meter_provider = meter_provider
         self._logger_provider = logger_provider
+        self._langfuse_client = langfuse_client
         self._tracer = (
             tracer_provider.get_tracer(TELEMETRY_SCOPE)
             if tracer_provider is not None
@@ -151,6 +188,11 @@ class Telemetry:
         return self._configuration.enabled
 
     @property
+    def langfuse_enabled(self) -> bool:
+        """Whether the optional Langfuse processor was configured successfully."""
+        return self._langfuse_client is not None
+
+    @property
     def tracer_provider(self) -> TracerProvider | None:
         return self._tracer_provider
 
@@ -168,11 +210,20 @@ class Telemetry:
 
     def set_span_attributes(self, span: Span, attributes: Mapping[str, object]) -> None:
         """Add dynamic metadata only after applying the telemetry allowlist."""
-        for key, value in safe_attributes(attributes).items():
+        for key, value in self._span_attributes(
+            getattr(span, "name", ""), attributes
+        ).items():
             span.set_attribute(key, value)
 
     def shutdown(self) -> None:
         """Flush optional telemetry before an API process exits; never raise to business code."""
+        if self._langfuse_client is not None:
+            for method_name in ("flush", "shutdown"):
+                try:
+                    method = getattr(self._langfuse_client, method_name)
+                    method()
+                except Exception:  # noqa: BLE001, S110 - telemetry must remain optional.
+                    pass
         for provider in (
             self._logger_provider,
             self._meter_provider,
@@ -194,22 +245,52 @@ class Telemetry:
         if not self.enabled:
             yield trace.get_current_span()
             return
+        effective_attributes = dict(attributes or {})
+        inherited_run_id = _ACTIVE_RUN_ID.get()
+        if inherited_run_id is not None:
+            effective_attributes.setdefault("run.id", inherited_run_id)
+        run_id = effective_attributes.get("run.id")
+        run_id_token: Token[str | None] | None = None
+        if isinstance(run_id, str):
+            run_id_token = _ACTIVE_RUN_ID.set(run_id)
         with self._tracer.start_as_current_span(
             name,
             record_exception=False,
             set_status_on_exception=False,
         ) as span:
-            for key, value in safe_attributes(attributes or {}).items():
+            for key, value in self._span_attributes(name, effective_attributes).items():
                 span.set_attribute(key, value)
             try:
                 yield span
                 span.set_attribute("operation.status", "success")
+                self._set_langfuse_success(span, success=True)
             except BaseException as error:
                 span.set_attribute("operation.status", "failure")
+                self._set_langfuse_success(span, success=False)
                 span.set_attribute("error.type", type(error).__name__)
                 span.set_attribute("error.code", sanitized_error_code(error))
                 span.set_status(Status(StatusCode.ERROR, sanitized_error_code(error)))
                 raise
+            finally:
+                if run_id_token is not None:
+                    _ACTIVE_RUN_ID.reset(run_id_token)
+
+    def _span_attributes(
+        self, name: str, attributes: Mapping[str, object]
+    ) -> dict[str, bool | float | int | str]:
+        safe = safe_attributes(attributes)
+        if self.langfuse_enabled:
+            safe.update(_langfuse_attributes(name, safe))
+        return safe
+
+    def _set_langfuse_success(self, span: Span, *, success: bool) -> None:
+        if (
+            self.langfuse_enabled
+            and getattr(span, "name", "") in _LANGFUSE_OBSERVATION_TYPES
+        ):
+            span.set_attribute(
+                "langfuse.observation.metadata.success", "true" if success else "false"
+            )
 
     def _log(
         self,
@@ -300,6 +381,7 @@ def configure_telemetry(configuration: TelemetryConfiguration) -> Telemetry:
             export_timeout_millis=1_000,
         )
     )
+    langfuse_client = _configure_langfuse(configuration, tracer_provider)
     meter_provider = MeterProvider(
         resource=resource,
         metric_readers=[
@@ -337,7 +419,34 @@ def configure_telemetry(configuration: TelemetryConfiguration) -> Telemetry:
         tracer_provider=tracer_provider,
         meter_provider=meter_provider,
         logger_provider=logger_provider,
+        langfuse_client=langfuse_client,
     )
+
+
+def _configure_langfuse(
+    configuration: TelemetryConfiguration, tracer_provider: TracerProvider
+) -> object | None:
+    """Attach Langfuse to the existing provider with a narrow span export policy."""
+    if (
+        not configuration.langfuse_enabled
+        or not configuration.langfuse_public_key
+        or not configuration.langfuse_secret_key
+    ):
+        return None
+    try:
+        from langfuse import Langfuse
+
+        return Langfuse(
+            public_key=configuration.langfuse_public_key,
+            secret_key=configuration.langfuse_secret_key,
+            base_url=configuration.langfuse_base_url,
+            environment=configuration.langfuse_environment,
+            release=configuration.langfuse_release,
+            tracer_provider=tracer_provider,
+            should_export_span=_should_export_to_langfuse,
+        )
+    except Exception:  # noqa: BLE001 - observability must fail open.
+        return None
 
 
 def instrument_fastapi(app: object, telemetry: Telemetry) -> None:
@@ -456,6 +565,62 @@ def _normalize_attribute_value(value: object) -> bool | float | int | str | None
     if isinstance(value, str) and len(value) <= 160 and "\n" not in value:
         return value
     return None
+
+
+def _langfuse_attributes(
+    name: str, attributes: Mapping[str, bool | float | int | str]
+) -> dict[str, bool | float | int | str]:
+    """Map the metadata allowlist onto Langfuse's OTel ingestion conventions."""
+    observation_type = _LANGFUSE_OBSERVATION_TYPES.get(name)
+    if observation_type is None:
+        return {}
+    mapped: dict[str, bool | float | int | str] = {
+        "langfuse.observation.type": observation_type,
+    }
+    metadata_keys = {
+        "run.id": "run_id",
+        "data.classification": "classification",
+        "model.profile": "model_profile",
+        "model.provider": "provider",
+        "operation.status": "success",
+        "telemetry.usage_status": "usage_status",
+        "telemetry.cost_status": "cost_status",
+    }
+    for source, destination in metadata_keys.items():
+        value = attributes.get(source)
+        if value is None:
+            continue
+        if source == "operation.status":
+            value = "true" if value == "success" else "false"
+        mapped[f"langfuse.observation.metadata.{destination}"] = str(value)
+
+    if name == "llm.call":
+        model_name = attributes.get("model.name")
+        provider = attributes.get("model.provider")
+        if model_name is not None:
+            mapped["langfuse.observation.model.name"] = model_name
+            mapped["gen_ai.request.model"] = model_name
+        if provider is not None:
+            mapped["gen_ai.provider.name"] = provider
+        token_mappings = {
+            "token.input_count": "gen_ai.usage.input_tokens",
+            "token.output_count": "gen_ai.usage.output_tokens",
+            "token.total_count": "gen_ai.usage.total_tokens",
+            "cost.api_usd": "gen_ai.usage.cost",
+        }
+        for source, destination in token_mappings.items():
+            value = attributes.get(source)
+            if value is not None:
+                mapped[destination] = value
+        mapped["gen_ai.operation.name"] = "chat"
+    return mapped
+
+
+def _should_export_to_langfuse(span: object) -> bool:
+    """Export only project-owned agent and generation observations to Langfuse."""
+    # Langfuse evaluates this predicate when the span starts, before attributes are
+    # attached. The closed span-name allowlist is therefore the enforcement point.
+    return getattr(span, "name", "") in _LANGFUSE_OBSERVATION_TYPES
 
 
 def timed() -> tuple[float, Any]:

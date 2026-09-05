@@ -612,10 +612,10 @@ flowchart TB
 ```
 
 The current repository implements deterministic unit coverage, explicitly documented
-local Ollama smoke paths, the focused first-decision tool-selection eval, and the
-complete bounded-trajectory eval. It does not implement an external eval framework,
-LLM-as-a-Judge, an observability platform, or new CI/CD infrastructure. Generated eval
-reports remain unversioned by default.
+local Ollama smoke paths, the focused first-decision tool-selection eval, the complete
+bounded-trajectory eval, and metadata-only Langfuse LLM/agent observability. It does not
+implement an external eval framework, LLM-as-a-Judge, or new CI/CD infrastructure.
+Generated eval reports remain unversioned by default.
 
 ## Package Responsibilities
 
@@ -694,6 +694,8 @@ and
 an OpenAI-compatible Chat Completions API. `LLMClientChatModel` is the narrow
 Infrastructure adapter between LangChain messages/tools and the existing `LLMClient`;
 it does not construct providers or duplicate profile and security configuration.
+`ObservedLLMClient` captures only provider-reported token usage and allowlisted LLM
+metadata into the existing OTel trace and its strictly filtered Langfuse processor.
 `InMemoryMaintenanceTicketRepository` is a deterministic test fake for the Factory-MCP
 maintenance-ticket capability; it is not an external ticketing integration.
 

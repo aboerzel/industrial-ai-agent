@@ -334,6 +334,60 @@ def test_maps_unknown_finish_reason() -> None:
     assert response.finish_reason is FinishReason.UNKNOWN
 
 
+def test_maps_provider_reported_usage_without_estimation() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Done", tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens=12,
+            completion_tokens=8,
+            total_tokens=20,
+        ),
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(completion),
+    )
+
+    response = client.chat(
+        LOCAL_QUALITY_PROFILE,
+        LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+    )
+
+    assert response.usage is not None
+    assert response.usage.input_tokens == 12
+    assert response.usage.output_tokens == 8
+    assert response.usage.total_tokens == 20
+
+
+def test_keeps_usage_unavailable_when_provider_does_not_supply_it() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Done", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(completion),
+    )
+
+    response = client.chat(
+        LOCAL_QUALITY_PROFILE,
+        LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+    )
+
+    assert response.usage is None
+
+
 def test_rejects_non_object_tool_call_arguments() -> None:
     completion = SimpleNamespace(
         choices=[

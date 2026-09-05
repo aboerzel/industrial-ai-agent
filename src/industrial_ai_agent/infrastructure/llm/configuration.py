@@ -1,4 +1,5 @@
 import tomllib
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
@@ -32,6 +33,7 @@ class ModelProfileConfig(BaseModel):
     capabilities: frozenset[LLMCapability] = Field(min_length=1)
     quality_class: QualityClass
     cost_class: CostClass
+    api_cost_usd: Decimal | None = Field(default=None, ge=0)
     api_key_env: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
