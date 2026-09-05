@@ -20,72 +20,6 @@ class _IndexedChunk:
     length: int
 
 
-class InMemoryLexicalKnowledgeRetriever:
-    def __init__(self, chunks: Iterable[KnowledgeRetrievalResult]) -> None:
-        self._index = _build_index(chunks)
-
-    def search(
-        self,
-        query: str,
-        limit: int,
-    ) -> tuple[KnowledgeRetrievalResult, ...]:
-        query_terms = _prepare_query(query, limit)
-
-        scored_results = (
-            (
-                len(query_terms & indexed_chunk.terms) / len(query_terms),
-                indexed_chunk.result,
-            )
-            for indexed_chunk in self._index
-        )
-        return _rank_results(scored_results, limit)
-
-
-class InMemoryIdfKnowledgeRetriever:
-    def __init__(self, chunks: Iterable[KnowledgeRetrievalResult]) -> None:
-        self._index = _build_index(chunks)
-        if not self._index:
-            raise ValueError("IDF index must contain at least one chunk")
-
-        self._document_frequencies = Counter(
-            term for indexed_chunk in self._index for term in indexed_chunk.terms
-        )
-
-    def document_frequency(self, term: str) -> int:
-        return self._document_frequencies[_normalize_single_term(term)]
-
-    def inverse_document_frequency(self, term: str) -> float:
-        return smoothed_inverse_document_frequency(
-            total_chunks=len(self._index),
-            document_frequency=self.document_frequency(term),
-        )
-
-    def search(
-        self,
-        query: str,
-        limit: int,
-    ) -> tuple[KnowledgeRetrievalResult, ...]:
-        query_terms = _prepare_query(query, limit)
-
-        query_weights = {
-            term: self.inverse_document_frequency(term) for term in query_terms
-        }
-        total_query_weight = sum(query_weights.values())
-        scored_results = (
-            (
-                sum(
-                    weight
-                    for term, weight in query_weights.items()
-                    if term in indexed_chunk.terms
-                )
-                / total_query_weight,
-                indexed_chunk.result,
-            )
-            for indexed_chunk in self._index
-        )
-        return _rank_results(scored_results, limit)
-
-
 class InMemoryBm25KnowledgeRetriever:
     def __init__(
         self,
@@ -197,18 +131,6 @@ def bm25_term_frequency_weight(
 
     length_normalization = 1 - b + b * chunk_length / average_chunk_length
     return (term_frequency * (k1 + 1)) / (term_frequency + k1 * length_normalization)
-
-
-def smoothed_inverse_document_frequency(
-    *,
-    total_chunks: int,
-    document_frequency: int,
-) -> float:
-    if total_chunks < 1:
-        raise ValueError("total_chunks must be at least 1")
-    if document_frequency < 0 or document_frequency > total_chunks:
-        raise ValueError("document_frequency must be between 0 and total_chunks")
-    return log((total_chunks + 1) / (document_frequency + 1)) + 1
 
 
 def _build_index(

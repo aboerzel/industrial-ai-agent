@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
-from dataclasses import dataclass
 from uuid import uuid4
 
 import pytest
@@ -13,17 +11,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
-from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
-    CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-    LangGraphTroubleshootingAgent,
-)
-from industrial_ai_agent.agent.llm import (
-    FinishReason,
-    LLMRequest,
-    LLMResponse,
-    LLMToolCall,
-    ModelProfile,
-)
 from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.app import create_app
@@ -31,35 +18,15 @@ from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
 )
 from industrial_ai_agent.infrastructure.api.schemas import RunStatus
-from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository import (
-    InMemoryMaintenanceTicketRepository,
-)
-from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
-from industrial_ai_agent.infrastructure.persistence.langgraph_checkpointer import (
-    open_langgraph_postgres_checkpointer,
-)
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlSessionFactory,
 )
-from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
 
 DATABASE_URL = os.getenv("FACTORY_DATABASE_URL")
-DEFAULT_PROFILE = ModelProfile("local_quality")
 pytestmark = pytest.mark.skipif(
     not DATABASE_URL,
     reason="requires FACTORY_DATABASE_URL for the local PostgreSQL integration service",
 )
-
-
-@dataclass
-class FakeLLMClient:
-    responses: list[LLMResponse]
-
-    def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
-        del profile, request
-        if not self.responses:
-            raise AssertionError("Unexpected LLM call")
-        return self.responses.pop(0)
 
 
 class FixedRunService:
@@ -231,130 +198,3 @@ def test_fastapi_run_survives_application_recreation() -> None:
     assert created.status_code == 200
     assert restored.status_code == 200
     assert restored.json() == created.json()
-
-
-def test_postgres_checkpoint_survives_restart_approve_and_repeat() -> None:
-    _run_async(_checkpoint_restart_scenario("approve"))
-
-
-def test_postgres_checkpoint_survives_restart_reject() -> None:
-    _run_async(_checkpoint_restart_scenario("reject"))
-
-
-def test_postgres_checkpoint_rejects_profile_and_classification_downgrade() -> None:
-    _run_async(_checkpoint_context_mismatch_scenario())
-
-
-def _run_async(awaitable: object) -> None:
-    """Use psycopg's Windows-compatible event loop for local integration coverage."""
-    if sys.platform == "win32":
-        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
-            runner.run(awaitable)
-        return
-    asyncio.run(awaitable)
-
-
-async def _checkpoint_restart_scenario(approval: str) -> None:
-    assert DATABASE_URL is not None
-    thread_id = str(uuid4())
-    ticket_repository = InMemoryMaintenanceTicketRepository()
-
-    async with open_langgraph_postgres_checkpointer(DATABASE_URL) as first_saver:
-        first_agent = _agent(
-            first_saver,
-            FakeLLMClient([_action_response()]),
-            ticket_repository,
-        )
-        paused = await first_agent.astart(
-            "Create a maintenance ticket for S04.", thread_id=thread_id
-        )
-        assert paused["pending_action"] is not None
-        assert paused["run_status"] is None
-        assert ticket_repository.tickets == ()
-
-    async with open_langgraph_postgres_checkpointer(DATABASE_URL) as second_saver:
-        second_agent = _agent(
-            second_saver,
-            FakeLLMClient([_final_response("Ticket flow completed.")]),
-            ticket_repository,
-        )
-        completed = await second_agent.aresume(thread_id=thread_id, approval=approval)
-        assert completed["run_status"] is AgentRunStatus.SUCCESS
-        if approval == "approve":
-            assert len(ticket_repository.tickets) == 1
-            repeated = await second_agent.aresume(
-                thread_id=thread_id, approval="approve"
-            )
-            assert repeated["run_status"] is AgentRunStatus.SUCCESS
-            assert len(ticket_repository.tickets) == 1
-        else:
-            assert ticket_repository.tickets == ()
-
-
-async def _checkpoint_context_mismatch_scenario() -> None:
-    assert DATABASE_URL is not None
-    thread_id = str(uuid4())
-    tickets = InMemoryMaintenanceTicketRepository()
-    async with open_langgraph_postgres_checkpointer(DATABASE_URL) as first_saver:
-        await _agent(
-            first_saver,
-            FakeLLMClient([_action_response()]),
-            tickets,
-        ).astart("Create a maintenance ticket for S04.", thread_id=thread_id)
-
-    async with open_langgraph_postgres_checkpointer(DATABASE_URL) as second_saver:
-        profile_mismatch = _agent(
-            second_saver,
-            FakeLLMClient([_final_response("Unexpected")]),
-            tickets,
-            profile=ModelProfile("public_fast"),
-        )
-        with pytest.raises(RuntimeError, match="model profile does not match"):
-            await profile_mismatch.aresume(thread_id=thread_id, approval="approve")
-
-        classification_mismatch = _agent(
-            second_saver,
-            FakeLLMClient([_final_response("Unexpected")]),
-            tickets,
-            classification=DataClassification.PUBLIC,
-        )
-        with pytest.raises(RuntimeError, match="data classification does not match"):
-            await classification_mismatch.aresume(
-                thread_id=thread_id, approval="approve"
-            )
-
-    assert tickets.tickets == ()
-
-
-def _agent(
-    checkpointer,
-    client: FakeLLMClient,
-    ticket_repository: InMemoryMaintenanceTicketRepository,
-    *,
-    profile: ModelProfile = DEFAULT_PROFILE,
-    classification: DataClassification = DataClassification.CONFIDENTIAL,
-) -> LangGraphTroubleshootingAgent:
-    return LangGraphTroubleshootingAgent(
-        LLMClientChatModel(client, profile),
-        maintenance_ticket=MaintenanceTicketCapability(ticket_repository),
-        checkpointer=checkpointer,
-        run_classification=classification,
-    )
-
-
-def _action_response() -> LLMResponse:
-    return LLMResponse(
-        text=None,
-        tool_calls=(
-            LLMToolCall(
-                id="persistent-ticket-call",
-                name=CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-                arguments={"station_id": "S04", "summary": "Investigate E-STOP-17"},
-            ),
-        ),
-        finish_reason=FinishReason.TOOL_CALLS,
-    )
-
-
-def _final_response(text: str) -> LLMResponse:
-    return LLMResponse(text=text, finish_reason=FinishReason.STOP)

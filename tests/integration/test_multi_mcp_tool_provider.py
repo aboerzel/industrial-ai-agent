@@ -24,7 +24,7 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpServerConfiguration,
 )
 
-PROFILE = ModelProfile("troubleshooting")
+PROFILE = ModelProfile("local_quality")
 _KNOWLEDGE_SERVER_SOURCE = """
 import sys
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult

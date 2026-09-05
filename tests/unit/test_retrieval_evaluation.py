@@ -261,13 +261,13 @@ def test_aggregate_results_calculates_hit_rates_and_macro_recall() -> None:
     report = aggregate_results(
         dataset="test.jsonl",
         knowledge_base="knowledge_base",
-        strategy="simple",
+        strategy="bm25",
         k=3,
         results=results,
     )
 
     assert report.hit_rate_at_1 == 0.5
-    assert report.strategy == "simple"
+    assert report.strategy == "bm25"
     assert report.hit_rate_at_k == 1.0
     assert report.mean_recall_at_k == 0.75
     assert report.missed_at_1_case_ids == ("second",)
@@ -306,7 +306,7 @@ def test_aggregate_results_reports_metrics_by_category() -> None:
     report = aggregate_results(
         dataset="test.jsonl",
         knowledge_base="knowledge_base",
-        strategy="simple",
+        strategy="bm25",
         k=3,
         results=results,
     )
@@ -330,11 +330,11 @@ def test_run_retrieval_eval_uses_requested_k_for_each_case() -> None:
         search=search,
         dataset="test.jsonl",
         knowledge_base="knowledge_base",
-        strategy="idf",
+        strategy="bm25",
         k=3,
     )
 
     assert requests == [(case.query, 3) for case in cases]
     assert report.total_cases == 2
-    assert report.strategy == "idf"
+    assert report.strategy == "bm25"
     assert report.hit_rate_at_1 == 1.0

@@ -1,14 +1,3 @@
-[profiles.troubleshooting]
-provider = "ollama"
-model = "qwen3.5:9b"
-base_url = "http://localhost:11434/v1"
-temperature = 0
-authentication = "none"
-execution_zone = "LOCAL"
-capabilities = ["TEXT", "TOOL_CALLING"]
-quality_class = "HIGH"
-cost_class = "LOW"
-
 [profiles.local_fast]
 provider = "ollama"
 model = "qwen3.5:4b"

@@ -8,7 +8,6 @@ from industrial_ai_agent.infrastructure.docling_ingestion import (
     CatalogDocument,
     DoclingDocumentIngestor,
     eligible_catalog_documents,
-    load_catalog,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -40,22 +39,26 @@ class _FakeConverter:
 def test_demo_assets_are_real_multi_format_files_with_complete_catalog_metadata() -> (
     None
 ):
-    documents = load_catalog(DEMO_FACTORY_ROOT / "metadata" / "document_catalog.json")
+    documents = json.loads(
+        (DEMO_FACTORY_ROOT / "metadata" / "document_catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
 
-    assert {document.mime_type for document in documents} >= {
+    assert {document["mime_type"] for document in documents} >= {
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
     for document in documents:
-        path = DEMO_FACTORY_ROOT / document.file_path
+        path = DEMO_FACTORY_ROOT / document["file_path"]
         assert path.is_file()
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == document.checksum
-        assert document.document_id.startswith("doc-")
-        assert document.title
-        assert document.version
-        assert document.source_system == "FACTORY-DEMO-01-DOCUMENTS"
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == document["checksum"]
+        assert document["document_id"].startswith("doc-")
+        assert document["title"]
+        assert document["version"]
+        assert document["source_system"] == "FACTORY-DEMO-01-DOCUMENTS"
     assert (
         (DEMO_FACTORY_ROOT / "images" / "S02_Positioning_Reference.png")
         .read_bytes()
@@ -64,7 +67,11 @@ def test_demo_assets_are_real_multi_format_files_with_complete_catalog_metadata(
 
 
 def test_catalog_classification_is_filtered_before_ingestion() -> None:
-    documents = load_catalog(DEMO_FACTORY_ROOT / "metadata" / "document_catalog.json")
+    documents = (
+        _catalog_document("public", DataClassification.PUBLIC),
+        _catalog_document("internal", DataClassification.INTERNAL),
+        _catalog_document("confidential", DataClassification.CONFIDENTIAL),
+    )
     public_context = SecurityContext(
         subject_id="public-demo",
         roles=("viewer",),
@@ -130,12 +137,34 @@ def test_catalog_json_has_no_unclassified_records() -> None:
 
 
 def test_malicious_service_comment_is_cataloged_confidential_demo_data() -> None:
-    documents = load_catalog(DEMO_FACTORY_ROOT / "metadata" / "document_catalog.json")
+    documents = json.loads(
+        (DEMO_FACTORY_ROOT / "metadata" / "document_catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
     document = next(
-        item for item in documents if item.document_id == "doc-1f0a9e2d8c4b7a61"
+        item for item in documents if item["document_id"] == "doc-1f0a9e2d8c4b7a61"
     )
 
-    assert document.classification is DataClassification.CONFIDENTIAL
-    content = (DEMO_FACTORY_ROOT / document.file_path).read_text(encoding="utf-8")
+    assert document["classification"] == DataClassification.CONFIDENTIAL.name
+    content = (DEMO_FACTORY_ROOT / document["file_path"]).read_text(encoding="utf-8")
     assert "Ignore previous instructions" in content
     assert "not an approved maintenance instruction" in content
+
+
+def _catalog_document(
+    document_id: str, classification: DataClassification
+) -> CatalogDocument:
+    return CatalogDocument(
+        document_id=document_id,
+        title=document_id,
+        classification=classification,
+        mime_type="application/pdf",
+        source_system="test",
+        station_code=None,
+        version="1.0",
+        valid_from="2026-01-01",
+        tags=(),
+        file_path="documents/public/Factory_Overview.pdf",
+        checksum="test",
+    )

@@ -22,7 +22,7 @@ from industrial_ai_agent.infrastructure.llm.openai_compatible import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-TROUBLESHOOTING_PROFILE = ModelProfile("troubleshooting")
+LOCAL_QUALITY_PROFILE = ModelProfile("local_quality")
 PUBLIC_FAST_PROFILE = ModelProfile("public_fast")
 
 
@@ -50,7 +50,7 @@ def create_configuration() -> LLMConfiguration:
     return LLMConfiguration.model_validate(
         {
             "profiles": {
-                "troubleshooting": {
+                "local_quality": {
                     "provider": "ollama",
                     "model": "qwen3.5:9b",
                     "base_url": "http://localhost:11434/v1",
@@ -70,7 +70,7 @@ def create_authenticated_configuration() -> LLMConfiguration:
     return LLMConfiguration.model_validate(
         {
             "profiles": {
-                "troubleshooting": {
+                "local_quality": {
                     "provider": "cloud-provider",
                     "model": "cloud-model",
                     "base_url": "https://llm.example.com/v1",
@@ -114,7 +114,7 @@ def test_maps_chat_request_and_text_response_without_network_call() -> None:
         messages=(LLMMessage(role=MessageRole.USER, content="Why was P4711 rejected?"),)
     )
 
-    response = client.chat(TROUBLESHOOTING_PROFILE, request)
+    response = client.chat(LOCAL_QUALITY_PROFILE, request)
 
     assert factory_arguments == {
         "api_key": "not-used",
@@ -171,7 +171,7 @@ def test_maps_tool_definitions_and_tool_calls_without_executing_them() -> None:
         ),
     )
 
-    response = client.chat(TROUBLESHOOTING_PROFILE, request)
+    response = client.chat(LOCAL_QUALITY_PROFILE, request)
 
     assert response.text is None
     assert response.finish_reason is FinishReason.TOOL_CALLS
@@ -221,7 +221,7 @@ def test_maps_assistant_tool_call_and_tool_result_messages() -> None:
         )
     )
 
-    client.chat(TROUBLESHOOTING_PROFILE, request)
+    client.chat(LOCAL_QUALITY_PROFILE, request)
 
     assert fake_client.completions.parameters is not None
     messages = fake_client.completions.parameters["messages"]
@@ -258,7 +258,7 @@ def test_requires_api_key_from_configured_environment_variable() -> None:
         ValueError,
         match="Missing API key environment variable: CLOUD_LLM_API_KEY",
     ):
-        client.chat(TROUBLESHOOTING_PROFILE, request)
+        client.chat(LOCAL_QUALITY_PROFILE, request)
 
 
 def test_public_fast_rejects_missing_groq_api_key_without_network_call() -> None:
@@ -304,7 +304,7 @@ def test_reads_authenticated_profile_api_key_from_environment_variable() -> None
     )
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),))
 
-    client.chat(TROUBLESHOOTING_PROFILE, request)
+    client.chat(LOCAL_QUALITY_PROFILE, request)
 
     assert factory_arguments == {
         "api_key": "test-api-key-from-environment",
@@ -329,7 +329,7 @@ def test_maps_unknown_finish_reason() -> None:
     )
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),))
 
-    response = client.chat(TROUBLESHOOTING_PROFILE, request)
+    response = client.chat(LOCAL_QUALITY_PROFILE, request)
 
     assert response.finish_reason is FinishReason.UNKNOWN
 
@@ -363,7 +363,7 @@ def test_rejects_non_object_tool_call_arguments() -> None:
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),))
 
     with pytest.raises(TypeError, match="arguments must be a JSON object"):
-        client.chat(TROUBLESHOOTING_PROFILE, request)
+        client.chat(LOCAL_QUALITY_PROFILE, request)
 
 
 def test_closes_created_clients() -> None:
@@ -382,7 +382,7 @@ def test_closes_created_clients() -> None:
         client_factory=lambda **_: fake_client,
     )
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),))
-    client.chat(TROUBLESHOOTING_PROFILE, request)
+    client.chat(LOCAL_QUALITY_PROFILE, request)
 
     client.close()
 

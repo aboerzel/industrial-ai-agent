@@ -32,19 +32,19 @@ grounding, latency, token usage, cost, or LLM-as-a-Judge quality.
 ## Manual Run
 
 Start the endpoint configured for the selected Model Profile. For the initial local
-`troubleshooting` profile, start Ollama and ensure `qwen3.5:9b` is available. Then run:
+`local_quality` profile, start Ollama and ensure `qwen3.5:9b` is available. Then run:
 
 ```powershell
-python -m evals.run_tool_selection --profile troubleshooting --mcp-transport stdio
+python -m evals.run_tool_selection --profile local_quality --mcp-transport stdio
 ```
 
 The report is written as JSON to standard output. To retain a local result explicitly:
 
 ```powershell
 python -m evals.run_tool_selection `
-  --profile troubleshooting `
+  --profile local_quality `
   --mcp-transport stdio `
-  --output evals/results/troubleshooting.json
+  --output evals/results/local_quality.json
 ```
 
 Files below `evals/results/` are ignored by Git so generated runs are not versioned

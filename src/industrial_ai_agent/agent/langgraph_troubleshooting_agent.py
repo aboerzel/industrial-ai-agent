@@ -16,7 +16,6 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
@@ -44,10 +43,6 @@ from industrial_ai_agent.agent.model_egress import (
 )
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.domain.security import effective_data_classification
-from industrial_ai_agent.tools.maintenance_ticket import (
-    CreateMaintenanceTicketArguments,
-    MaintenanceTicketCapability,
-)
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketProposalArguments,
 )
@@ -67,14 +62,6 @@ MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "requests that identify no product, station, error, or explicit documentation "
     "search, do not call a tool. Give safe general considerations or ask for the "
     "missing scope."
-)
-HITL_TROUBLESHOOTING_SYSTEM_MESSAGE = (
-    "You are an industrial troubleshooting assistant. Use only the provided action "
-    "tool when the user explicitly requests a maintenance ticket. A human must approve "
-    "the proposal before a ticket is created. When a user explicitly orders an "
-    "investigation before a ticket proposal, complete the requested read-only evidence "
-    "steps in order before proposing the action. Call one tool at a time and do not "
-    "invent industrial data."
 )
 
 
@@ -140,34 +127,19 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     effective_classification: int | None
 
 
-def _validate_pydantic_arguments(
-    schema: type[BaseModel],
-    raw_arguments: dict[str, object],
-) -> dict[str, object]:
-    return schema.model_validate(raw_arguments).model_dump()
-
-
 class LangGraphTroubleshootingAgent:
     def __init__(
         self,
         chat_model: LangChainChatModel,
         *,
         mcp_tool_provider: McpToolProvider | None = None,
-        maintenance_ticket: MaintenanceTicketCapability | None = None,
-        checkpointer: BaseCheckpointSaver[str] | AsyncPostgresSaver | None = None,
+        checkpointer: BaseCheckpointSaver[str] | None = None,
         run_classification: DataClassification | None = None,
     ) -> None:
-        self._maintenance_ticket = maintenance_ticket
         self._checkpointer = checkpointer
         self._run_classification = run_classification
         self._mcp_tool_provider = mcp_tool_provider
         self._chat_model = chat_model
-        self._action_tools = self._create_action_tools()
-        self._action_tools_by_name = {tool.name: tool for tool in self._action_tools}
-        self._hitl_graph = self._build_hitl_graph(
-            chat_model.bind_tools(self._action_tools),
-            self._action_tools_by_name,
-        )
 
     async def request_tool_selection_via_mcp(
         self,
@@ -215,111 +187,6 @@ class LangGraphTroubleshootingAgent:
         return self._restore_public_state(
             cast(CheckpointedTroubleshootingGraphState, state)
         )
-
-    def start(self, user_request: str, *, thread_id: str) -> TroubleshootingGraphState:
-        self._require_resumable_run_context()
-        config = self._checkpoint_config(thread_id)
-        self._hitl_graph.invoke(
-            self._initial_state(
-                user_request,
-                system_content=HITL_TROUBLESHOOTING_SYSTEM_MESSAGE,
-            ),
-            config=config,
-        )
-        return self.get_checkpointed_state(thread_id=thread_id)
-
-    async def astart(
-        self,
-        user_request: str,
-        *,
-        thread_id: str,
-    ) -> TroubleshootingGraphState:
-        """Start the existing HITL graph with an async framework checkpointer."""
-        self._require_resumable_run_context()
-        config = self._checkpoint_config(thread_id)
-        await self._hitl_graph.ainvoke(
-            self._initial_state(
-                user_request,
-                system_content=HITL_TROUBLESHOOTING_SYSTEM_MESSAGE,
-            ),
-            config=config,
-        )
-        return await self.aget_checkpointed_state(thread_id=thread_id)
-
-    def resume(
-        self,
-        *,
-        thread_id: str,
-        approval: object,
-    ) -> TroubleshootingGraphState:
-        self._require_resumable_run_context()
-        config = self._checkpoint_config(thread_id)
-        state = self.get_checkpointed_state(thread_id=thread_id)
-        self._require_matching_run_context(state)
-        self._hitl_graph.invoke(Command(resume=approval), config=config)
-        return self.get_checkpointed_state(thread_id=thread_id)
-
-    async def aresume(
-        self,
-        *,
-        thread_id: str,
-        approval: object,
-    ) -> TroubleshootingGraphState:
-        """Resume the checkpointed HITL graph without changing its run context."""
-        self._require_resumable_run_context()
-        config = self._checkpoint_config(thread_id)
-        state = await self.aget_checkpointed_state(thread_id=thread_id)
-        self._require_matching_run_context(state)
-        await self._hitl_graph.ainvoke(Command(resume=approval), config=config)
-        return await self.aget_checkpointed_state(thread_id=thread_id)
-
-    def get_checkpointed_state(self, *, thread_id: str) -> TroubleshootingGraphState:
-        self._require_resumable_run_context()
-        snapshot = self._hitl_graph.get_state(self._checkpoint_config(thread_id))
-        if not snapshot.values:
-            raise ValueError(f"No checkpointed run found for thread_id: {thread_id}")
-        return self._restore_public_state(
-            cast(CheckpointedTroubleshootingGraphState, snapshot.values)
-        )
-
-    async def aget_checkpointed_state(
-        self,
-        *,
-        thread_id: str,
-    ) -> TroubleshootingGraphState:
-        """Read a checkpoint through LangGraph's asynchronous saver API."""
-        self._require_resumable_run_context()
-        snapshot = await self._hitl_graph.aget_state(self._checkpoint_config(thread_id))
-        if not snapshot.values:
-            raise ValueError(f"No checkpointed run found for thread_id: {thread_id}")
-        return self._restore_public_state(
-            cast(CheckpointedTroubleshootingGraphState, snapshot.values)
-        )
-
-    def get_interrupt_payload(self, *, thread_id: str) -> dict[str, object] | None:
-        self._require_resumable_run_context()
-        snapshot = self._hitl_graph.get_state(self._checkpoint_config(thread_id))
-        if not snapshot.interrupts:
-            return None
-        payload = snapshot.interrupts[0].value
-        if not isinstance(payload, dict):
-            raise TypeError("Approval interrupt payload must be a dictionary")
-        return dict(payload)
-
-    async def aget_interrupt_payload(
-        self,
-        *,
-        thread_id: str,
-    ) -> dict[str, object] | None:
-        """Read an interrupt payload from an asynchronously persisted checkpoint."""
-        self._require_resumable_run_context()
-        snapshot = await self._hitl_graph.aget_state(self._checkpoint_config(thread_id))
-        if not snapshot.interrupts:
-            return None
-        payload = snapshot.interrupts[0].value
-        if not isinstance(payload, dict):
-            raise TypeError("Approval interrupt payload must be a dictionary")
-        return dict(payload)
 
     async def aanswer_via_mcp(
         self,
@@ -397,44 +264,6 @@ class LangGraphTroubleshootingAgent:
         return self._restore_public_state(
             cast(CheckpointedTroubleshootingGraphState, snapshot.values)
         )
-
-    def _build_hitl_graph(
-        self,
-        chat_model: LangChainChatModel,
-        tools_by_name: dict[str, BaseTool],
-    ):
-        action_policy = ToolPolicy(
-            CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-            ToolOperation.WRITE,
-            requires_approval=True,
-        )
-        tool_policies = {action_policy.name: action_policy}
-        # noinspection PyTypeChecker
-        builder = StateGraph(CheckpointedTroubleshootingGraphState)
-        # noinspection PyTypeChecker
-        builder.add_node("model", lambda state: self._model_node(chat_model, state))
-        # noinspection PyTypeChecker
-        builder.add_node(
-            "tool", lambda state: self._tool_node(tools_by_name, tool_policies, state)
-        )
-        # noinspection PyTypeChecker
-        builder.add_node("prepare_action", self._prepare_action_node)
-        # noinspection PyTypeChecker
-        builder.add_node("approval", self._approval_node)
-        # noinspection PyTypeChecker
-        builder.add_node("execute_action", self._execute_action_node)
-        # noinspection PyTypeChecker
-        builder.add_node("cancel_action", self._cancel_action_node)
-        builder.add_edge(START, "model")
-        builder.add_conditional_edges(
-            "model", lambda state: self._route_after_model(state, tool_policies)
-        )
-        builder.add_edge("tool", "model")
-        builder.add_edge("prepare_action", "approval")
-        builder.add_conditional_edges("approval", self._route_after_approval)
-        builder.add_edge("execute_action", "model")
-        builder.add_edge("cancel_action", END)
-        return builder.compile(checkpointer=self._checkpointer)
 
     def _build_async_graph(
         self,
@@ -580,43 +409,6 @@ class LangGraphTroubleshootingAgent:
             return "cancel_action"
         raise RuntimeError("Approval node did not produce a valid decision")
 
-    def _tool_node(
-        self,
-        tools_by_name: dict[str, BaseTool],
-        tool_policies: dict[str, ToolPolicy],
-        state: CheckpointedTroubleshootingGraphState,
-    ) -> dict[str, object]:
-        message = state["messages"][-1]
-        if not isinstance(message, AIMessage) or len(message.tool_calls) != 1:
-            raise RuntimeError("Tool node requires exactly one AI tool call")
-
-        tool_call = message.tool_calls[0]
-        tool_name = tool_call["name"]
-        tool = tools_by_name.get(tool_name)
-        if tool is None:
-            raise UnknownToolError(f"Unknown tool: {tool_name}")
-        policy = tool_policies.get(tool_name)
-        if policy is None or policy.operation is not ToolOperation.READ:
-            raise UnknownToolError(
-                f"Tool is not authorized for read execution: {tool_name}"
-            )
-
-        arguments = self._validate_tool_arguments(tool, dict(tool_call["args"]))
-        result = tool.invoke(arguments)
-        effective_classification = self._observe_result_classification(state, result)
-        executed_call = {"tool": tool_name, "arguments": arguments}
-        return {
-            "messages": [
-                ToolMessage(
-                    content=str(result),
-                    tool_call_id=_require_tool_call_id(tool_call.get("id")),
-                )
-            ],
-            "executed_tool_count": state["executed_tool_count"] + 1,
-            "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
-            "effective_classification": effective_classification,
-        }
-
     async def _atool_node(
         self,
         tools_by_name: dict[str, BaseTool],
@@ -638,8 +430,13 @@ class LangGraphTroubleshootingAgent:
                 f"Tool is not authorized for read execution: {tool_name}"
             )
 
-        arguments = self._validate_tool_arguments(tool, dict(tool_call["args"]))
-        result = await tool.ainvoke(arguments)
+        arguments = dict(tool_call["args"])
+        try:
+            result = await tool.ainvoke(arguments)
+        except ValidationError as error:
+            raise InvalidToolArgumentsError(
+                f"Invalid arguments for {tool_name}"
+            ) from error
         effective_classification = self._observe_result_classification(state, result)
         executed_call = {"tool": tool_name, "arguments": arguments}
         return {
@@ -652,40 +449,6 @@ class LangGraphTroubleshootingAgent:
             "executed_tool_count": state["executed_tool_count"] + 1,
             "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
             "effective_classification": effective_classification,
-        }
-
-    def _prepare_action_node(
-        self,
-        state: CheckpointedTroubleshootingGraphState,
-    ) -> dict[str, object]:
-        if self._maintenance_ticket is None:
-            raise UnknownToolError(
-                f"Unknown tool: {CREATE_MAINTENANCE_TICKET_TOOL_NAME}"
-            )
-        message = state["messages"][-1]
-        if not isinstance(message, AIMessage) or len(message.tool_calls) != 1:
-            raise RuntimeError("Action preparation requires exactly one AI tool call")
-        tool_call = message.tool_calls[0]
-        if tool_call["name"] != CREATE_MAINTENANCE_TICKET_TOOL_NAME:
-            raise UnknownToolError(f"Unknown tool: {tool_call['name']}")
-        try:
-            arguments = CreateMaintenanceTicketArguments.model_validate(
-                dict(tool_call["args"])
-            )
-        except ValidationError as error:
-            raise InvalidToolArgumentsError(
-                f"Invalid arguments for {CREATE_MAINTENANCE_TICKET_TOOL_NAME}"
-            ) from error
-        tool_call_id = _require_tool_call_id(tool_call.get("id"))
-        return {
-            "pending_action": PendingMaintenanceAction(
-                action=CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-                request_id=tool_call_id,
-                tool_call_id=tool_call_id,
-                station_id=arguments.station_id,
-                summary=arguments.summary,
-            ).model_dump(),
-            "approval_result": None,
         }
 
     @staticmethod
@@ -753,39 +516,6 @@ class LangGraphTroubleshootingAgent:
         )
         return {"approval_result": approval.value}
 
-    def _execute_action_node(
-        self,
-        state: CheckpointedTroubleshootingGraphState,
-    ) -> dict[str, object]:
-        if self._maintenance_ticket is None:
-            raise RuntimeError("Maintenance ticket capability is not configured")
-        pending_action = _require_pending_action(state)
-        if state["approval_result"] != ApprovalDecision.APPROVE.value:
-            raise RuntimeError("Maintenance ticket execution requires approval")
-        result = self._maintenance_ticket.create_maintenance_ticket(
-            request_id=pending_action["request_id"],
-            station_id=pending_action["station_id"],
-            summary=pending_action["summary"],
-        )
-        executed_call = {
-            "tool": CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-            "arguments": {
-                "station_id": pending_action["station_id"],
-                "summary": pending_action["summary"],
-            },
-        }
-        return {
-            "messages": [
-                ToolMessage(
-                    content=result.model_dump_json(),
-                    tool_call_id=pending_action["tool_call_id"],
-                )
-            ],
-            "executed_tool_count": state["executed_tool_count"] + 1,
-            "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
-            "pending_action": None,
-        }
-
     @staticmethod
     async def _aexecute_mcp_action_node(
         tools_by_name: dict[str, BaseTool],
@@ -838,42 +568,6 @@ class LangGraphTroubleshootingAgent:
             "run_status": AgentRunStatus.SUCCESS.value,
             "final_answer": "Maintenance ticket creation was rejected; no ticket was created.",
         }
-
-    @staticmethod
-    def _validate_tool_arguments(
-        tool: BaseTool,
-        raw_arguments: dict[str, object],
-    ) -> dict[str, object]:
-        arguments_schema = tool.args_schema
-        if not (
-            isinstance(arguments_schema, type)
-            and issubclass(arguments_schema, BaseModel)
-        ):
-            raise TypeError(f"Tool {tool.name} must expose a Pydantic arguments schema")
-        try:
-            return _validate_pydantic_arguments(arguments_schema, raw_arguments)
-        except ValidationError as error:
-            raise InvalidToolArgumentsError(
-                f"Invalid arguments for {tool.name}"
-            ) from error
-
-    def _create_action_tools(self) -> tuple[BaseTool, ...]:
-        tools: list[BaseTool] = []
-        if self._maintenance_ticket is not None:
-            tools.append(
-                StructuredTool.from_function(
-                    func=lambda station_id, summary: (
-                        "Approval required before execution."
-                    ),
-                    name=CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-                    description=(
-                        "Propose a maintenance ticket for a station. The ticket is only "
-                        "created after explicit human approval."
-                    ),
-                    args_schema=CreateMaintenanceTicketArguments,
-                )
-            )
-        return tuple(tools)
 
     @asynccontextmanager
     async def _open_mcp_session(self) -> AsyncIterator[McpToolSession]:

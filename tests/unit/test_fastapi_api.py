@@ -252,9 +252,7 @@ def test_streamable_http_connection_failure_maps_to_service_unavailable() -> Non
     ),
 )
 def test_unexpected_failure_does_not_expose_internal_details(error: Exception) -> None:
-    client = TestClient(
-        create_app(FakeRunService(error=error))
-    )
+    client = TestClient(create_app(FakeRunService(error=error)))
 
     response = client.post("/api/v1/runs", json={"message": "Investigate P4711."})
 

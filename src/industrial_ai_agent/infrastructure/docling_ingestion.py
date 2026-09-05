@@ -1,7 +1,6 @@
 """Local Docling ingestion with explicit catalog classification propagation."""
 
 import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -69,26 +68,6 @@ class DoclingDocumentIngestor:
                 f"Docling produced no text for document: {catalog_document.document_id}"
             )
         return _chunk_document(catalog_document, markdown)
-
-
-def load_catalog(path: Path) -> tuple[CatalogDocument, ...]:
-    raw_documents: list[dict[str, Any]] = json.loads(path.read_text(encoding="utf-8"))
-    return tuple(
-        CatalogDocument(
-            document_id=document["document_id"],
-            title=document["title"],
-            classification=DataClassification[document["classification"]],
-            mime_type=document["mime_type"],
-            source_system=document["source_system"],
-            station_code=document["station_code"],
-            version=document["version"],
-            valid_from=document["valid_from"],
-            tags=tuple(document["tags"]),
-            file_path=document["file_path"],
-            checksum=document["checksum"],
-        )
-        for document in raw_documents
-    )
 
 
 def eligible_catalog_documents(

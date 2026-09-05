@@ -13,8 +13,6 @@ from industrial_ai_agent.infrastructure.hybrid_knowledge_retriever import (
 )
 from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
     InMemoryBm25KnowledgeRetriever,
-    InMemoryIdfKnowledgeRetriever,
-    InMemoryLexicalKnowledgeRetriever,
     load_markdown_chunks,
 )
 from industrial_ai_agent.infrastructure.in_memory_semantic_knowledge_retriever import (
@@ -34,8 +32,6 @@ DEFAULT_DATASET_PATH = (
 DEFAULT_KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
 DEFAULT_K = 3
 RetrievalStrategy = Literal[
-    "simple",
-    "idf",
     "bm25",
     "semantic",
     "hybrid",
@@ -356,8 +352,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, default=DEFAULT_K)
     parser.add_argument(
         "--strategy",
-        choices=("simple", "idf", "bm25", "semantic", "hybrid", "reranked"),
-        default="simple",
+        choices=("bm25", "semantic", "hybrid", "reranked"),
+        default="bm25",
         help="Retrieval implementation to evaluate.",
     )
     parser.add_argument(
@@ -401,10 +397,6 @@ def _create_retriever(
     strategy: RetrievalStrategy,
     chunks: tuple[KnowledgeRetrievalResult, ...],
 ) -> KnowledgeRetriever:
-    if strategy == "simple":
-        return InMemoryLexicalKnowledgeRetriever(chunks)
-    if strategy == "idf":
-        return InMemoryIdfKnowledgeRetriever(chunks)
     if strategy == "bm25":
         return InMemoryBm25KnowledgeRetriever(chunks)
     if strategy == "semantic":

@@ -22,10 +22,10 @@ def load_project_configuration() -> LLMConfiguration:
     return load_llm_configuration(PROJECT_ROOT / "config" / "model_profiles.toml")
 
 
-def test_loads_troubleshooting_profile() -> None:
+def test_loads_local_quality_profile() -> None:
     configuration = load_project_configuration()
 
-    profile = configuration.get_profile("troubleshooting")
+    profile = configuration.get_profile("local_quality")
 
     assert profile.provider == "ollama"
     assert profile.model == "qwen3.5:9b"
@@ -54,23 +54,6 @@ def test_loads_local_fast_profile() -> None:
         {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
     )
     assert profile.quality_class is QualityClass.STANDARD
-    assert profile.cost_class is CostClass.LOW
-    assert profile.api_key_env is None
-
-
-def test_loads_local_quality_profile() -> None:
-    profile = load_project_configuration().get_profile("local_quality")
-
-    assert profile.provider == "ollama"
-    assert profile.model == "qwen3.5:9b"
-    assert str(profile.base_url) == "http://localhost:11434/v1"
-    assert profile.temperature == 0
-    assert profile.authentication is AuthenticationMode.NONE
-    assert profile.execution_zone is ExecutionZone.LOCAL
-    assert profile.capabilities == frozenset(
-        {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-    )
-    assert profile.quality_class is QualityClass.HIGH
     assert profile.cost_class is CostClass.LOW
     assert profile.api_key_env is None
 
@@ -122,7 +105,7 @@ def test_rejects_api_key_value_in_model_configuration() -> None:
         LLMConfiguration.model_validate(
             {
                 "profiles": {
-                    "troubleshooting": {
+                    "local_quality": {
                         "provider": "ollama",
                         "model": "qwen3.5:9b",
                         "base_url": "http://localhost:11434/v1",
@@ -144,7 +127,7 @@ def test_requires_environment_variable_name_for_api_key_authentication() -> None
         LLMConfiguration.model_validate(
             {
                 "profiles": {
-                    "troubleshooting": {
+                    "local_quality": {
                         "provider": "cloud-provider",
                         "model": "cloud-model",
                         "base_url": "https://llm.example.com/v1",
@@ -165,7 +148,7 @@ def test_rejects_environment_variable_name_for_no_authentication() -> None:
         LLMConfiguration.model_validate(
             {
                 "profiles": {
-                    "troubleshooting": {
+                    "local_quality": {
                         "provider": "ollama",
                         "model": "qwen3.5:9b",
                         "base_url": "http://localhost:11434/v1",
@@ -187,7 +170,7 @@ def test_requires_explicit_execution_zone() -> None:
         LLMConfiguration.model_validate(
             {
                 "profiles": {
-                    "troubleshooting": {
+                    "local_quality": {
                         "provider": "ollama",
                         "model": "qwen3.5:9b",
                         "base_url": "http://localhost:11434/v1",
@@ -246,4 +229,4 @@ def test_rejects_unknown_routing_metadata(field: str, value: object) -> None:
     }
 
     with pytest.raises(ValidationError, match=field):
-        LLMConfiguration.model_validate({"profiles": {"troubleshooting": raw_profile}})
+        LLMConfiguration.model_validate({"profiles": {"local_quality": raw_profile}})

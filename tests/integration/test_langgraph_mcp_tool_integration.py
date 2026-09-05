@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from industrial_ai_agent.agent.agent_run import (
     AgentRunStatus,
+    InvalidToolArgumentsError,
     MissingLLMResponseTextError,
 )
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
@@ -49,7 +50,7 @@ from industrial_ai_agent.tools.tool_contracts import (
     SearchDocumentationArguments,
 )
 
-PROFILE = ModelProfile("troubleshooting")
+PROFILE = ModelProfile("local_quality")
 
 
 class FakeLLMClient:
@@ -271,11 +272,39 @@ def test_empty_tool_less_model_response_remains_fail_closed() -> None:
             FakeLLMClient(LLMResponse(text=None, finish_reason=FinishReason.STOP)),
             PROFILE,
         ),
-        mcp_tool_provider=cast(McpToolProvider, cast(object, _CountingMcpToolProvider())),
+        mcp_tool_provider=cast(
+            McpToolProvider, cast(object, _CountingMcpToolProvider())
+        ),
     )
 
     with pytest.raises(MissingLLMResponseTextError, match="did not contain text"):
-        asyncio.run(agent.aanswer_via_mcp("There have been intermittent quality issues."))
+        asyncio.run(
+            agent.aanswer_via_mcp("There have been intermittent quality issues.")
+        )
+
+
+def test_framework_tool_validation_rejects_unknown_arguments_before_invocation() -> (
+    None
+):
+    provider = _CountingMcpToolProvider()
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            FakeLLMClient(
+                _tool_response(
+                    "get_product_history",
+                    {"product_id": "P4711", "unexpected": "rejected"},
+                    "invalid-history",
+                )
+            ),
+            PROFILE,
+        ),
+        mcp_tool_provider=cast(McpToolProvider, cast(object, provider)),
+    )
+
+    with pytest.raises(InvalidToolArgumentsError, match="Invalid arguments"):
+        asyncio.run(agent.aanswer_via_mcp("Investigate P4711."))
+
+    assert provider.invocations == []
 
 
 def test_mcp_path_keeps_final_egress_check_before_any_provider_call() -> None:

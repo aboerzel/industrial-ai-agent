@@ -192,7 +192,7 @@ def test_aggregate_results_calculates_both_accuracies() -> None:
 
     report = aggregate_results(
         dataset="test.jsonl",
-        model_profile="troubleshooting",
+        model_profile="local_quality",
         results=results,
     )
 
@@ -217,7 +217,7 @@ def test_run_eval_continues_after_independent_case_failure() -> None:
         cases=cases,
         request_tool_selection=request_tool_selection,
         dataset="test.jsonl",
-        model_profile="troubleshooting",
+        model_profile="local_quality",
         orchestration_path="langgraph",
     )
 

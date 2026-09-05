@@ -46,12 +46,11 @@ The read-only path uses two nodes:
 error, or exhausted budget to `END`; exactly one valid tool request goes to the tool
 node. The tool node returns to the model node. This edge cycle is the agent loop.
 
-When the optional `create_maintenance_ticket` demonstration capability is injected, the
-graph adds four focused nodes. The action-preparation node validates and records a
-pending request without a side effect. The approval node calls `interrupt()` with a
-JSON-serializable `action_approval` payload. An approved resume reaches the action
-execution node; rejection reaches the cancellation node and ends the run without
-executing the action.
+For the Factory-MCP `create_maintenance_ticket` write tool, the graph adds four focused
+nodes. The action-preparation node validates and records a pending request without a
+side effect. The approval node calls `interrupt()` with a JSON-serializable
+`action_approval` payload. An approved resume reaches the MCP action-execution node;
+rejection reaches the cancellation node and ends the run without executing the action.
 
 ## Tool Execution and Termination
 
@@ -66,9 +65,10 @@ further model call. If a local OpenAI-compatible provider returns multiple calls
 `parallel_tool_calls=false`, the bounded loop admits only the first and discards the
 rest before dispatch. Unknown tools and invalid arguments remain deterministic errors.
 
-The current MCP server schema validation rejects required-field and type violations.
-It does not yet reject unknown additional tool arguments; that limitation is reserved
-for the planned schema-validation/guardrail slice.
+The MCP SDK's strict generated Pydantic schemas reject required-field, type, and unknown
+additional-argument violations before a capability is invoked. LangChain's
+`BaseTool.ainvoke()` performs the matching framework validation at the graph boundary;
+the agent translates validation failures into its project-safe public error.
 
 ## What LangChain Provides
 
@@ -99,15 +99,15 @@ fallback. The final pre-adapter egress check remains active for every model call
 ## Checkpointing and Human Approval
 
 [ADR-011](../decisions/ADR-011-agent-persistence-and-human-in-the-loop.md) adds a
-bounded checkpoint and human-in-the-loop demonstration only to the LangGraph path. The
-graph is compiled with LangGraph's native `InMemorySaver` and a resumable invocation
-uses `{"configurable": {"thread_id": "..."}}`. The `thread_id` identifies one graph
-run; the same identifier is required for `Command(resume="approve")` or
-`Command(resume="reject")`.
+bounded checkpoint and human-in-the-loop flow to the LangGraph MCP path. Production
+uses LangGraph's official `AsyncPostgresSaver`; deterministic unit tests use native
+`InMemorySaver`. A resumable invocation uses `{"configurable": {"thread_id": "..."}}`.
+The `thread_id` identifies one graph run; the same identifier is required for
+`Command(resume="approve")` or `Command(resume="reject")`.
 
-`InMemorySaver` is appropriate for deterministic tests and local demonstrations, but it
-loses checkpoints when the process stops. No production persistence backend or
-cross-process durability guarantee is implemented.
+`InMemorySaver` is restricted to deterministic tests. The FastAPI application runtime
+uses `run_id == thread_id`, `AsyncPostgresSaver`, and a separate application/audit run
+record, so a pending approval survives application recreation.
 
 The stored graph representation contains only serializer-safe primitives and LangChain
 messages. The agent restores project-owned result types at its public boundary, avoiding
@@ -119,9 +119,9 @@ cannot decide whether approval is required. Resume accepts only `approve` or `re
 An invalid resume is rejected before the action executes.
 
 LangGraph may restart an interrupted node from its beginning on resume. Consequently,
-code before `interrupt()` is side-effect-free, and the non-idempotent operation is in a
-separate post-approval node. The in-memory ticket adapter also uses the tool-call ID as
-an idempotency key, so a repeated post-approval execution cannot create a second ticket.
+code before `interrupt()` is side-effect-free, and the Factory-MCP call is in a separate
+post-approval node. The MCP request receives the original model tool-call ID as its
+idempotency key, and PostgreSQL protects against replay.
 
 The checkpoint retains the already selected profile name and explicit classification.
 Resume does not reroute, change classification, or introduce a cloud fallback. The
@@ -140,9 +140,9 @@ migration does not justify changing their ground truth.
 
 ## Deliberately Deferred
 
-The production graph now discovers Factory and Knowledge MCP tools, normalizes a
+The production graph discovers Factory and Knowledge MCP tools, normalizes a
 `create_maintenance_ticket` proposal, and pauses with `interrupt()` before its first
 side-effecting node. Resume uses the same checkpointed thread and an MCP request ID
 derived from the original model tool-call ID. PostgreSQL unique constraints protect
-replay. The older action-only graph is an **OBSOLETE CANDIDATE** kept temporarily for
-legacy narrow tests.
+replay. The former action-only graph and its direct capability injection have been
+removed; MCP-Fake and PostgreSQL integration tests cover the retained guarantees.

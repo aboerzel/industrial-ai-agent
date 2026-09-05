@@ -58,9 +58,6 @@ async def open_mcp_session(
         yield session
 
 
-open_factory_mcp_session = open_mcp_session
-
-
 async def run_factory_mcp_smoke(
     transport: FactoryMcpTransport,
 ) -> FactoryMcpSmokeResult:

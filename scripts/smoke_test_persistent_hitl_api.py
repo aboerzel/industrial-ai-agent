@@ -1,5 +1,6 @@
 """Run the local FastAPI -> MCP -> PostgreSQL HITL restart smoke path."""
 
+import argparse
 import os
 import socket
 import subprocess
@@ -21,10 +22,11 @@ from industrial_ai_agent.infrastructure.persistence.postgres import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROMPT = (
-    "Investigate product P4711 at station S04. First get the product history, then get "
-    "the machine status, then search documentation for QUALITY-09 at S04. After those "
-    "read-only checks, propose a maintenance ticket for S04 with summary 'Investigate "
-    "recurring QUALITY-09 at S04'."
+    "Perform this exact evidence sequence before any maintenance-ticket proposal: "
+    "(1) call get_product_history for P4711, (2) call get_machine_status for S04, "
+    "and (3) call search_documentation for QUALITY-09 at S04. Do not propose or create "
+    "a ticket until all three read-only calls have completed. Then propose a maintenance "
+    "ticket for S04 with summary 'Investigate recurring QUALITY-09 at S04'."
 )
 EXPECTED_READ_TOOLS = (
     "get_product_history",
@@ -35,6 +37,7 @@ EXPECTED_ALL_TOOLS = (*EXPECTED_READ_TOOLS, "create_maintenance_ticket")
 
 
 def main() -> None:
+    decision = _parse_args().decision
     load_local_environment(PROJECT_ROOT / ".env")
     database_url = os.getenv("AGENT_RUNTIME_DATABASE_URL") or os.getenv(
         "FACTORY_DATABASE_URL"
@@ -80,27 +83,47 @@ def main() -> None:
             _assert_waiting_for_approval(restored.json())
             approved = client.post(
                 f"{base_url}/api/v1/runs/{run_id}/resume",
-                json={"decision": "approve"},
+                json={"decision": decision},
             )
             approved.raise_for_status()
             successful = approved.json()
-            duplicate = client.post(
-                f"{base_url}/api/v1/runs/{run_id}/resume",
-                json={"decision": "approve"},
-            )
-        _assert_success(successful)
-        if duplicate.status_code != 409:
-            raise RuntimeError("Duplicate approval was not rejected")
-        if _ticket_count(database_url) != ticket_count_before + 1:
-            raise RuntimeError("Approval did not create exactly one maintenance ticket")
+            if decision == "approve":
+                duplicate = client.post(
+                    f"{base_url}/api/v1/runs/{run_id}/resume",
+                    json={"decision": "approve"},
+                )
+        _assert_success(
+            successful,
+            EXPECTED_ALL_TOOLS if decision == "approve" else EXPECTED_READ_TOOLS,
+        )
+        ticket_count_after = _ticket_count(database_url)
+        if decision == "approve":
+            if duplicate.status_code != 409:
+                raise RuntimeError("Duplicate approval was not rejected")
+            if ticket_count_after != ticket_count_before + 1:
+                raise RuntimeError(
+                    "Approval did not create exactly one maintenance ticket"
+                )
+        elif ticket_count_after != ticket_count_before:
+            raise RuntimeError("Rejection created a maintenance ticket")
     finally:
         _stop(second_process)
 
     print("SUCCESS")
     print(f"run_id={run_id}")
     print("status=success")
-    print(f"tool_calls={','.join(EXPECTED_ALL_TOOLS)}")
-    print("ticket_count_delta=1")
+    expected_tools = (
+        EXPECTED_ALL_TOOLS if decision == "approve" else EXPECTED_READ_TOOLS
+    )
+    print(f"decision={decision}")
+    print(f"tool_calls={','.join(expected_tools)}")
+    print(f"ticket_count_delta={1 if decision == 'approve' else 0}")
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--decision", choices=("approve", "reject"), default="approve")
+    return parser.parse_args()
 
 
 def _start_api(environment: dict[str, str]) -> subprocess.Popen[bytes]:
@@ -164,16 +187,14 @@ def _assert_waiting_for_approval(payload: object) -> None:
         )
 
 
-def _assert_success(payload: object) -> None:
+def _assert_success(payload: object, expected_tools: tuple[str, ...]) -> None:
     if not isinstance(payload, dict):
         raise TypeError("FastAPI smoke did not return a JSON object")
     if payload.get("status") != "success":
         raise RuntimeError("FastAPI smoke did not return success")
     tool_names = _tool_names(payload)
-    if tool_names != EXPECTED_ALL_TOOLS:
-        raise RuntimeError(
-            f"FastAPI smoke expected {EXPECTED_ALL_TOOLS}, got {tool_names}"
-        )
+    if tool_names != expected_tools:
+        raise RuntimeError(f"FastAPI smoke expected {expected_tools}, got {tool_names}")
 
 
 def _tool_names(payload: dict[str, object]) -> tuple[str, ...]:

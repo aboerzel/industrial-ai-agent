@@ -294,7 +294,7 @@ def test_aggregate_results_calculates_all_metrics_and_count_differences() -> Non
 
     report = aggregate_results(
         dataset="test.jsonl",
-        model_profile="troubleshooting",
+        model_profile="local_quality",
         results=results,
     )
 
@@ -323,7 +323,7 @@ def test_run_eval_executes_cases_independently_and_records_final_answer() -> Non
         cases=cases,
         run_agent=run_agent,
         dataset="test.jsonl",
-        model_profile="troubleshooting",
+        model_profile="local_quality",
         orchestration_path="langgraph",
     )
 

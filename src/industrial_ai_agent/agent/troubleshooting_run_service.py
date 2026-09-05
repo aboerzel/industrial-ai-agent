@@ -114,7 +114,9 @@ class TroubleshootingRunService:
         except BaseExceptionGroup as error:
             root_cause = _single_exception_group_cause(error)
             if isinstance(root_cause, McpServiceUnavailableError):
-                raise McpServiceUnavailableError("MCP service is unavailable") from error
+                raise McpServiceUnavailableError(
+                    "MCP service is unavailable"
+                ) from error
             if isinstance(root_cause, InvalidToolArgumentsError):
                 raise root_cause from error
             raise

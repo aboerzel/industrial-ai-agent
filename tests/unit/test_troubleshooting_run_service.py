@@ -70,7 +70,11 @@ class FailingAgent:
             [
                 ExceptionGroup(
                     "session failure",
-                    [InvalidToolArgumentsError("Invalid arguments for get_product_history")],
+                    [
+                        InvalidToolArgumentsError(
+                            "Invalid arguments for get_product_history"
+                        )
+                    ],
                 )
             ],
         )

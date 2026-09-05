@@ -39,12 +39,12 @@ without executing tools. The second executes ten complete agent runs and compare
 actual bounded trajectories and termination statuses with structured ground truth.
 Neither baseline evaluates natural-language final-answer quality.
 
-An isolated `DocumentationSearchCapability.search_documentation(query, top_k=3)` now searches a
-small versioned local technical knowledge base through an inner `KnowledgeRetriever`
-port. Three deterministic in-memory lexical adapters provide simple term-overlap,
-rarity-aware IDF, and BM25 ranking. Results retain document, source, chunk, score, and
-metadata provenance. LangGraph receives retrieval only through `knowledge_mcp`, never
-through direct retriever injection.
+`DocumentationSearchCapability.search_documentation(query, top_k=3)` searches a
+versioned local technical knowledge base through an inner `KnowledgeRetriever` port.
+The productive pipeline combines BM25, semantic retrieval, RRF, and local reranking.
+Results retain document, source, chunk, score, and metadata provenance. LangGraph
+receives retrieval only through `knowledge_mcp`, never through direct retriever
+injection.
 
 Two MCP services adapt existing capabilities through the official MCP SDK v2.
 `factory_mcp` exposes `get_product_history`, `get_machine_status`, and the approval-gated
@@ -136,7 +136,8 @@ With both MCP containers and local Ollama running, execute the sequential real s
 
 ```powershell
 python scripts/smoke_test_fastapi.py
-python scripts/smoke_test_persistent_hitl_api.py
+python scripts/smoke_test_persistent_hitl_api.py --decision approve
+python scripts/smoke_test_persistent_hitl_api.py --decision reject
 ```
 
 ## Local Browser Demo
@@ -212,8 +213,8 @@ python scripts/smoke_test_model_routing.py
 python scripts/smoke_test_langgraph.py --profile local_fast
 python scripts/smoke_test_langgraph.py --profile local_quality
 python scripts/smoke_test_langgraph.py --confidential-troubleshooting
-python scripts/smoke_test_langgraph_hitl.py --approval approve
-python scripts/smoke_test_langgraph_hitl.py --approval reject
+python scripts/smoke_test_persistent_hitl_api.py --decision approve
+python scripts/smoke_test_persistent_hitl_api.py --decision reject
 ```
 
 Without `--profile`, the first script calls `local_fast` and `local_quality` sequentially.
@@ -227,11 +228,10 @@ structurally verifies the sequential calls
 `get_product_history(P4711)` and `get_machine_status(S04)` before a successful final
 answer.
 
-The HITL smoke runs the LangGraph path with a confidential local profile and the
-official PostgreSQL checkpointer. It shows the structured approval request for the harmless
-`create_maintenance_ticket` demonstration action, then resumes the same thread with the
-chosen explicit result. It never calls an external ticket system or performs a machine
-action.
+The persistent HITL smoke exercises the FastAPI to MCP production path with a
+confidential local profile and the official PostgreSQL checkpointer. It recreates the
+application before approval, verifies the structured approval request, rejects a
+duplicate approval, and creates exactly one demo ticket.
 
 The `public_fast` profile uses Groq through the same `OpenAICompatibleLLMClient`. Set
 `GROQ_API_KEY` in the unversioned local `.env` file and invoke it only explicitly:
@@ -256,7 +256,7 @@ is not a fallback profile.
 Run the unchanged versioned tool-selection dataset through the LangGraph MCP path:
 
 ```powershell
-python -m evals.run_tool_selection --profile troubleshooting --mcp-transport stdio
+python -m evals.run_tool_selection --profile local_quality --mcp-transport stdio
 ```
 
 The command prints a structured JSON report with per-case results, Tool Selection
@@ -269,7 +269,7 @@ metric definitions, interpretation, and optional local result output.
 Run the unchanged versioned multi-step dataset through the LangGraph MCP path:
 
 ```powershell
-python -m evals.run_trajectory --profile troubleshooting --mcp-transport stdio
+python -m evals.run_trajectory --profile local_quality --mcp-transport stdio
 ```
 
 The JSON report contains per-case expected and actual trajectories, tool-call counts,
@@ -280,11 +280,9 @@ exact scoring formulas and interpretation.
 
 ## Manual Retrieval Eval
 
-Run the frozen v2 retrieval baseline against all six local strategies:
+Run the frozen v2 retrieval baseline against its four current local strategies:
 
 ```powershell
-python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy simple
-python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy idf
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy semantic
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy hybrid

@@ -39,7 +39,7 @@ sole write tool is `create_maintenance_ticket`; the graph exposes only a strict 
 schema to the model, then pauses for human approval before the separate execution step.
 Focused deterministic baselines evaluate the
 first LLM tool decision and complete bounded trajectories through the LangGraph MCP path.
-Local lexical, semantic, hybrid, and reranked knowledge-retrieval strategies are
+Local BM25, semantic, hybrid, and reranked knowledge-retrieval strategies are
 implemented behind one inner port and are exposed to LangGraph only through
 `knowledge_mcp`. A deterministic, deny-by-default model-egress decorator checks explicit
 request classification against each Model Profile's validated Execution Zone before
@@ -130,8 +130,6 @@ flowchart LR
         RLS["PostgreSQL RLS + app.clearance"]
         DOCS["Document catalog + local multi-format files"]
         DOCLING["Docling local ingestion"]
-        LKR["InMemoryLexicalKnowledgeRetriever"]
-        IDF["InMemoryIdfKnowledgeRetriever"]
         BM25["InMemoryBm25KnowledgeRetriever"]
         SEM["InMemorySemanticKnowledgeRetriever"]
         HYB["HybridKnowledgeRetriever"]
@@ -157,15 +155,11 @@ flowchart LR
     RLS --> MSM
     DOCS --> DOCLING
     DOCLING --> RER
-    LKR -.->|"implements"| KR
-    IDF -.->|"implements"| KR
     BM25 -.->|"implements"| KR
     SEM -.->|"implements"| KR
     HYB -.->|"implements"| KR
     RER -.->|"implements"| KR
     OEC -.->|"implements"| EP
-    KB -->|"explicit index build"| LKR
-    KB -->|"explicit index build"| IDF
     KB -->|"explicit index build"| BM25
     KB -->|"explicit index build"| SEM
     BM25 --> HYB
@@ -188,7 +182,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,RLS,DOCS,DOCLING,LKR,IDF,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,KMCP,MCPCLIENT,MCPBRIDGE,LG adapter
+    class PHM,MSM,RLS,DOCS,DOCLING,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,KMCP,MCPCLIENT,MCPBRIDGE,LG adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -197,7 +191,7 @@ result. The deterministic demo data includes product `P4711` and stations `S04` 
 `S12`.
 
 `DocumentationSearchCapability` receives `KnowledgeRetriever` through dependency
-injection and returns structured passages. Lexical, semantic, and hybrid adapters load the local
+injection and returns structured passages. BM25, semantic, and hybrid adapters load the local
 Markdown knowledge base once during explicit construction; request-time searches use
 their prepared in-memory indexes. The semantic adapter receives the separate inner
 `EmbeddingClient` port, builds document vectors in LangChain's `InMemoryVectorStore`,
@@ -242,21 +236,15 @@ flowchart LR
     Load --> Chunk["25 heading-section chunks<br/>stable positional IDs"]
     Chunk --> Index["In-memory token indexes"]
     Query["search_documentation(query)"] --> Port["KnowledgeRetriever port"]
-    Port --> Simple["Simple term-overlap ranking<br/>top 3"]
-    Port --> IDFSearch["Rarity-aware IDF ranking<br/>top 3"]
     Port --> BM25Search["BM25 ranking<br/>top 3"]
     Port --> SemanticSearch["Semantic vector ranking<br/>top 3"]
     Port --> HybridSearch["Hybrid RRF ranking<br/>top 3"]
     Port --> RerankedSearch["Hybrid + local cross-encoder<br/>top 3"]
-    Index --> Simple
-    Index --> IDFSearch
     Index --> BM25Search
     Chunk --> SemanticSearch
     BM25Search --> HybridSearch
     SemanticSearch --> HybridSearch
     HybridSearch --> RerankedSearch
-    Simple --> Results["Structured results<br/>content + provenance + score"]
-    IDFSearch --> Results
     BM25Search --> Results
     SemanticSearch --> Results
     HybridSearch --> Results
@@ -268,24 +256,23 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class Docs,Load,Chunk data
     class Query,Port,Results core
-    class Index,Simple,IDFSearch,BM25Search,SemanticSearch,HybridSearch,RerankedSearch adapter
+    class Index,BM25Search,SemanticSearch,HybridSearch,RerankedSearch adapter
 ```
 
 The tokenizer case-folds alphanumeric and hyphenated terms so exact industrial
-identifiers remain intact. The simple adapter scores the fraction of distinct query
-terms found in each chunk. The second adapter weights matching terms with a smoothed
-inverse chunk frequency before normalizing by total query weight. BM25 adds saturated
-term frequency and chunk-length normalization. The semantic adapter builds local vectors
+identifiers remain intact. BM25 adds saturated term frequency and chunk-length
+normalization. The semantic adapter builds local vectors
 through `EmbeddingClient` and LangChain's `InMemoryVectorStore`. The hybrid adapter
 composes BM25 and semantic rankings with equal-weight Reciprocal Rank Fusion using fixed
-rank constant `60`; it never adds their incomparable raw scores. All lexical strategies
-omit zero-score chunks and resolve ties by `chunk_id`; hybrid resolves equal fused scores
+rank constant `60`; it never adds their incomparable raw scores. BM25 omits zero-score
+chunks and resolves ties by `chunk_id`; hybrid resolves equal fused scores
 the same way. Source path, document ID, chunk ID, section metadata, and score remain
 attached to every result.
 
 The focused retrieval eval is separate from the agent evals. Its 28 frozen v2 cases
 measure Hit@1, Hit@3, and Mean Recall@3 using structured relevant-chunk ground truth.
-The same unchanged dataset compares all six strategies. Agent query formulation and
+The same unchanged dataset compares the four current strategies. Historical simple and
+IDF results remain documentation only. Agent query formulation and
 final-answer grounding are outside this slice.
 
 The implemented LLM boundary includes deterministic task-level profile selection and a
@@ -341,7 +328,7 @@ flowchart LR
 
 `config/model_profiles.toml` assigns every profile explicit, validated capabilities,
 quality and relative cost classes, and an Execution Zone independent from its provider.
-`troubleshooting`, `local_fast`, and `local_quality` use `LOCAL`; `public_fast` uses
+`local_fast` and `local_quality` use `LOCAL`; `public_fast` uses
 `PUBLIC_CLOUD`. A caller creates `TaskRequirements`; the router applies the existing
 egress policy before capability, minimum-quality, and cost/quality ordering. Callers
 also supply the request classification to the controlled client for the independent
@@ -353,7 +340,7 @@ The implemented tool-calling flow is:
 
 ```mermaid
 flowchart TD
-    Start["User request + discovered MCP tool definitions"] --> Decide["LLM decision<br/>troubleshooting Model Profile"]
+    Start["User request + discovered MCP tool definitions"] --> Decide["LLM decision<br/>routed Model Profile"]
     Decide --> Shape{"Response shape"}
     Shape -->|"final text"| Success["AgentRunResult<br/>SUCCESS + final answer"]
     Shape -->|"multiple or malformed calls"| Invalid["Deterministic error"]
@@ -608,20 +595,16 @@ mismatched profile or classification rather than rerouting.
 
 Possible later responsibilities include:
 
-* durable production agent persistence
 * context compression
-* Application-state classification propagation
-* policy and guardrail integration
 
 ### `infrastructure`
 
 Contains technical integrations and external implementations.
 
 The current implementations are `InMemoryProductHistoryRepository` and
-`InMemoryMachineStatusRepository`, which provide small deterministic demo data sets,
-`InMemoryLexicalKnowledgeRetriever`, `InMemoryIdfKnowledgeRetriever`, and
-`InMemoryBm25KnowledgeRetriever`, which search prebuilt local token indexes with
-different scoring formulas, `InMemorySemanticKnowledgeRetriever`, which maps LangChain
+`InMemoryMachineStatusRepository`, which provide small deterministic test data sets,
+`InMemoryBm25KnowledgeRetriever`, which searches a prebuilt local token index,
+`InMemorySemanticKnowledgeRetriever`, which maps LangChain
 `InMemoryVectorStore` matches back to original chunk provenance through `EmbeddingClient`,
 `HybridKnowledgeRetriever`, which rank-fuses the existing BM25 and semantic retrievers,
 `RerankedKnowledgeRetriever`, which applies a bounded local cross-encoder stage, and
@@ -631,8 +614,8 @@ and
 an OpenAI-compatible Chat Completions API. `LLMClientChatModel` is the narrow
 Infrastructure adapter between LangChain messages/tools and the existing `LLMClient`;
 it does not construct providers or duplicate profile and security configuration.
-`InMemoryMaintenanceTicketRepository` is a local, idempotent demonstration adapter for
-the approved action only; it is not an external ticketing integration.
+`InMemoryMaintenanceTicketRepository` is a deterministic test fake for the Factory-MCP
+maintenance-ticket capability; it is not an external ticketing integration.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores

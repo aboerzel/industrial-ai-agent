@@ -2,14 +2,13 @@
 
 ## Purpose
 
-The retrieval slice implements three measurable lexical baselines from ADR-006: simple
-term overlap, rarity-aware IDF overlap, and BM25. It adds the first semantic baseline
-described by ADR-007, a rank-fused BM25-plus-semantic hybrid baseline, and a local
-cross-encoder reranking baseline. Version 2 expanded and froze the corpus and evaluation
-set before BM25, semantic, hybrid, and reranked retrieval were implemented, so none of
-those strategies could shape its own benchmark. The frozen pipeline is exposed by
-`knowledge_mcp`, but LangGraph reaches it only through MCP discovery, never through a
-direct retriever.
+The productive retrieval slice implements BM25, the semantic baseline described by
+ADR-007, rank-fused BM25-plus-semantic hybrid retrieval, and local cross-encoder
+reranking. Version 2 expanded and froze the corpus and evaluation set before those
+strategies were implemented, so none could shape its own benchmark. The frozen pipeline
+is exposed by `knowledge_mcp`, but LangGraph reaches it only through MCP discovery,
+never through a direct retriever. The former simple-overlap and IDF implementations were
+removed during cleanup; their recorded results below are historical evidence only.
 
 ## Knowledge Base and Ingestion
 
@@ -47,13 +46,13 @@ Each `KnowledgeRetrievalResult` preserves passage content, `document_id`, relati
 returns a structured result and does not construct prose. Filesystem access and all
 ranking implementations remain in Infrastructure.
 
-## Lexical Strategies
+## Lexical Strategies and Historical Baselines
 
-All three strategies use the same tokenizer. It case-folds text and extracts
+The current BM25 strategy and the former historical baselines use the same tokenizer. It case-folds text and extracts
 alphanumeric terms while preserving hyphenated identifiers. Consequently,
 `E-STOP-17`, `e-stop-17`, and `E-STOP-17!!!` produce the same identifier token.
 
-### Simple term overlap
+### Simple term overlap (historical, no longer executable)
 
 For the distinct normalized query-term set `Q` and chunk-term set `C`, the score is:
 
@@ -66,7 +65,7 @@ then by ascending `chunk_id` for deterministic tie-breaking. There is no stemmin
 stop-word removal, synonym expansion, phrase weighting, term-frequency weighting, or
 semantic matching.
 
-### Rarity-aware IDF overlap
+### Rarity-aware IDF overlap (historical, no longer executable)
 
 For `N` indexed chunks and the number `df(t)` of chunks containing term `t`, the
 smoothed inverse document frequency is:
@@ -243,8 +242,6 @@ same metrics and failure lists are aggregated by category with direct runner log
 Run the frozen v2 baseline with:
 
 ```powershell
-python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy simple
-python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy idf
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy semantic
 python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy hybrid
