@@ -59,10 +59,16 @@ LangChain `StructuredTool` instances are created from discovered, explicitly aut
 MCP schemas. They are transport adapters, not new homes for Domain logic. A custom tool
 node is intentionally used to retain one-call validation and sequential dispatch.
 
-`MAX_TOOL_CALLS = 3` applies to the remaining LangGraph agent. Three tools may execute. The
-next model step may return a final answer; a fourth request produces `LIMIT_REACHED`, is
-not executed, and causes no further model call. Unknown tools, invalid arguments, and
-multiple calls remain deterministic errors.
+`MAX_TOOL_CALLS = 4` applies to the remaining LangGraph agent. Four tools may execute,
+including the approved maintenance action. The next model step may return a final
+answer; a fifth request produces `LIMIT_REACHED`, is not executed, and causes no
+further model call. If a local OpenAI-compatible provider returns multiple calls despite
+`parallel_tool_calls=false`, the bounded loop admits only the first and discards the
+rest before dispatch. Unknown tools and invalid arguments remain deterministic errors.
+
+The current MCP server schema validation rejects required-field and type violations.
+It does not yet reject unknown additional tool arguments; that limitation is reserved
+for the planned schema-validation/guardrail slice.
 
 ## What LangChain Provides
 
@@ -134,7 +140,9 @@ migration does not justify changing their ground truth.
 
 ## Deliberately Deferred
 
-This slice does not add a durable production persistence backend, cross-process
-execution guarantees, a human-approval UI, LangSmith integration, MCP, subgraphs,
-multi-agent behavior, Planner/Executor, dynamic tool discovery, or distributed
-execution.
+The production graph now discovers Factory and Knowledge MCP tools, normalizes a
+`create_maintenance_ticket` proposal, and pauses with `interrupt()` before its first
+side-effecting node. Resume uses the same checkpointed thread and an MCP request ID
+derived from the original model tool-call ID. PostgreSQL unique constraints protect
+replay. The older action-only graph is an **OBSOLETE CANDIDATE** kept temporarily for
+legacy narrow tests.

@@ -150,3 +150,10 @@ classification.
 
 See [ADR-013](../decisions/ADR-013-fastapi-application-boundary.md) for the durable
 boundary decision.
+
+## Durable Resume Contract
+
+`RunResponse` represents `waiting_for_approval` with a public approval request.
+`POST /api/v1/runs/{run_id}/resume` accepts a Pydantic-validated
+`ResumeRunRequest { decision: approve | reject }`. Invalid decisions receive `422`,
+unknown IDs receive `404`, and a run that is no longer waiting receives `409`.

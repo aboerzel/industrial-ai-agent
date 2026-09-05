@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from urllib.parse import quote
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -25,6 +26,16 @@ async def open_langgraph_postgres_checkpointer(
     async with AsyncPostgresSaver.from_conn_string(connection_string) as checkpointer:
         await checkpointer.setup()
         yield checkpointer
+
+
+@dataclass(frozen=True, slots=True)
+class PostgreSqlCheckpointerFactory:
+    """Composition-root adapter for the Application's durable-checkpointer port."""
+
+    database_url: str
+
+    def open(self):
+        return open_langgraph_postgres_checkpointer(self.database_url)
 
 
 def _checkpoint_connection_string(database_url: str) -> str:

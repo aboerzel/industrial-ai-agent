@@ -61,6 +61,8 @@ class OpenAICompatibleLLMClient:
                 }
                 for tool in request.tools
             ]
+            # The bounded ADR-004 loop accepts exactly one next tool decision.
+            parameters["parallel_tool_calls"] = False
 
         completion = client.chat.completions.create(**parameters)
         if not completion.choices:

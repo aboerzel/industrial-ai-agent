@@ -1,8 +1,11 @@
 import asyncio
 import inspect
+import os
 import sys
 
+import pytest
 from mcp.client.stdio import StdioServerParameters
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult
 
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
@@ -20,16 +23,25 @@ from industrial_ai_agent.tools.machine_status import MachineStatusResult
 from industrial_ai_agent.tools.product_history import ProductHistoryResult
 
 
-def test_factory_mcp_server_advertises_the_two_expected_tool_schemas() -> None:
+def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> None:
     tools = asyncio.run(create_default_factory_mcp_server().list_tools())
 
     tools_by_name = {tool.name: tool for tool in tools}
-    assert set(tools_by_name) == {"get_product_history", "get_machine_status"}
+    assert set(tools_by_name) == {
+        "get_product_history",
+        "get_machine_status",
+        "create_maintenance_ticket",
+    }
     assert tools_by_name["get_product_history"].input_schema["required"] == [
         "product_id"
     ]
     assert tools_by_name["get_machine_status"].input_schema["required"] == [
         "station_id"
+    ]
+    assert tools_by_name["create_maintenance_ticket"].input_schema["required"] == [
+        "station_id",
+        "summary",
+        "request_id",
     ]
 
 
@@ -71,6 +83,23 @@ def test_factory_mcp_tool_handlers_delegate_to_injected_capabilities() -> None:
     }
 
 
+def test_factory_mcp_rejects_invalid_maintenance_ticket_inputs_before_dispatch() -> (
+    None
+):
+    server = create_default_factory_mcp_server()
+
+    async def call_invalid_tools() -> None:
+        invalid_arguments = (
+            {"station_id": "S04", "summary": "x"},
+            {"station_id": 4, "summary": "x", "request_id": "schema-type"},
+        )
+        for arguments in invalid_arguments:
+            with pytest.raises(ToolError, match="Error executing tool"):
+                await server.call_tool("create_maintenance_ticket", arguments)
+
+    asyncio.run(call_invalid_tools())
+
+
 def test_factory_mcp_preserves_structured_not_found_results() -> None:
     server = create_default_factory_mcp_server()
 
@@ -103,14 +132,7 @@ def test_factory_mcp_preserves_structured_not_found_results() -> None:
 
 
 def test_official_mcp_stdio_client_discovers_and_calls_factory_tools() -> None:
-    result = asyncio.run(
-        run_factory_mcp_smoke(
-            StdioServerParameters(
-                command=sys.executable,
-                args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
-            )
-        )
-    )
+    result = asyncio.run(run_factory_mcp_smoke(_factory_mcp_stdio_transport()))
 
     _assert_factory_smoke_result(result)
 
@@ -118,14 +140,7 @@ def test_official_mcp_stdio_client_discovers_and_calls_factory_tools() -> None:
 def test_streamable_http_matches_stdio_factory_mcp_protocol_and_results(
     factory_mcp_http_transport: StreamableHttpServerParameters,
 ) -> None:
-    stdio_result = asyncio.run(
-        run_factory_mcp_smoke(
-            StdioServerParameters(
-                command=sys.executable,
-                args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
-            )
-        )
-    )
+    stdio_result = asyncio.run(run_factory_mcp_smoke(_factory_mcp_stdio_transport()))
     http_result = asyncio.run(run_factory_mcp_smoke(factory_mcp_http_transport))
 
     assert http_result.server_name == stdio_result.server_name
@@ -138,20 +153,36 @@ def test_streamable_http_matches_stdio_factory_mcp_protocol_and_results(
     assert http_result.unknown_machine_status == stdio_result.unknown_machine_status
 
 
+def _factory_mcp_stdio_transport() -> StdioServerParameters:
+    database_url = os.getenv("FACTORY_DATABASE_URL")
+    return StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+        env={"FACTORY_DATABASE_URL": database_url} if database_url else None,
+    )
+
+
 def _assert_factory_smoke_result(result: FactoryMcpSmokeResult) -> None:
     assert result.server_name == FACTORY_MCP_SERVER_NAME
     assert result.server_version == FACTORY_MCP_SERVER_VERSION
     assert result.protocol_version
-    assert result.tool_names == ("get_product_history", "get_machine_status")
+    assert result.tool_names == (
+        "get_product_history",
+        "get_machine_status",
+        "create_maintenance_ticket",
+    )
     assert result.product_history is not None
     assert result.product_history["product_id"] == "P4711"
     assert result.product_history["found"] is True
-    assert result.product_history["steps"][-1]["error_code"] == "E-STOP-17"
+    expected_error_code = (
+        "QUALITY-09" if os.getenv("FACTORY_DATABASE_URL") else "E-STOP-17"
+    )
+    assert result.product_history["steps"][-1]["error_code"] == expected_error_code
     assert result.machine_status == {
         "station_id": "S04",
         "found": True,
         "state": "FAULTED",
-        "active_error_code": "E-STOP-17",
+        "active_error_code": expected_error_code,
         "classification": 2,
     }
     assert result.unknown_product_history == {

@@ -64,6 +64,19 @@
             </ol>
           </div>
 
+          <section class="approval-card" hidden id="approval-card" aria-labelledby="approval-title">
+            <h3 id="approval-title">Approval required</h3>
+            <dl class="run-metadata">
+              <div><dt>Action</dt><dd id="approval-action"></dd></div>
+              <div><dt>Description</dt><dd id="approval-summary"></dd></div>
+            </dl>
+            <pre class="tool-arguments" id="approval-arguments"></pre>
+            <div class="approval-actions">
+              <button id="approve-button" type="button">Approve</button>
+              <button id="reject-button" type="button">Reject</button>
+            </div>
+          </section>
+
           <p class="error-message" hidden id="error-message" role="alert"></p>
         </section>
       </section>

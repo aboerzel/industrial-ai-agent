@@ -6,7 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
@@ -68,6 +68,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 error_code=None,
                 error_message=None,
                 tool_call_summary=[],
+                approval_payload=None,
                 interrupted_at=None,
                 completed_at=None,
             )
@@ -86,6 +87,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             record.tool_call_summary = [
                 call.model_dump() for call in result.executed_tool_calls
             ]
+            record.approval_payload = None
             record.completed_at = datetime.now(UTC)
             return _stored(record)
 
@@ -98,6 +100,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             record.status = RunStatus.FAILED.value
             record.error_code = error_code
             record.error_message = _safe_error_message(error_code)
+            record.approval_payload = None
             record.completed_at = datetime.now(UTC)
             return _stored(record)
 
@@ -141,6 +144,40 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             )
             return _stored(record) if record is not None else None
 
+    async def wait_for_approval(
+        self, run_id: UUID, approval_request: dict[str, object]
+    ) -> StoredAgentRun:
+        return await asyncio.to_thread(
+            self._wait_for_approval, run_id, approval_request
+        )
+
+    def _wait_for_approval(
+        self, run_id: UUID, approval_request: dict[str, object]
+    ) -> StoredAgentRun:
+        with self._session_factory.session(self._security_context) as session:
+            record = _require_record(session, run_id)
+            record.status = RunStatus.WAITING_FOR_APPROVAL.value
+            record.approval_payload = approval_request
+            record.interrupted_at = datetime.now(UTC)
+            return _stored(record)
+
+    async def claim_resume(self, run_id: UUID) -> StoredAgentRun | None:
+        return await asyncio.to_thread(self._claim_resume, run_id)
+
+    def _claim_resume(self, run_id: UUID) -> StoredAgentRun | None:
+        with self._session_factory.session(self._security_context) as session:
+            changed = session.execute(
+                update(AgentRunRecord)
+                .where(
+                    AgentRunRecord.run_id == run_id,
+                    AgentRunRecord.status == RunStatus.WAITING_FOR_APPROVAL.value,
+                )
+                .values(status=RunStatus.RUNNING.value)
+            ).rowcount
+            if changed != 1:
+                return None
+            return _stored(_require_record(session, run_id))
+
 
 def _require_record(session, run_id: UUID) -> AgentRunRecord:
     record = session.scalar(
@@ -174,6 +211,7 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
         request_text=record.request_text,
         result=result,
         error_code=record.error_code,
+        approval_request=record.approval_payload,
     )
 
 

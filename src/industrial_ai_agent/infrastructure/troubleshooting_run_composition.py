@@ -43,6 +43,9 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpLangChainToolProvider,
     McpServerConfiguration,
 )
+from industrial_ai_agent.infrastructure.persistence.langgraph_checkpointer import (
+    PostgreSqlCheckpointerFactory,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL_CONFIGURATION_PATH = PROJECT_ROOT / "config" / "model_profiles.toml"
@@ -69,8 +72,11 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
         *,
         profile: ModelProfile,
         requirements: TaskRequirements,
+        checkpointer: object | None = None,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]:
-        return self._open_agent(profile=profile, requirements=requirements)
+        return self._open_agent(
+            profile=profile, requirements=requirements, checkpointer=checkpointer
+        )
 
     @contextmanager
     def _open_agent(
@@ -78,6 +84,7 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
         *,
         profile: ModelProfile,
         requirements: TaskRequirements,
+        checkpointer: object | None,
     ) -> Iterator[McpBackedTroubleshootingAgent]:
         with OpenAICompatibleLLMClient(self._configuration) as adapter:
             checked_client = EgressCheckedLLMClient(
@@ -89,6 +96,7 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
             yield LangGraphTroubleshootingAgent(
                 LLMClientChatModel(checked_client, profile),
                 mcp_tool_provider=self._mcp_tool_provider,
+                checkpointer=checkpointer,
                 run_classification=requirements.data_classification,
             )
 
@@ -99,6 +107,7 @@ def create_default_troubleshooting_run_service(
     mcp_transport: str | None = None,
     factory_mcp_url: str | None = None,
     knowledge_mcp_url: str | None = None,
+    runtime_database_url: str | None = None,
 ) -> TroubleshootingRunService:
     """Compose the local demo service without exposing deployment details to FastAPI."""
     configuration = load_llm_configuration(model_configuration_path)
@@ -110,6 +119,7 @@ def create_default_troubleshooting_run_service(
             or os.getenv("FACTORY_MCP_URL", DEFAULT_FACTORY_MCP_URL),
             knowledge_mcp_url=knowledge_mcp_url
             or os.getenv("KNOWLEDGE_MCP_URL", DEFAULT_KNOWLEDGE_MCP_URL),
+            factory_database_url=runtime_database_url,
         )
     )
     return TroubleshootingRunService(
@@ -120,6 +130,11 @@ def create_default_troubleshooting_run_service(
             mcp_tool_provider=provider,
             egress_policy=policy,
         ),
+        checkpointer_factory=(
+            PostgreSqlCheckpointerFactory(runtime_database_url)
+            if runtime_database_url
+            else None
+        ),
     )
 
 
@@ -128,6 +143,7 @@ def _mcp_server_configurations(
     mcp_transport: str,
     factory_mcp_url: str,
     knowledge_mcp_url: str,
+    factory_database_url: str | None,
 ) -> tuple[McpServerConfiguration, ...]:
     if mcp_transport == "http":
         factory_transport: McpTransport = StreamableHttpServerParameters(
@@ -140,6 +156,11 @@ def _mcp_server_configurations(
         factory_transport = StdioServerParameters(
             command=sys.executable,
             args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+            env=(
+                {"FACTORY_DATABASE_URL": factory_database_url}
+                if factory_database_url
+                else None
+            ),
         )
         knowledge_transport = StdioServerParameters(
             command=sys.executable,

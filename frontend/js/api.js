@@ -20,6 +20,13 @@ export async function getRun(runId) {
   return request(`/api/v1/runs/${encodeURIComponent(runId)}`);
 }
 
+export async function resumeRun(runId, decision) {
+  return request(`/api/v1/runs/${encodeURIComponent(runId)}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ decision }),
+  });
+}
+
 async function request(path, options = {}) {
   let response;
   try {
@@ -62,7 +69,7 @@ function isRunResponse(value) {
     value !== null &&
     typeof value === "object" &&
     typeof value.run_id === "string" &&
-    ["running", "success", "limit_reached", "failed"].includes(value.status) &&
+    ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     (value.answer === null || typeof value.answer === "string") &&
     Array.isArray(value.tool_calls) &&
     value.tool_calls.every(
@@ -73,7 +80,8 @@ function isRunResponse(value) {
         call.arguments !== null &&
         typeof call.arguments === "object" &&
         !Array.isArray(call.arguments),
-    )
+    ) &&
+    (value.approval_request === null || typeof value.approval_request === "object")
   );
 }
 
@@ -84,6 +92,7 @@ function errorMessageFor(status, publicMessage) {
     422: "Check the troubleshooting request and submit it again.",
     500: "The agent run could not be completed. Try again later.",
     503: "A required local model or MCP service is unavailable.",
+    409: "This run is no longer waiting for approval.",
   };
   return defaults[status] ?? publicMessage ?? "The request could not be completed.";
 }

@@ -28,7 +28,10 @@ The first API exposes a shallow run contract:
 * `GET /health` reports only process-local API liveness.
 * `POST /api/v1/runs` synchronously starts one troubleshooting run and returns its
   generated UUID, public status, final answer when available, and normalized tool calls.
-* `GET /api/v1/runs/{run_id}` returns the current in-memory record or `404`.
+* `GET /api/v1/runs/{run_id}` returns the durable public record or `404`, including a
+  public approval request while the run is waiting.
+* `POST /api/v1/runs/{run_id}/resume` accepts a Pydantic-validated `approve` or
+  `reject` decision and resumes the persisted LangGraph thread without rerouting.
 
 The API uses public Pydantic schemas. It must not expose LangChain messages, LangGraph
 state, MCP SDK objects, provider SDK objects, prompts, or raw tool-result payloads. The
@@ -46,11 +49,11 @@ classification. Troubleshooting requests are conservatively classified as
 before every provider-adapter call. API transport does not grant permission for public
 model egress.
 
-Each API run receives a UUID generated at the API boundary. A focused in-memory run
-store keeps run ID, public lifecycle status, result, and sanitized error code for the
-local/demo process only. It is not a database, durable checkpoint store, generic
-repository platform, or cross-process persistence decision. The status model leaves
-space for later HITL resume and streaming, but this slice does not implement either.
+Each API run receives a UUID generated at the API boundary and uses it unchanged as its
+LangGraph `thread_id`. The production composition requires PostgreSQL for the official
+checkpoint store and the RLS-protected application run record; the in-memory store is
+restricted to isolated API unit tests. The lifecycle includes `RUNNING`,
+`WAITING_FOR_APPROVAL`, `SUCCESS`, `LIMIT_REACHED`, and `FAILED`.
 
 Endpoints are asynchronous and await the application service and its LangGraph/MCP path.
 They must not use `asyncio.run()` or create nested event loops. The existing

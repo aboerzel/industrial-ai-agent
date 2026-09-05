@@ -1,4 +1,4 @@
-import { ApiClientError, createRun, getRun } from "./api.js";
+import { ApiClientError, createRun, getRun, resumeRun } from "./api.js";
 
 const form = document.querySelector("#investigation-form");
 const messageInput = document.querySelector("#message");
@@ -8,6 +8,12 @@ const runId = document.querySelector("#run-id");
 const answer = document.querySelector("#answer");
 const toolCalls = document.querySelector("#tool-calls");
 const errorMessage = document.querySelector("#error-message");
+const approvalCard = document.querySelector("#approval-card");
+const approvalAction = document.querySelector("#approval-action");
+const approvalSummary = document.querySelector("#approval-summary");
+const approvalArguments = document.querySelector("#approval-arguments");
+const approveButton = document.querySelector("#approve-button");
+const rejectButton = document.querySelector("#reject-button");
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -56,6 +62,31 @@ function renderRun(result) {
   answer.textContent = result.answer ?? "The run finished without a final answer.";
   answer.classList.toggle("empty-state", result.answer === null);
   renderToolCalls(result.tool_calls);
+  renderApproval(result);
+}
+
+function renderApproval(result) {
+  const approval = result.approval_request;
+  approvalCard.hidden = result.status !== "waiting_for_approval" || !approval;
+  if (!approvalCard.hidden) {
+    approvalAction.textContent = approval.action;
+    approvalSummary.textContent = approval.summary;
+    approvalArguments.textContent = JSON.stringify(approval.arguments, null, 2);
+    approveButton.disabled = false;
+    rejectButton.disabled = false;
+    approveButton.onclick = () => decide(result.run_id, "approve");
+    rejectButton.onclick = () => decide(result.run_id, "reject");
+  }
+}
+
+async function decide(runIdentifier, decision) {
+  approveButton.disabled = true;
+  rejectButton.disabled = true;
+  try {
+    renderRun(await resumeRun(runIdentifier, decision));
+  } catch (error) {
+    showError(error instanceof ApiClientError ? error.message : "The decision could not be submitted.");
+  }
 }
 
 function renderToolCalls(calls) {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -133,9 +134,11 @@ def test_confidential_mcp_observation_blocks_next_public_model_call() -> None:
 
 
 def _factory_server_parameters() -> StdioServerParameters:
+    database_url = os.getenv("FACTORY_DATABASE_URL")
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+        env={"FACTORY_DATABASE_URL": database_url} if database_url else None,
     )
 
 
@@ -164,8 +167,13 @@ def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schema
     assert discovered_session.discovered_tool_names == (
         "get_product_history",
         "get_machine_status",
+        "create_maintenance_ticket",
     )
-    assert set(tools_by_name) == {"get_product_history", "get_machine_status"}
+    assert set(tools_by_name) == {
+        "get_product_history",
+        "get_machine_status",
+        "create_maintenance_ticket",
+    }
     assert (
         _input_schema(tools_by_name["get_product_history"])["properties"]["product_id"][
             "type"

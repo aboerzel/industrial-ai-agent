@@ -30,7 +30,9 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
     open_mcp_session,
 )
 
-DEFAULT_ALLOWED_FACTORY_TOOLS = frozenset({"get_product_history", "get_machine_status"})
+DEFAULT_ALLOWED_FACTORY_TOOLS = frozenset(
+    {"get_product_history", "get_machine_status", "create_maintenance_ticket"}
+)
 DEFAULT_ALLOWED_KNOWLEDGE_TOOLS = frozenset({"search_documentation"})
 
 

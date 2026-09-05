@@ -25,10 +25,12 @@ the protocol, discovery, schemas, or transports manually.
 
 Each MCP server is an Infrastructure adapter over one bounded, cohesive capability
 area. The first two servers are `factory_mcp` and `knowledge_mcp`. `factory_mcp`
-exposes exactly these read-only tools:
+exposes these cohesive factory tools:
 
 * `get_product_history(product_id)` for historical production information.
 * `get_machine_status(station_id)` for the current state of a station.
+* `create_maintenance_ticket(station_id, summary, request_id)` for an approved,
+  idempotent local maintenance action.
 
 `knowledge_mcp` exposes exactly `search_documentation(query, top_k=3)`. It delegates
 to the existing documentation-search capability and its `KnowledgeRetriever` port; the

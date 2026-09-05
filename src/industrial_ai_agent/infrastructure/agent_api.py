@@ -1,6 +1,8 @@
 """FastAPI development entry point for the local Industrial AI Agent API."""
 
+import asyncio
 import os
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -18,6 +20,9 @@ from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     create_default_troubleshooting_run_service,
 )
 
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_FRONTEND_ORIGIN = "http://localhost:8080"
 
@@ -34,7 +39,7 @@ def create_default_app():
             "AGENT_RUNTIME_DATABASE_URL or FACTORY_DATABASE_URL is required"
         )
     return create_app(
-        create_default_troubleshooting_run_service(),
+        create_default_troubleshooting_run_service(runtime_database_url=database_url),
         run_store=PostgreSqlAgentRunStore(
             PostgreSqlSessionFactory(database_url), DEMO_ENGINEER_SECURITY_CONTEXT
         ),

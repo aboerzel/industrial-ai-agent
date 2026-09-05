@@ -40,8 +40,8 @@ flowchart TD
     Start["User request + available tools"] --> LLM["LLM decision<br/>via LLMClient and Model Profile"]
     LLM --> Decision{"Response shape"}
     Decision -->|"final text, no tool call"| Final["SUCCESS<br/>return final answer"]
-    Decision -->|"exactly one tool call"| Limit{"Fewer than 3 tools executed?"}
-    Decision -->|"multiple calls or malformed response"| Invalid["Terminate with deterministic error"]
+    Decision -->|"one or more tool calls"| Limit{"Fewer than 4 tools executed?"}
+    Decision -->|"malformed response"| Invalid["Terminate with deterministic error"]
     Limit -->|"no"| Exhausted["LIMIT_REACHED<br/>do not execute the requested call"]
     Limit -->|"yes"| Validate["Validate tool name and arguments"]
     Validate -->|"invalid"| Invalid
@@ -61,25 +61,29 @@ flowchart TD
 
 ### Loop Bound and Termination
 
-The first implementation defines `MAX_TOOL_CALLS = 3` at a clearly visible location in
+The persistent HITL troubleshooting implementation defines `MAX_TOOL_CALLS = 4` at a clearly visible location in
 the deterministic Application Core. The limit counts accepted and successfully
-executed tools, not LLM requests. A run may therefore execute zero through three tool
-calls. There is no unlimited mode.
+executed tools, not LLM requests. A run may therefore execute zero through four tool
+calls. There is no unlimited mode. The fourth bounded call permits the realistic
+three-read-tools-plus-approved-action trajectory.
 
 The run terminates immediately when the model returns final text without a tool call.
-After every successfully executed tool, including the third, the model may make one
-next decision using the new observation. The decision following the third tool is the
+After every successfully executed tool, including the fourth, the model may make one
+next decision using the new observation. The decision following the fourth tool is the
 last permitted LLM request in the run. If it contains final text without a tool call,
 the run terminates with `SUCCESS`. If it requests another tool call, the run terminates
-with `LIMIT_REACHED`; that fourth call is neither validated for dispatch nor executed,
+with `LIMIT_REACHED`; that fifth call is neither validated for dispatch nor executed,
 and no subsequent LLM request is made. The agent does not ask the model to override the
 limit and does not synthesize an ungrounded partial answer.
 
-A response containing multiple tool calls is rejected; parallel tool execution is not
-supported in the first version. A response with neither usable final text nor a valid
-tool call is treated as malformed and terminates with a deterministic error. Unknown
-tool names and invalid arguments are rejected before dispatch whenever execution budget
-is available. They never reach a capability or external system.
+The bounded loop admits at most the first model-selected tool call from a response.
+Additional calls are discarded before checkpointed dispatch and never execute; parallel
+tool execution is not supported. This also protects the bound when an
+OpenAI-compatible provider ignores the requested `parallel_tool_calls=false` parameter.
+A response with neither usable final text nor a valid tool call is treated as malformed
+and terminates with a deterministic error. Unknown tool names and invalid arguments are
+rejected before dispatch whenever execution budget is available. They never reach a
+capability or external system.
 
 The public agent-run result is intentionally small. It distinguishes `SUCCESS`, which
 contains the final model answer, from `LIMIT_REACHED`, which is a structured status and

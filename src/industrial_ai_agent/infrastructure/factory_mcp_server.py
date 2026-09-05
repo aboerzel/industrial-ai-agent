@@ -10,15 +10,20 @@ from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
     InMemoryMachineStatusRepository,
 )
+from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository import (
+    InMemoryMaintenanceTicketRepository,
+)
 from industrial_ai_agent.infrastructure.in_memory_product_history_repository import (
     InMemoryProductHistoryRepository,
 )
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlMachineStatusRepository,
+    PostgreSqlMaintenanceTicketRepository,
     PostgreSqlProductHistoryRepository,
     PostgreSqlSessionFactory,
 )
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
+from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
 FACTORY_MCP_SERVER_NAME = "factory_mcp"
@@ -30,12 +35,13 @@ def create_factory_mcp_server(
     *,
     product_history: ProductHistoryCapability,
     machine_status: MachineStatusCapability,
+    maintenance_ticket: MaintenanceTicketCapability | None = None,
 ) -> MCPServer:
     """Create an MCP adapter over the injected factory capabilities."""
     server = MCPServer(
         name=FACTORY_MCP_SERVER_NAME,
         version=FACTORY_MCP_SERVER_VERSION,
-        description="Read-only factory information tools.",
+        description="Factory information and approved maintenance-action tools.",
     )
 
     @server.tool(
@@ -56,6 +62,25 @@ def create_factory_mcp_server(
         result = machine_status.get_machine_status(station_id)
         return result.model_dump(mode="json")
 
+    if maintenance_ticket is not None:
+
+        @server.tool(
+            name="create_maintenance_ticket",
+            description="Create an approved maintenance ticket for a station.",
+            structured_output=True,
+        )
+        def create_maintenance_ticket(
+            station_id: str,
+            summary: str,
+            request_id: str,
+        ) -> dict[str, Any]:
+            result = maintenance_ticket.create_maintenance_ticket(
+                request_id=request_id,
+                station_id=station_id,
+                summary=summary,
+            )
+            return result.model_dump(mode="json")
+
     return server
 
 
@@ -75,10 +100,18 @@ def create_default_factory_mcp_server() -> MCPServer:
                     session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
                 )
             ),
+            maintenance_ticket=MaintenanceTicketCapability(
+                PostgreSqlMaintenanceTicketRepository(
+                    session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
+                )
+            ),
         )
     return create_factory_mcp_server(
         product_history=ProductHistoryCapability(InMemoryProductHistoryRepository()),
         machine_status=MachineStatusCapability(InMemoryMachineStatusRepository()),
+        maintenance_ticket=MaintenanceTicketCapability(
+            InMemoryMaintenanceTicketRepository()
+        ),
     )
 
 

@@ -181,6 +181,7 @@ def test_maps_tool_definitions_and_tool_calls_without_executing_them() -> None:
     assert fake_client.completions.parameters["tools"][0]["function"]["name"] == (
         "get_product_history"
     )
+    assert fake_client.completions.parameters["parallel_tool_calls"] is False
 
 
 def test_maps_assistant_tool_call_and_tool_result_messages() -> None:

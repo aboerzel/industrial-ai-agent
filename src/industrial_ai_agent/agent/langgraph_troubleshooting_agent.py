@@ -30,7 +30,6 @@ from industrial_ai_agent.agent.agent_run import (
     ExecutedToolCall,
     InvalidToolArgumentsError,
     MissingLLMResponseTextError,
-    ToolCallLimitExceededError,
     UnknownToolError,
 )
 from industrial_ai_agent.agent.langchain_model import (
@@ -48,10 +47,11 @@ from industrial_ai_agent.tools.maintenance_ticket import (
 
 CREATE_MAINTENANCE_TICKET_TOOL_NAME = "create_maintenance_ticket"
 MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
-    "You are an industrial troubleshooting assistant. Use only the provided read-only "
-    "tools when their evidence is necessary to answer the explicit user request. Call "
-    "one tool at a time, do not repeat available evidence, and base the final answer on "
-    "the collected tool results without inventing industrial data."
+    "You are an industrial troubleshooting assistant. Use the provided tools when "
+    "their evidence is necessary to answer the explicit user request. Call one tool at "
+    "a time, do not repeat available evidence, and base the final answer on collected "
+    "tool results without inventing industrial data. A maintenance ticket is only a "
+    "proposal and requires human approval before it is created."
 )
 HITL_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "You are an industrial troubleshooting assistant. Use only the provided action "
@@ -131,7 +131,9 @@ class LangGraphTroubleshootingAgent:
     ) -> LLMResponse:
         """Bind runtime-discovered MCP tools for one first-decision run."""
         async with self._open_mcp_session() as session:
-            response = self._chat_model.bind_tools(session.tools).invoke(
+            response = self._chat_model.bind_tools(
+                _read_only_tools(session.tools)
+            ).invoke(
                 self._initial_messages(
                     user_request,
                     system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
@@ -153,8 +155,9 @@ class LangGraphTroubleshootingAgent:
         async with self._open_mcp_session() as session:
             if session_observer is not None:
                 session_observer(session)
-            tools_by_name = {tool.name: tool for tool in session.tools}
-            chat_model = self._chat_model.bind_tools(session.tools)
+            tools = _read_only_tools(session.tools)
+            tools_by_name = {tool.name: tool for tool in tools}
+            chat_model = self._chat_model.bind_tools(tools)
             graph = self._build_async_graph(chat_model, tools_by_name)
             config: RunnableConfig = {"recursion_limit": 12}
             state = await graph.ainvoke(
@@ -294,6 +297,56 @@ class LangGraphTroubleshootingAgent:
             model_profile_name=self._chat_model.model_profile.name,
         )
 
+    async def astart_via_mcp(
+        self, user_request: str, *, thread_id: str
+    ) -> tuple[TroubleshootingGraphState, dict[str, object] | None]:
+        """Start the production multi-MCP graph and persist a native interrupt."""
+        self._require_resumable_run_context()
+        async with self._open_mcp_session() as session:
+            graph = self._build_async_hitl_mcp_graph(
+                self._chat_model.bind_tools(session.tools),
+                {tool.name: tool for tool in session.tools},
+            )
+            config = self._checkpoint_config(thread_id)
+            await graph.ainvoke(
+                self._initial_state(
+                    user_request, system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
+                ),
+                config=config,
+            )
+            snapshot = await graph.aget_state(config)
+        state = self._restore_public_state(
+            cast(CheckpointedTroubleshootingGraphState, snapshot.values)
+        )
+        return state, _interrupt_payload(snapshot.interrupts)
+
+    async def aresume_via_mcp(
+        self, *, thread_id: str, approval: object
+    ) -> TroubleshootingGraphState:
+        """Resume a persisted multi-MCP graph with unchanged runtime bindings."""
+        self._require_resumable_run_context()
+        async with self._open_mcp_session() as session:
+            graph = self._build_async_hitl_mcp_graph(
+                self._chat_model.bind_tools(session.tools),
+                {tool.name: tool for tool in session.tools},
+            )
+            config = self._checkpoint_config(thread_id)
+            before = await graph.aget_state(config)
+            if not before.values:
+                raise ValueError(
+                    f"No checkpointed run found for thread_id: {thread_id}"
+                )
+            self._require_matching_run_context(
+                self._restore_public_state(
+                    cast(CheckpointedTroubleshootingGraphState, before.values)
+                )
+            )
+            await graph.ainvoke(Command(resume=approval), config=config)
+            snapshot = await graph.aget_state(config)
+        return self._restore_public_state(
+            cast(CheckpointedTroubleshootingGraphState, snapshot.values)
+        )
+
     def _build_hitl_graph(
         self,
         chat_model: LangChainChatModel,
@@ -343,6 +396,41 @@ class LangGraphTroubleshootingAgent:
         builder.add_edge("tool", "model")
         return builder.compile()
 
+    def _build_async_hitl_mcp_graph(
+        self,
+        chat_model: LangChainChatModel,
+        tools_by_name: dict[str, BaseTool],
+    ):
+        async def tool_node(
+            state: CheckpointedTroubleshootingGraphState,
+        ) -> dict[str, object]:
+            return await self._atool_node(tools_by_name, state)
+
+        async def execute_action_node(
+            state: CheckpointedTroubleshootingGraphState,
+        ) -> dict[str, object]:
+            return await self._aexecute_mcp_action_node(tools_by_name, state)
+
+        # noinspection PyTypeChecker
+        builder = StateGraph(CheckpointedTroubleshootingGraphState)
+        builder.add_node("model", lambda state: self._model_node(chat_model, state))
+        builder.add_node("tool", tool_node)
+        builder.add_node(
+            "prepare_action",
+            lambda state: self._prepare_mcp_action_node(tools_by_name, state),
+        )
+        builder.add_node("approval", self._approval_node)
+        builder.add_node("execute_action", execute_action_node)
+        builder.add_node("cancel_action", self._cancel_action_node)
+        builder.add_edge(START, "model")
+        builder.add_conditional_edges("model", self._route_after_model)
+        builder.add_edge("tool", "model")
+        builder.add_edge("prepare_action", "approval")
+        builder.add_conditional_edges("approval", self._route_after_approval)
+        builder.add_edge("execute_action", "model")
+        builder.add_edge("cancel_action", END)
+        return builder.compile(checkpointer=self._checkpointer)
+
     @staticmethod
     def _model_node(
         chat_model: LangChainChatModel,
@@ -351,9 +439,15 @@ class LangGraphTroubleshootingAgent:
         message = chat_model.invoke(state["messages"])
         response = to_llm_response(message)
         if len(response.tool_calls) > 1:
-            raise ToolCallLimitExceededError(
-                "At most one tool call per LLM response is allowed"
+            # Some OpenAI-compatible local providers ignore parallel_tool_calls.
+            # Preserve ADR-004 by admitting only the first model-selected call into
+            # the checkpointed transcript; the remaining calls are never dispatched.
+            message = AIMessage(
+                content=message.content,
+                tool_calls=[message.tool_calls[0]],
+                response_metadata=message.response_metadata,
             )
+            response = to_llm_response(message)
         if not response.tool_calls:
             if response.text is None:
                 raise MissingLLMResponseTextError("LLM response did not contain text")
@@ -500,6 +594,39 @@ class LangGraphTroubleshootingAgent:
             "approval_result": None,
         }
 
+    def _prepare_mcp_action_node(
+        self,
+        tools_by_name: dict[str, BaseTool],
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> dict[str, object]:
+        message = state["messages"][-1]
+        if not isinstance(message, AIMessage) or len(message.tool_calls) != 1:
+            raise RuntimeError("Action preparation requires exactly one AI tool call")
+        tool_call = message.tool_calls[0]
+        if tool_call["name"] != CREATE_MAINTENANCE_TICKET_TOOL_NAME:
+            raise UnknownToolError(f"Unknown tool: {tool_call['name']}")
+        tool = tools_by_name.get(CREATE_MAINTENANCE_TICKET_TOOL_NAME)
+        if tool is None:
+            raise UnknownToolError(
+                f"Unknown tool: {CREATE_MAINTENANCE_TICKET_TOOL_NAME}"
+            )
+        raw_arguments = dict(tool_call["args"])
+        # The MCP boundary requires the durable idempotency key.  It is injected from
+        # the model tool-call ID and never accepted from the model as authority.
+        raw_arguments["request_id"] = _require_tool_call_id(tool_call.get("id"))
+        arguments = self._validate_tool_arguments(tool, raw_arguments)
+        tool_call_id = _require_tool_call_id(tool_call.get("id"))
+        return {
+            "pending_action": {
+                "action": CREATE_MAINTENANCE_TICKET_TOOL_NAME,
+                "request_id": tool_call_id,
+                "tool_call_id": tool_call_id,
+                "station_id": str(arguments["station_id"]),
+                "summary": str(arguments["summary"]),
+            },
+            "approval_result": None,
+        }
+
     @staticmethod
     def _approval_node(
         state: CheckpointedTroubleshootingGraphState,
@@ -545,6 +672,44 @@ class LangGraphTroubleshootingAgent:
                 ToolMessage(
                     content=result.model_dump_json(),
                     tool_call_id=pending_action["tool_call_id"],
+                )
+            ],
+            "executed_tool_count": state["executed_tool_count"] + 1,
+            "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
+            "pending_action": None,
+        }
+
+    async def _aexecute_mcp_action_node(
+        self,
+        tools_by_name: dict[str, BaseTool],
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> dict[str, object]:
+        pending_action = _require_pending_action(state)
+        if state["approval_result"] != ApprovalDecision.APPROVE.value:
+            raise RuntimeError("Maintenance ticket execution requires approval")
+        tool = tools_by_name.get(CREATE_MAINTENANCE_TICKET_TOOL_NAME)
+        if tool is None:
+            raise UnknownToolError(
+                f"Unknown tool: {CREATE_MAINTENANCE_TICKET_TOOL_NAME}"
+            )
+        result = await tool.ainvoke(
+            {
+                "station_id": pending_action["station_id"],
+                "summary": pending_action["summary"],
+                "request_id": pending_action["request_id"],
+            }
+        )
+        executed_call = {
+            "tool": CREATE_MAINTENANCE_TICKET_TOOL_NAME,
+            "arguments": {
+                "station_id": pending_action["station_id"],
+                "summary": pending_action["summary"],
+            },
+        }
+        return {
+            "messages": [
+                ToolMessage(
+                    content=str(result), tool_call_id=pending_action["tool_call_id"]
                 )
             ],
             "executed_tool_count": state["executed_tool_count"] + 1,
@@ -752,6 +917,15 @@ def _parse_approval(value: object) -> ApprovalDecision:
     raise ValueError("Approval must be either 'approve' or 'reject'")
 
 
+def _interrupt_payload(interrupts: tuple[object, ...]) -> dict[str, object] | None:
+    if not interrupts:
+        return None
+    payload = getattr(interrupts[0], "value", None)
+    if not isinstance(payload, dict):
+        raise TypeError("Approval interrupt payload must be a dictionary")
+    return dict(payload)
+
+
 def _extract_classification(result: object) -> DataClassification | None:
     if isinstance(result, str):
         try:
@@ -777,3 +951,9 @@ def _extract_classification(result: object) -> DataClassification | None:
                 if nested is not None:
                     values.append(nested)
     return effective_data_classification(*values) if values else None
+
+
+def _read_only_tools(tools: tuple[BaseTool, ...]) -> tuple[BaseTool, ...]:
+    return tuple(
+        tool for tool in tools if tool.name != CREATE_MAINTENANCE_TICKET_TOOL_NAME
+    )

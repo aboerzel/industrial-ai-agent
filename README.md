@@ -351,3 +351,12 @@ Development should include:
 * Ruff
 * focused commits
 * architecture decision records for significant choices
+
+## Persistent Approval Workflow
+
+The browser/API troubleshooting flow uses one durable `run_id == thread_id` across
+FastAPI, LangGraph checkpoints, Factory MCP, Knowledge MCP, and PostgreSQL. Read tools
+run normally. A `create_maintenance_ticket` proposal pauses at native LangGraph
+`interrupt()` before its Factory-MCP side effect. The persisted approval request records
+normalized arguments, summary, classification, model profile, status, and timestamp.
+`POST /api/v1/runs/{run_id}/resume` accepts only `approve` or `reject`.

@@ -1,7 +1,7 @@
 """Application-facing lifecycle port for durable agent runs."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 from uuid import UUID
 
@@ -20,6 +20,7 @@ class StoredAgentRun:
     request_text: str = ""
     result: AgentRunResult | None = None
     error_code: str | None = None
+    approval_request: dict[str, object] | None = None
 
 
 class AgentRunStore(Protocol):
@@ -49,6 +50,12 @@ class AgentRunStore(Protocol):
     ) -> StoredAgentRun: ...
 
     async def get(self, run_id: UUID) -> StoredAgentRun | None: ...
+
+    async def wait_for_approval(
+        self, run_id: UUID, approval_request: dict[str, object]
+    ) -> StoredAgentRun: ...
+
+    async def claim_resume(self, run_id: UUID) -> StoredAgentRun | None: ...
 
 
 class InMemoryAgentRunStore:
@@ -90,6 +97,7 @@ class InMemoryAgentRunStore:
             model_profile=existing.model_profile,
             request_text=existing.request_text,
             result=result,
+            approval_request=None,
         )
         return await self._replace_existing(record)
 
@@ -103,12 +111,36 @@ class InMemoryAgentRunStore:
             model_profile=existing.model_profile,
             request_text=existing.request_text,
             error_code=error_code,
+            approval_request=None,
         )
         return await self._replace_existing(record)
 
     async def get(self, run_id: UUID) -> StoredAgentRun | None:
         async with self._lock:
             return self._records.get(run_id)
+
+    async def wait_for_approval(
+        self, run_id: UUID, approval_request: dict[str, object]
+    ) -> StoredAgentRun:
+        existing = await self._require(run_id)
+        record = replace(
+            existing,
+            status=RunStatus.WAITING_FOR_APPROVAL,
+            approval_request=approval_request,
+        )
+        return await self._replace_existing(record)
+
+    async def claim_resume(self, run_id: UUID) -> StoredAgentRun | None:
+        async with self._lock:
+            existing = self._records.get(run_id)
+            if (
+                existing is None
+                or existing.status is not RunStatus.WAITING_FOR_APPROVAL
+            ):
+                return None
+            record = replace(existing, status=RunStatus.RUNNING)
+            self._records[run_id] = record
+            return record
 
     async def bind_execution_context(
         self,
@@ -130,6 +162,7 @@ class InMemoryAgentRunStore:
                 request_text=existing.request_text,
                 result=existing.result,
                 error_code=existing.error_code,
+                approval_request=existing.approval_request,
             )
         )
 

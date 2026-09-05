@@ -2,11 +2,17 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from uuid import uuid4
 
 from sqlalchemy import Connection, Engine, create_engine, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from industrial_ai_agent.domain.machine_status import MachineState, MachineStatus
+from industrial_ai_agent.domain.maintenance_ticket import (
+    MaintenanceTicket,
+    MaintenanceTicketRequestId,
+)
 from industrial_ai_agent.domain.product_history import (
     ProductHistory,
     ProductId,
@@ -18,6 +24,7 @@ from industrial_ai_agent.domain.security import DataClassification, SecurityCont
 from industrial_ai_agent.infrastructure.persistence.models import (
     DocumentCatalogRecord,
     MachineStateRecord,
+    MaintenanceTicketRecord,
     ProductEventRecord,
     ProductRecord,
 )
@@ -127,6 +134,80 @@ class PostgreSqlMachineStatusRepository:
             active_error_code=record.active_error_code,
             classification=DataClassification(record.classification),
         )
+
+
+class PostgreSqlMaintenanceTicketRepository:
+    """Create station maintenance tickets with a database-enforced request key."""
+
+    def __init__(
+        self,
+        session_factory: PostgreSqlSessionFactory,
+        security_context: SecurityContext,
+    ) -> None:
+        self._session_factory = session_factory
+        self._security_context = security_context
+
+    def create_maintenance_ticket(
+        self,
+        request_id: MaintenanceTicketRequestId,
+        station_id: StationId,
+        summary: str,
+    ) -> MaintenanceTicket:
+        with self._session_factory.session(self._security_context) as session:
+            existing = session.scalar(
+                select(MaintenanceTicketRecord).where(
+                    MaintenanceTicketRecord.request_id == request_id.value
+                )
+            )
+            if existing is not None:
+                return MaintenanceTicket(
+                    ticket_id=existing.ticket_code,
+                    request_id=request_id,
+                    station_id=station_id,
+                    summary=existing.summary or summary,
+                )
+            ticket_code = f"MT-{uuid4().hex[:12].upper()}"
+            record = MaintenanceTicketRecord(
+                id=uuid4(),
+                station_id=session.scalar(
+                    select(MachineStateRecord.station_id)
+                    .where(MachineStateRecord.station.has(code=station_id.value))
+                    .limit(1)
+                ),
+                ticket_code=ticket_code,
+                status="OPEN",
+                classification=int(self._security_context.clearance),
+                request_id=request_id.value,
+                summary=summary,
+            )
+            if record.station_id is None:
+                raise ValueError(f"Unknown station: {station_id.value}")
+            try:
+                with session.begin_nested():
+                    session.add(record)
+                    session.flush()
+            except IntegrityError:
+                # A concurrent resume won the request-id race. Read its ticket inside
+                # the still-valid outer transaction and return the idempotent result.
+                existing = session.scalar(
+                    select(MaintenanceTicketRecord).where(
+                        MaintenanceTicketRecord.request_id == request_id.value
+                    )
+                )
+                if existing is None:
+                    raise
+                return MaintenanceTicket(
+                    ticket_id=existing.ticket_code,
+                    request_id=request_id,
+                    station_id=station_id,
+                    summary=existing.summary or summary,
+                )
+            return MaintenanceTicket(
+                ticket_id=ticket_code,
+                request_id=request_id,
+                station_id=station_id,
+                summary=summary,
+            )
 
 
 class PostgreSqlDocumentCatalogRepository:

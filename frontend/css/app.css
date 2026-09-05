@@ -275,6 +275,26 @@ dd {
   background: #fff0ef;
 }
 
+.approval-card {
+  margin-top: 24px;
+  border-top: 2px solid #d49022;
+  padding-top: 18px;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+#reject-button {
+  background: #8b2f2b;
+}
+
+#reject-button:hover:not(:disabled) {
+  background: #70231f;
+}
+
 @media (max-width: 760px) {
   .shell {
     width: min(100% - 24px, 620px);

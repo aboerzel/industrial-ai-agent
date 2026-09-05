@@ -127,6 +127,8 @@ class MaintenanceTicketRecord(Base):
     ticket_code: Mapped[str] = mapped_column(String, unique=True)
     status: Mapped[str] = mapped_column(String)
     classification: Mapped[int] = mapped_column(SmallInteger)
+    request_id: Mapped[str | None] = mapped_column(String, unique=True)
+    summary: Mapped[str | None] = mapped_column(Text)
 
 
 class ProcessParameterRecord(Base):
@@ -171,6 +173,7 @@ class AgentRunRecord(Base):
     error_code: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)
     tool_call_summary: Mapped[list[dict[str, object]]] = mapped_column(JSON)
+    approval_payload: Mapped[dict[str, object] | None] = mapped_column(JSON)
     interrupted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

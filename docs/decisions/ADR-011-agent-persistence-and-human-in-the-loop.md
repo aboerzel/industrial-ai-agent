@@ -92,8 +92,9 @@ Approval requirements are deterministic capability policy, not an LLM judgment:
 * The action capability `create_maintenance_ticket` always requires approval.
 
 The LLM may propose a known action through its existing tool-choice responsibility, but
-it cannot decide whether that action needs approval. The first action is an in-memory
-demonstration only; it does not call an external ticketing system or control equipment.
+it cannot decide whether that action needs approval. The local Factory-MCP action is
+durably persisted in PostgreSQL; it does not control equipment or call an external
+ticketing system.
 
 ### Side Effects and Idempotency
 
@@ -102,10 +103,10 @@ command. Therefore, code before `interrupt()` must be pure or idempotent. The ap
 node only validates and constructs data before interrupting. The write action executes
 only in a separate node after an approved resume.
 
-The demonstration action uses the proposed tool-call ID as an idempotency key in its
-in-memory repository. Replaying its execution node returns the same ticket rather than
-creating a second one. Durable cross-process idempotency guarantees remain a later
-production concern.
+The action uses the proposed tool-call ID as an idempotency key. PostgreSQL enforces it
+with a unique constraint, so replaying the action returns the same ticket rather than
+creating a second one. The public run store also atomically claims a waiting run before
+it resumes the graph.
 
 ### Security and Model Routing
 

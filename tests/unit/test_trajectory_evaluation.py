@@ -223,7 +223,7 @@ def test_additional_tool_call_is_penalized() -> None:
 
 
 def test_termination_score_accepts_matching_status() -> None:
-    trajectory = (product_call(), machine_call(), product_call())
+    trajectory = (product_call(), machine_call(), product_call(), machine_call())
     case = eval_case(
         expected_trajectory=trajectory,
         expected_status=AgentRunStatus.LIMIT_REACHED,

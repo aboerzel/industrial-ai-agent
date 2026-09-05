@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import os
 import sys
 
 import pytest
@@ -56,6 +57,7 @@ def _response(name: str, arguments: dict[str, object], call_id: str) -> LLMRespo
 
 
 def _provider() -> McpLangChainToolProvider:
+    factory_database_url = os.getenv("FACTORY_DATABASE_URL")
     return McpLangChainToolProvider(
         (
             McpServerConfiguration(
@@ -66,6 +68,11 @@ def _provider() -> McpLangChainToolProvider:
                         "-m",
                         "industrial_ai_agent.infrastructure.factory_mcp_server",
                     ],
+                    env=(
+                        {"FACTORY_DATABASE_URL": factory_database_url}
+                        if factory_database_url
+                        else None
+                    ),
                 ),
                 allowed_tool_names=DEFAULT_ALLOWED_FACTORY_TOOLS,
             ),
@@ -94,6 +101,7 @@ def test_multi_mcp_discovery_binds_all_unique_authorized_tools_once_per_run() ->
     assert session.discovered_tool_names == (
         "get_product_history",
         "get_machine_status",
+        "create_maintenance_ticket",
         "search_documentation",
     )
     assert [tool.name for tool in session.tools] == list(session.discovered_tool_names)
@@ -133,9 +141,15 @@ def test_multi_mcp_langgraph_run_is_sequential_and_has_no_direct_retriever_acces
 
 
 def test_duplicate_discovered_tool_names_fail_closed() -> None:
+    factory_database_url = os.getenv("FACTORY_DATABASE_URL")
     duplicate_factory_transport = StdioServerParameters(
         command=sys.executable,
         args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
+        env=(
+            {"FACTORY_DATABASE_URL": factory_database_url}
+            if factory_database_url
+            else None
+        ),
     )
     provider = McpLangChainToolProvider(
         (

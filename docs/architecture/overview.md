@@ -354,11 +354,12 @@ dispatches through the opened MCP session, serializes each structured result, an
 the complete current-run message context. The authorized Factory and Knowledge tools
 remain available at every decision step.
 
-`MAX_TOOL_CALLS = 3` counts successfully executed tools rather than LLM requests. After
-the third observation, exactly one final LLM decision is allowed. Final text returns
+`MAX_TOOL_CALLS = 4` counts successfully executed tools rather than LLM requests. After
+the fourth observation, exactly one final LLM decision is allowed. Final text returns
 `SUCCESS`; another requested call returns `LIMIT_REACHED`, is not executed, and causes
-no further LLM request. Unknown tools, invalid arguments, and multiple calls in one
-response remain deterministic failures.
+no further LLM request. Unknown tools and invalid arguments remain deterministic
+failures. If a provider returns multiple calls in one response, only the first is
+admitted to the checkpointed sequential dispatch; every other call is discarded.
 
 The LangGraph MCP path preserves that behavior in an explicit graph:
 
@@ -781,3 +782,17 @@ provider choice remains an outcome of semantic profile metadata and deterministi
 routing rather than provider-specific agent logic. See
 [ADR-002](../decisions/ADR-002-provider-and-model-independent-llm-architecture.md) for
 the decision and its tradeoffs.
+
+## Persistent HITL Run
+
+```text
+Browser -> FastAPI -> TroubleshootingRunService -> LangGraph
+  -> Factory MCP / Knowledge MCP -> interrupt(action_approval)
+  -> PostgreSQL checkpoint + agent_runtime.agent_runs
+  -> Browser approve/reject -> same LangGraph thread
+  -> Factory MCP create_maintenance_ticket -> PostgreSQL -> final result
+```
+
+The public run record persists lifecycle and approval data; official LangGraph
+checkpoints remain framework-managed. Factory MCP owns the cohesive maintenance action
+and its request-ID unique constraint.

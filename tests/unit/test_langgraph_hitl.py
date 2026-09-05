@@ -208,6 +208,29 @@ def test_invalid_resume_value_fails_without_executing_action() -> None:
     assert ticket_repository.tickets == ()
 
 
+def test_multiple_model_tool_calls_admit_only_the_first_call() -> None:
+    first = action_response(station_id="S04", call_id="ticket-first")
+    second = action_response(station_id="S12", call_id="ticket-second")
+    multi_call_response = LLMResponse(
+        text=None,
+        tool_calls=first.tool_calls + second.tool_calls,
+        finish_reason=FinishReason.TOOL_CALLS,
+    )
+    agent, ticket_repository = create_hitl_agent(
+        FakeLLMClient(multi_call_response),
+        checkpointer=InMemorySaver(),
+    )
+
+    agent.start("Create maintenance tickets.", thread_id="single-admission-thread")
+
+    assert agent.get_interrupt_payload(thread_id="single-admission-thread") == {
+        "kind": "action_approval",
+        "action": CREATE_MAINTENANCE_TICKET_TOOL_NAME,
+        "details": {"station_id": "S04", "summary": "Investigate E-STOP-17"},
+    }
+    assert ticket_repository.tickets == ()
+
+
 def test_same_thread_can_continue_only_with_matching_profile_and_classification() -> (
     None
 ):
@@ -298,3 +321,25 @@ def test_ticket_repository_is_idempotent_for_the_same_request_id() -> None:
 
     assert first_result == second_result
     assert len(repository.tickets) == 1
+
+
+def test_four_executed_actions_reach_the_limit_without_executing_a_fifth() -> None:
+    agent, ticket_repository = create_hitl_agent(
+        FakeLLMClient(
+            action_response(call_id="ticket-call-1"),
+            action_response(call_id="ticket-call-2"),
+            action_response(call_id="ticket-call-3"),
+            action_response(call_id="ticket-call-4"),
+            action_response(call_id="ticket-call-5"),
+        ),
+        checkpointer=InMemorySaver(),
+    )
+
+    agent.start("Create maintenance tickets for S04.", thread_id="limit-thread")
+    for _ in range(4):
+        state = agent.resume(thread_id="limit-thread", approval="approve")
+
+    assert state["run_status"] is AgentRunStatus.LIMIT_REACHED
+    assert state["executed_tool_count"] == 4
+    assert len(state["executed_tool_calls"]) == 4
+    assert len(ticket_repository.tickets) == 4

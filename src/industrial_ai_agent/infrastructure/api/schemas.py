@@ -44,6 +44,29 @@ class ToolCallResponse(BaseModel):
     arguments: dict[str, Any]
 
 
+class ApprovalRequestResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: str
+    summary: str
+    arguments: dict[str, Any]
+    classification: str
+    model_profile: str
+    status: RunStatus
+    created_at: str
+
+
+class ResumeDecision(StrEnum):
+    APPROVE = "approve"
+    REJECT = "reject"
+
+
+class ResumeRunRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    decision: ResumeDecision
+
+
 class RunResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -51,6 +74,7 @@ class RunResponse(BaseModel):
     status: RunStatus
     answer: str | None = None
     tool_calls: tuple[ToolCallResponse, ...] = ()
+    approval_request: ApprovalRequestResponse | None = None
 
 
 class ApiErrorResponse(BaseModel):

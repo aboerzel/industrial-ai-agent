@@ -68,5 +68,8 @@ server, tool allowlist, or egress policy. The API continues to assign `CONFIDENT
 server-side, and ADR-009 controls model egress independently from MCP network traffic.
 The UI contains no secrets and must be treated as publicly visible client code.
 
-Future work may add streaming, HITL approval/resume, persistence, authentication, and a
-production deployment only through separate scoped decisions.
+When a response is `waiting_for_approval`, the UI renders the action, summary,
+arguments, run ID, and status. It disables both decision buttons before calling the
+resume API through `frontend/js/api.js`, so a double click cannot issue a second
+browser action. The browser still cannot set classification, profile, provider, MCP
+server, or egress policy. Streaming and authentication remain future work.

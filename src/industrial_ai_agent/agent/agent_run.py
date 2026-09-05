@@ -3,7 +3,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-MAX_TOOL_CALLS = 3
+MAX_TOOL_CALLS = 4
 
 
 class UnknownToolError(ValueError):
