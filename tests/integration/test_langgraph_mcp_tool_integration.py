@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 
 from industrial_ai_agent.agent.agent_run import (
     AgentRunStatus,
+    MissingLLMResponseTextError,
 )
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     LangGraphTroubleshootingAgent,
@@ -235,6 +236,46 @@ def test_mcp_run_opens_one_session_for_multiple_sequential_tool_calls() -> None:
         ("get_product_history", {"product_id": "P4711"}),
         ("get_machine_status", {"station_id": "S04"}),
     ]
+
+
+def test_ambiguous_request_can_terminate_with_a_final_answer_without_a_tool_call() -> (
+    None
+):
+    provider = _CountingMcpToolProvider()
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            FakeLLMClient(
+                LLMResponse(
+                    text="Please provide a product, station, or error identifier.",
+                    finish_reason=FinishReason.STOP,
+                )
+            ),
+            PROFILE,
+        ),
+        mcp_tool_provider=cast(McpToolProvider, cast(object, provider)),
+    )
+
+    result = asyncio.run(
+        agent.aanswer_via_mcp("There have been intermittent quality issues recently.")
+    )
+
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.tool_call_count == 0
+    assert result.executed_tool_calls == ()
+    assert provider.invocations == []
+
+
+def test_empty_tool_less_model_response_remains_fail_closed() -> None:
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            FakeLLMClient(LLMResponse(text=None, finish_reason=FinishReason.STOP)),
+            PROFILE,
+        ),
+        mcp_tool_provider=cast(McpToolProvider, cast(object, _CountingMcpToolProvider())),
+    )
+
+    with pytest.raises(MissingLLMResponseTextError, match="did not contain text"):
+        asyncio.run(agent.aanswer_via_mcp("There have been intermittent quality issues."))
 
 
 def test_mcp_path_keeps_final_egress_check_before_any_provider_call() -> None:

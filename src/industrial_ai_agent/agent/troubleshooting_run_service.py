@@ -7,7 +7,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.agent_run import (
+    AgentRunResult,
+    InvalidToolArgumentsError,
+)
 from industrial_ai_agent.agent.llm import ModelProfile
 from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.model_routing import (
@@ -108,9 +111,13 @@ class TroubleshootingRunService:
                 requirements=requirements,
             ) as agent:
                 return await agent.aanswer_via_mcp(message)
-        except* McpServiceUnavailableError as error:
-            # Streamable HTTP task groups can nest the underlying transport failure.
-            raise McpServiceUnavailableError("MCP service is unavailable") from error
+        except BaseExceptionGroup as error:
+            root_cause = _single_exception_group_cause(error)
+            if isinstance(root_cause, McpServiceUnavailableError):
+                raise McpServiceUnavailableError("MCP service is unavailable") from error
+            if isinstance(root_cause, InvalidToolArgumentsError):
+                raise root_cause from error
+            raise
 
     async def start(
         self, message: str, *, run_id: UUID
@@ -167,6 +174,14 @@ def confidential_troubleshooting_requirements() -> TaskRequirements:
         cost_preference=CostPreference.PREFER_QUALITY,
         data_classification=DataClassification.CONFIDENTIAL,
     )
+
+
+def _single_exception_group_cause(error: BaseExceptionGroup) -> BaseException:
+    """Expose one nested cause without discarding multi-cause failure context."""
+    cause: BaseException = error
+    while isinstance(cause, BaseExceptionGroup) and len(cause.exceptions) == 1:
+        cause = cause.exceptions[0]
+    return cause
 
 
 def _execution_from_state(

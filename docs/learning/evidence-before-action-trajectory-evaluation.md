@@ -83,3 +83,28 @@ precondition is justified from this dataset alone. If a broader or adversarial e
 later finds a violation, use explicit graph-state evidence and a deterministic transition
 guard before the existing LangGraph write node, optionally declared by ToolPolicy
 metadata. Do not add a planner or second workflow engine.
+
+## Ambiguous-Request Follow-Up
+
+The follow-up reproduced one ambiguous request with `local_quality` and diagnostic
+metadata only. The OpenAI-compatible Ollama adapter returned three normal
+`tool_calls` responses, each with one tool call and no text. The third selected
+`get_product_history` with `product_id="PROD-001"`, which violates the MCP schema's
+required `^P[0-9]{4,}$` pattern. The deterministic Pydantic validation correctly
+raised `InvalidToolArgumentsError`. MCP/AnyIO stream shutdown then nested that error in
+four single-child `ExceptionGroup` layers. This was not a LangGraph requirement for a
+tool call, an invalid LangChain message, a provider transport failure, or a policy
+decision.
+
+LangGraph already terminates natively when its model node receives a final text response
+without tool calls. The system instruction now explicitly permits a broad request with
+no product, station, error, or explicit documentation search to receive safe general
+guidance or a scope question without tool use. No tool schema, ToolPolicy, retrieval,
+dataset, ground truth, or orchestration loop changed. The application boundary unwraps
+only a nested `ExceptionGroup` with one known cause; multi-cause groups remain intact,
+and FastAPI continues to return a sanitized error response.
+
+Only the unchanged ambiguous dataset case was rerun five times serially. It achieved
+5/5 success, `SUCCESS` termination, an exact empty trajectory, zero tool calls, zero
+write proposals, zero run-to-run variance, and ticket delta `0`. The complete 30-run
+evaluation was intentionally not rerun.

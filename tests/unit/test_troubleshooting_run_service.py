@@ -2,7 +2,13 @@ import asyncio
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 
-from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
+import pytest
+
+from industrial_ai_agent.agent.agent_run import (
+    AgentRunResult,
+    AgentRunStatus,
+    InvalidToolArgumentsError,
+)
 from industrial_ai_agent.agent.llm import ModelProfile
 from industrial_ai_agent.agent.model_egress import DataClassification, ExecutionZone
 from industrial_ai_agent.agent.model_routing import (
@@ -55,6 +61,34 @@ class CapturingFactory(RoutedTroubleshootingAgentFactory):
         yield FakeAgent()
 
 
+class FailingAgent:
+    @staticmethod
+    async def aanswer_via_mcp(user_request: str) -> AgentRunResult:
+        assert user_request == "Investigate P4711."
+        raise ExceptionGroup(
+            "nested MCP shutdown failure",
+            [
+                ExceptionGroup(
+                    "session failure",
+                    [InvalidToolArgumentsError("Invalid arguments for get_product_history")],
+                )
+            ],
+        )
+
+
+class FailingFactory(CapturingFactory):
+    @contextmanager
+    def _open_agent(
+        self,
+        *,
+        profile: ModelProfile,
+        requirements,
+    ) -> Iterator[McpBackedTroubleshootingAgent]:
+        self.profile = profile
+        self.classification = requirements.data_classification
+        yield FailingAgent()
+
+
 def test_troubleshooting_run_service_routes_confidential_requests_server_side() -> None:
     selected_profile = ModelProfile("local_quality")
     factory = CapturingFactory()
@@ -79,3 +113,25 @@ def test_troubleshooting_run_service_routes_confidential_requests_server_side() 
     assert result.status is AgentRunStatus.SUCCESS
     assert factory.profile == selected_profile
     assert factory.classification is DataClassification.CONFIDENTIAL
+
+
+def test_single_cause_exception_group_preserves_invalid_tool_arguments_error() -> None:
+    selected_profile = ModelProfile("local_quality")
+    service = TroubleshootingRunService(
+        router=DeterministicModelRouter(),
+        profiles=(
+            ModelProfileMetadata(
+                profile=selected_profile,
+                capabilities=frozenset(
+                    {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+                ),
+                quality_class=QualityClass.HIGH,
+                cost_class=CostClass.HIGH,
+                execution_zone=ExecutionZone.LOCAL,
+            ),
+        ),
+        agent_factory=FailingFactory(),
+    )
+
+    with pytest.raises(InvalidToolArgumentsError, match="get_product_history"):
+        asyncio.run(service.run("Investigate P4711."))
