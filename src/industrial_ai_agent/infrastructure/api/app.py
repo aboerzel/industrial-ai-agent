@@ -18,7 +18,6 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
     McpServiceUnavailableError,
     RunExecution,
-    TroubleshootingRunService,
 )
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.output_sanitization import (
@@ -40,6 +39,7 @@ from industrial_ai_agent.infrastructure.api.schemas import (
     RunStatus,
     ToolCallResponse,
 )
+from industrial_ai_agent.infrastructure.telemetry import Telemetry, instrument_fastapi
 
 API_PREFIX = "/api/v1"
 
@@ -56,6 +56,7 @@ def create_app(
     *,
     run_store: AgentRunStore,
     allowed_origins: tuple[str, ...] = (),
+    telemetry: Telemetry | None = None,
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
     app = FastAPI(
@@ -109,10 +110,7 @@ def create_app(
         # noinspection PyBroadException
         try:
             service = _run_service(request)
-            if (
-                isinstance(service, TroubleshootingRunService)
-                and service.persistent_hitl_enabled
-            ):
+            if _persistent_hitl_enabled(service):
                 profile, execution = await service.start(payload.message, run_id=run_id)
                 await store.bind_execution_context(
                     run_id,
@@ -205,10 +203,7 @@ def create_app(
                 message="The run is not waiting for approval.",
             )
         service = _run_service(request)
-        if (
-            not isinstance(service, TroubleshootingRunService)
-            or not claimed.model_profile
-        ):
+        if not _persistent_hitl_enabled(service) or not claimed.model_profile:
             await store.fail(run_id, "internal_error")
             _raise_api_run_error(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -240,6 +235,13 @@ def create_app(
             )
 
     app.include_router(runs)
+    if telemetry is not None:
+        instrument_fastapi(app, telemetry)
+
+        @app.on_event("shutdown")
+        async def flush_telemetry() -> None:
+            telemetry.shutdown()
+
     return app
 
 
@@ -261,6 +263,11 @@ def _run_service(request: Request) -> AgentRunService:
 
 def _run_store(request: Request) -> AgentRunStore:
     return request.app.state.run_store
+
+
+def _persistent_hitl_enabled(service: AgentRunService) -> bool:
+    """Allow an Infrastructure observability decorator around the application service."""
+    return bool(getattr(service, "persistent_hitl_enabled", False))
 
 
 def _to_run_response(record: StoredAgentRun) -> RunResponse:

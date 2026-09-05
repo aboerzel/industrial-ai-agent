@@ -43,12 +43,19 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpLangChainToolProvider,
     McpServerConfiguration,
 )
+from industrial_ai_agent.infrastructure.observed_llm_client import ObservedLLMClient
 from industrial_ai_agent.infrastructure.persistence.langgraph_checkpointer import (
     PostgreSqlCheckpointerFactory,
 )
+from industrial_ai_agent.infrastructure.telemetry import Telemetry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MODEL_CONFIGURATION_PATH = PROJECT_ROOT / "config" / "model_profiles.toml"
+DEFAULT_MODEL_CONFIGURATION_PATH = Path(
+    os.getenv(
+        "MODEL_CONFIGURATION_PATH",
+        str(PROJECT_ROOT / "config" / "model_profiles.toml"),
+    )
+)
 DEFAULT_FACTORY_MCP_URL = "http://127.0.0.1:8001/mcp"
 DEFAULT_KNOWLEDGE_MCP_URL = "http://127.0.0.1:8002/mcp"
 MCP_INDUSTRIAL_AGENT_TOKEN_ENV = "MCP_INDUSTRIAL_AGENT_TOKEN"
@@ -63,10 +70,12 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
         configuration: LLMConfiguration,
         mcp_tool_provider: McpLangChainToolProvider,
         egress_policy: ModelEgressPolicy,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self._configuration = configuration
         self._mcp_tool_provider = mcp_tool_provider
         self._egress_policy = egress_policy
+        self._telemetry = telemetry
 
     def open_agent(
         self,
@@ -94,8 +103,18 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                 requirements.data_classification,
                 policy=self._egress_policy,
             )
+            llm_client = (
+                ObservedLLMClient(
+                    checked_client,
+                    configuration=self._configuration,
+                    data_classification=requirements.data_classification,
+                    telemetry=self._telemetry,
+                )
+                if self._telemetry is not None
+                else checked_client
+            )
             yield LangGraphTroubleshootingAgent(
-                LLMClientChatModel(checked_client, profile),
+                LLMClientChatModel(llm_client, profile),
                 mcp_tool_provider=self._mcp_tool_provider,
                 checkpointer=checkpointer,
                 run_classification=requirements.data_classification,
@@ -109,6 +128,7 @@ def create_default_troubleshooting_run_service(
     factory_mcp_url: str | None = None,
     knowledge_mcp_url: str | None = None,
     runtime_database_url: str | None = None,
+    telemetry: Telemetry | None = None,
 ) -> TroubleshootingRunService:
     """Compose the local demo service without exposing deployment details to FastAPI."""
     configuration = load_llm_configuration(model_configuration_path)
@@ -121,7 +141,8 @@ def create_default_troubleshooting_run_service(
             knowledge_mcp_url=knowledge_mcp_url
             or os.getenv("KNOWLEDGE_MCP_URL", DEFAULT_KNOWLEDGE_MCP_URL),
             factory_database_url=runtime_database_url,
-        )
+        ),
+        telemetry=telemetry,
     )
     return TroubleshootingRunService(
         router=DeterministicModelRouter(policy),
@@ -130,6 +151,7 @@ def create_default_troubleshooting_run_service(
             configuration=configuration,
             mcp_tool_provider=provider,
             egress_policy=policy,
+            telemetry=telemetry,
         ),
         checkpointer_factory=(
             PostgreSqlCheckpointerFactory(runtime_database_url)

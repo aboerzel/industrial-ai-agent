@@ -1,0 +1,30 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {"id": 1, "title": "Agent Runs total", "type": "stat", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(agent_runs_total)", "refId": "A"}], "gridPos": {"h": 7, "w": 6, "x": 0, "y": 0}},
+    {"id": 2, "title": "Agent Runs by status", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (operation_status) (agent_runs_total)", "refId": "A"}], "gridPos": {"h": 7, "w": 6, "x": 6, "y": 0}},
+    {"id": 3, "title": "Error rate", "type": "stat", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(rate(agent_errors_total[5m])) / clamp_min(sum(rate(agent_runs_total[5m])), 1)", "refId": "A"}], "gridPos": {"h": 7, "w": 6, "x": 12, "y": 0}},
+    {"id": 4, "title": "Tool-call failures", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (mcp_tool) (rate(mcp_tool_calls_total{operation_status=\"failure\"}[5m]))", "refId": "A"}], "gridPos": {"h": 7, "w": 6, "x": 18, "y": 0}},
+    {"id": 5, "title": "MCP tool calls by tool", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (mcp_tool) (rate(mcp_tool_calls_total[5m]))", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 0, "y": 7}},
+    {"id": 6, "title": "MCP tool latency", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (mcp_tool) (rate(mcp_tool_duration_seconds_sum[5m])) / clamp_min(sum by (mcp_tool) (rate(mcp_tool_duration_seconds_count[5m])), 1)", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 8, "y": 7}},
+    {"id": 7, "title": "LLM calls by model profile", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (model_profile) (rate(llm_calls_total[5m]))", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 16, "y": 7}},
+    {"id": 8, "title": "LLM latency", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(rate(llm_call_duration_seconds_sum[5m])) / clamp_min(sum(rate(llm_call_duration_seconds_count[5m])), 1)", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 0, "y": 15}},
+    {"id": 9, "title": "Local vs Public Cloud calls", "type": "piechart", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (execution_zone) (llm_calls_total)", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 8, "y": 15}},
+    {"id": 10, "title": "HTTP request latency", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_duration_milliseconds_bucket[5m]))) / 1000", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 16, "y": 15}},
+    {"id": 11, "title": "Approval count / approve / reject", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (approval_decision) (approval_total)", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 0, "y": 23}},
+    {"id": 12, "title": "Runs over time", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(rate(agent_runs_total[5m]))", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 8, "y": 23}},
+    {"id": 13, "title": "Cost", "type": "text", "options": {"mode": "markdown", "content": "Cost metrics are intentionally not emitted until provider usage and pricing are governed reliably."}, "gridPos": {"h": 8, "w": 8, "x": 16, "y": 23}},
+    {"id": 14, "title": "Retrieval usage", "type": "timeseries", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (retrieval_strategy) (rate(retrieval_calls_total[5m]))", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 0, "y": 31}},
+    {"id": 15, "title": "Retrieval latency", "type": "text", "options": {"mode": "markdown", "content": "The current API-side retrieval metric counts MCP-backed retrieval. Pipeline-internal embedding, lexical, fusion, and rerank timings remain in the separate Knowledge MCP process until context propagation is added."}, "gridPos": {"h": 8, "w": 8, "x": 8, "y": 31}},
+    {"id": 16, "title": "Service health", "type": "stat", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "up", "refId": "A"}], "gridPos": {"h": 8, "w": 8, "x": 16, "y": 31}},
+    {"id": 17, "title": "Recent errors", "type": "logs", "datasource": {"uid": "loki"}, "targets": [{"expr": "{service_name=\"industrial-ai-agent-api\"} |= \"agent.run.failed\"", "refId": "A"}], "gridPos": {"h": 8, "w": 24, "x": 0, "y": 39}}
+  ],
+  "schemaVersion": 41,
+  "tags": ["industrial-ai-agent", "observability"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "title": "Industrial AI Agent Overview",
+  "uid": "industrial-ai-agent-overview",
+  "version": 1
+}

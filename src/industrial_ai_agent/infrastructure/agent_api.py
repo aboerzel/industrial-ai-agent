@@ -9,12 +9,20 @@ import uvicorn
 
 from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.api.app import create_app
+from industrial_ai_agent.infrastructure.api.observed_run_store import (
+    ObservedAgentRunStore,
+)
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
 )
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
+from industrial_ai_agent.infrastructure.observed_run_service import observed_run_service
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlSessionFactory,
+)
+from industrial_ai_agent.infrastructure.telemetry import (
+    TelemetryConfiguration,
+    configure_telemetry,
 )
 from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     create_default_troubleshooting_run_service,
@@ -35,13 +43,35 @@ def create_default_app():
         raise RuntimeError(
             "AGENT_RUNTIME_DATABASE_URL or FACTORY_DATABASE_URL is required"
         )
+    telemetry = configure_telemetry(
+        TelemetryConfiguration(
+            enabled=_environment_bool("OTEL_ENABLED", False),
+            otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317"),
+            service_name=os.getenv("OTEL_SERVICE_NAME", "industrial-ai-agent-api"),
+        )
+    )
+    run_service = create_default_troubleshooting_run_service(
+        runtime_database_url=database_url,
+        telemetry=telemetry,
+    )
     return create_app(
-        create_default_troubleshooting_run_service(runtime_database_url=database_url),
-        run_store=PostgreSqlAgentRunStore(
-            PostgreSqlSessionFactory(database_url), DEMO_ENGINEER_SECURITY_CONTEXT
+        observed_run_service(run_service, telemetry),
+        run_store=ObservedAgentRunStore(
+            PostgreSqlAgentRunStore(
+                PostgreSqlSessionFactory(database_url), DEMO_ENGINEER_SECURITY_CONTEXT
+            ),
+            telemetry,
         ),
         allowed_origins=(frontend_origin,),
+        telemetry=telemetry,
     )
+
+
+def _environment_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 app = create_default_app()

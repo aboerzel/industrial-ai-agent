@@ -102,6 +102,14 @@ or streaming. A remotely reachable deployment
 requires those controls in a later slice. See
 [FastAPI Application Boundary](docs/learning/fastapi-application-boundary.md).
 
+## Local Observability
+
+The local Compose stack includes OpenTelemetry Collector, Tempo, Prometheus, Loki, and
+Grafana. Start the complete self-hosted demo with `docker compose up --build -d`; Grafana
+is available at `http://localhost:3000` with provisioned datasources and the `Industrial
+AI Agent Overview` dashboard. See [Observability](docs/architecture/observability.md)
+for telemetry security, `run_id`/trace correlation, and the operator RCA workflow.
+
 ## Persistent Factory Demo Data
 
 ADR-014 makes PostgreSQL the persistent source of truth for structured

@@ -1,0 +1,103 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+  resource/sanitize:
+    attributes:
+      - key: service.instance.id
+        action: delete
+  attributes/sanitize:
+    actions:
+      - key: prompt
+        action: delete
+      - key: authorization
+        action: delete
+      - key: http.request.header.authorization
+        action: delete
+      - key: http.url
+        action: delete
+      - key: http.target
+        action: delete
+      - key: http.user_agent
+        action: delete
+      - key: http.host
+        action: delete
+      - key: http.server_name
+        action: delete
+      - key: net.peer.ip
+        action: delete
+      - key: net.peer.port
+        action: delete
+      - key: url.full
+        action: delete
+      - key: url.query
+        action: delete
+      - key: client.address
+        action: delete
+      - key: client.port
+        action: delete
+      - key: db.connection_string
+        action: delete
+      - key: db.statement
+        action: delete
+      - key: db.query.text
+        action: delete
+      - key: code.file.path
+        action: delete
+      - key: code.filepath
+        action: delete
+      - key: code.function.name
+        action: delete
+      - key: code.lineno
+        action: delete
+      - key: code.line.number
+        action: delete
+      - key: exception.message
+        action: delete
+      - key: exception.stacktrace
+        action: delete
+  transform/sanitize_span_events:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - delete_matching_keys(span.attributes, "(?i)^http\\..*header.*")
+      - context: spanevent
+        statements:
+          - delete_key(spanevent.attributes, "exception.type")
+          - delete_key(spanevent.attributes, "exception.message")
+          - delete_key(spanevent.attributes, "exception.stacktrace")
+
+exporters:
+  otlp_grpc/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/sanitize, attributes/sanitize, transform/sanitize_span_events, batch]
+      exporters: [otlp_grpc/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [resource/sanitize, attributes/sanitize, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [resource/sanitize, attributes/sanitize, batch]
+      exporters: [otlp_http/loki]

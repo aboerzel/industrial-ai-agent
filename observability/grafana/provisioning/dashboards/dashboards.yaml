@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: industrial-ai-agent
+    orgId: 1
+    folder: Industrial AI Agent
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards

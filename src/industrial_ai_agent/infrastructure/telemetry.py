@@ -1,0 +1,392 @@
+"""OpenTelemetry bootstrap and safe, infrastructure-only telemetry helpers."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass
+from time import perf_counter
+from typing import Any
+
+from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import Span
+from opentelemetry.trace.status import Status, StatusCode
+
+TELEMETRY_SCOPE = "industrial_ai_agent.observability"
+_FORBIDDEN_ATTRIBUTE_PARTS = frozenset(
+    {
+        "authorization",
+        "bearer",
+        "chunk",
+        "connection",
+        "database_url",
+        "document_text",
+        "password",
+        "prompt",
+        "response_text",
+        "secret",
+        "sql.parameter",
+        "tool_result",
+    }
+)
+_ALLOWED_ATTRIBUTE_KEYS = frozenset(
+    {
+        "approval.decision",
+        "data.classification",
+        "error.code",
+        "error.type",
+        "execution.zone",
+        "mcp.operation",
+        "mcp.server",
+        "mcp.tool",
+        "model.name",
+        "model.profile",
+        "operation.status",
+        "persistence.operation",
+        "retrieval.candidate_count",
+        "retrieval.result_count",
+        "retrieval.strategy",
+        "run.id",
+        "telemetry.metadata_only",
+        "token.input_count",
+        "token.output_count",
+    }
+)
+_METRIC_ATTRIBUTE_KEYS = frozenset(
+    {
+        "approval.decision",
+        "data.classification",
+        "execution.zone",
+        "mcp.operation",
+        "mcp.server",
+        "mcp.tool",
+        "model.profile",
+        "operation.status",
+        "persistence.operation",
+        "retrieval.strategy",
+    }
+)
+_ALLOWED_LOG_EVENTS = frozenset(
+    {
+        "agent.run.completed",
+        "agent.run.failed",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TelemetryConfiguration:
+    """Explicit configuration for optional local OTLP telemetry."""
+
+    enabled: bool = False
+    otlp_endpoint: str = "127.0.0.1:4317"
+    service_name: str = "industrial-ai-agent-api"
+    service_version: str = "0.1.0"
+
+
+class Telemetry:
+    """Small safe facade around OTel SDK objects owned by Infrastructure."""
+
+    def __init__(
+        self,
+        configuration: TelemetryConfiguration,
+        *,
+        tracer_provider: TracerProvider | None = None,
+        meter_provider: MeterProvider | None = None,
+        logger_provider: LoggerProvider | None = None,
+    ) -> None:
+        self._configuration = configuration
+        self._tracer_provider = tracer_provider
+        self._meter_provider = meter_provider
+        self._logger_provider = logger_provider
+        self._tracer = (
+            tracer_provider.get_tracer(TELEMETRY_SCOPE)
+            if tracer_provider is not None
+            else trace.get_tracer(TELEMETRY_SCOPE)
+        )
+        meter = (
+            meter_provider.get_meter(TELEMETRY_SCOPE)
+            if meter_provider is not None
+            else metrics.get_meter(TELEMETRY_SCOPE)
+        )
+        self._agent_runs = meter.create_counter("agent_runs_total")
+        self._agent_errors = meter.create_counter("agent_errors_total")
+        self._mcp_calls = meter.create_counter("mcp_tool_calls_total")
+        self._mcp_discovery = meter.create_counter("mcp_discovery_total")
+        self._llm_calls = meter.create_counter("llm_calls_total")
+        self._retrieval_calls = meter.create_counter("retrieval_calls_total")
+        self._approvals = meter.create_counter("approval_total")
+        self._persistence_operations = meter.create_counter(
+            "persistence_operations_total"
+        )
+        self._agent_duration = meter.create_histogram("agent_run_duration_seconds")
+        self._mcp_duration = meter.create_histogram("mcp_tool_duration_seconds")
+        self._llm_duration = meter.create_histogram("llm_call_duration_seconds")
+        self._persistence_duration = meter.create_histogram(
+            "persistence_operation_duration_seconds"
+        )
+        self._logger = logging.getLogger("industrial_ai_agent.telemetry")
+
+    @property
+    def enabled(self) -> bool:
+        return self._configuration.enabled
+
+    @property
+    def tracer_provider(self) -> TracerProvider | None:
+        return self._tracer_provider
+
+    @property
+    def meter_provider(self) -> MeterProvider | None:
+        return self._meter_provider
+
+    def log_error(self, *, event: str, run_id: str | None, error_code: str) -> None:
+        """Emit a fixed, metadata-only error event correlated by the active span."""
+        self._log(event=event, run_id=run_id, error_code=error_code, level="error")
+
+    def log_event(self, *, event: str, run_id: str | None) -> None:
+        """Emit a fixed, metadata-only operational event correlated by the active span."""
+        self._log(event=event, run_id=run_id, error_code=None, level="info")
+
+    def shutdown(self) -> None:
+        """Flush optional telemetry before an API process exits; never raise to business code."""
+        for provider in (
+            self._logger_provider,
+            self._meter_provider,
+            self._tracer_provider,
+        ):
+            if provider is None:
+                continue
+            try:
+                provider.force_flush()  # type: ignore[attr-defined]
+                provider.shutdown()
+            except Exception:  # noqa: BLE001, S110 - telemetry must remain optional.
+                pass
+
+    @contextmanager
+    def span(
+        self, name: str, attributes: Mapping[str, object] | None = None
+    ) -> Iterator[Span]:
+        """Create a span with allowlisted metadata and sanitized error state only."""
+        if not self.enabled:
+            yield trace.get_current_span()
+            return
+        with self._tracer.start_as_current_span(
+            name,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            for key, value in safe_attributes(attributes or {}).items():
+                span.set_attribute(key, value)
+            try:
+                yield span
+                span.set_attribute("operation.status", "success")
+            except BaseException as error:
+                span.set_attribute("operation.status", "failure")
+                span.set_attribute("error.type", type(error).__name__)
+                span.set_attribute("error.code", sanitized_error_code(error))
+                span.set_status(Status(StatusCode.ERROR, sanitized_error_code(error)))
+                raise
+
+    def _log(
+        self,
+        *,
+        event: str,
+        run_id: str | None,
+        error_code: str | None,
+        level: str,
+    ) -> None:
+        if event not in _ALLOWED_LOG_EVENTS:
+            return
+        extra: dict[str, str] = {"event.name": event}
+        if run_id is not None:
+            extra["run.id"] = run_id
+        if error_code is not None:
+            extra["error.code"] = error_code
+        getattr(self._logger, level)(event, extra=extra)
+
+    def record_agent_run(
+        self, *, status: str, duration_seconds: float, classification: str
+    ) -> None:
+        attributes = metric_attributes(
+            {"operation.status": status, "data.classification": classification}
+        )
+        self._agent_runs.add(1, attributes)
+        self._agent_duration.record(duration_seconds, attributes)
+        if status != "success":
+            self._agent_errors.add(1, attributes)
+
+    def record_llm_call(
+        self, *, attributes: Mapping[str, object], duration_seconds: float
+    ) -> None:
+        safe = metric_attributes(attributes)
+        self._llm_calls.add(1, safe)
+        self._llm_duration.record(duration_seconds, safe)
+
+    def record_mcp_call(
+        self, *, attributes: Mapping[str, object], duration_seconds: float
+    ) -> None:
+        safe = metric_attributes(attributes)
+        self._mcp_calls.add(1, safe)
+        self._mcp_duration.record(duration_seconds, safe)
+
+    def record_mcp_discovery(self, *, attributes: Mapping[str, object]) -> None:
+        self._mcp_discovery.add(1, metric_attributes(attributes))
+
+    def record_retrieval(self, *, attributes: Mapping[str, object]) -> None:
+        self._retrieval_calls.add(1, metric_attributes(attributes))
+
+    def record_approval(self, *, decision: str, classification: str) -> None:
+        self._approvals.add(
+            1,
+            metric_attributes(
+                {
+                    "approval.decision": decision,
+                    "data.classification": classification,
+                }
+            ),
+        )
+
+    def record_persistence_operation(
+        self, *, attributes: Mapping[str, object], duration_seconds: float
+    ) -> None:
+        safe = metric_attributes(attributes)
+        self._persistence_operations.add(1, safe)
+        self._persistence_duration.record(duration_seconds, safe)
+
+
+def configure_telemetry(configuration: TelemetryConfiguration) -> Telemetry:
+    """Build providers explicitly; disabled telemetry uses OTel's no-op default path."""
+    if not configuration.enabled:
+        return Telemetry(configuration)
+    resource = Resource.create(
+        {
+            SERVICE_NAME: configuration.service_name,
+            SERVICE_VERSION: configuration.service_version,
+        }
+    )
+    tracer_provider = TracerProvider(resource=resource)
+    tracer_provider.add_span_processor(
+        BatchSpanProcessor(
+            OTLPSpanExporter(
+                endpoint=configuration.otlp_endpoint,
+                insecure=True,
+                timeout=1,
+            ),
+            schedule_delay_millis=1_000,
+            export_timeout_millis=1_000,
+        )
+    )
+    meter_provider = MeterProvider(
+        resource=resource,
+        metric_readers=[
+            PeriodicExportingMetricReader(
+                OTLPMetricExporter(
+                    endpoint=configuration.otlp_endpoint,
+                    insecure=True,
+                ),
+                export_interval_millis=5_000,
+            )
+        ],
+    )
+    logger_provider = LoggerProvider(resource=resource)
+    logger_provider.add_log_record_processor(
+        BatchLogRecordProcessor(
+            OTLPLogExporter(
+                endpoint=configuration.otlp_endpoint,
+                insecure=True,
+                timeout=1,
+            ),
+            schedule_delay_millis=1_000,
+            export_timeout_millis=1_000,
+        )
+    )
+    telemetry_logger = logging.getLogger("industrial_ai_agent.telemetry")
+    telemetry_logger.handlers = [LoggingHandler(logger_provider=logger_provider)]
+    telemetry_logger.propagate = False
+    telemetry_logger.setLevel(logging.INFO)
+    # FastAPI and other maintained instrumentation obtain providers from OTel globals.
+    # This explicit Infrastructure bootstrap remains the only installation point.
+    trace.set_tracer_provider(tracer_provider)
+    metrics.set_meter_provider(meter_provider)
+    return Telemetry(
+        configuration,
+        tracer_provider=tracer_provider,
+        meter_provider=meter_provider,
+        logger_provider=logger_provider,
+    )
+
+
+def instrument_fastapi(app: object, telemetry: Telemetry) -> None:
+    """Install maintained FastAPI instrumentation only when telemetry is enabled."""
+    if not telemetry.enabled or telemetry.tracer_provider is None:
+        return
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor.instrument_app(
+        app,
+        tracer_provider=telemetry.tracer_provider,
+        meter_provider=telemetry.meter_provider,
+        excluded_urls="health",
+    )
+
+
+def safe_attributes(
+    attributes: Mapping[str, object],
+) -> dict[str, bool | float | int | str]:
+    """Drop unknown/sensitive keys rather than risking a telemetry data leak."""
+    return {
+        key: normalized
+        for key, value in attributes.items()
+        if key in _ALLOWED_ATTRIBUTE_KEYS
+        and not _contains_forbidden_part(key)
+        and (normalized := _normalize_attribute_value(value)) is not None
+    }
+
+
+def metric_attributes(
+    attributes: Mapping[str, object],
+) -> dict[str, bool | float | int | str]:
+    """Restrict metrics to bounded dimensions; identifiers never become labels."""
+    return {
+        key: value
+        for key, value in safe_attributes(attributes).items()
+        if key in _METRIC_ATTRIBUTE_KEYS
+    }
+
+
+def sanitized_error_code(error: BaseException) -> str:
+    """Use an explicit machine code when safe, otherwise only the exception type."""
+    value = getattr(error, "code", None)
+    if isinstance(value, str) and value.isidentifier() and len(value) <= 80:
+        return value
+    return type(error).__name__
+
+
+def _contains_forbidden_part(key: str) -> bool:
+    lowered = key.lower()
+    return any(part in lowered for part in _FORBIDDEN_ATTRIBUTE_PARTS)
+
+
+def _normalize_attribute_value(value: object) -> bool | float | int | str | None:
+    if isinstance(value, bool | float | int):
+        return value
+    if isinstance(value, str) and len(value) <= 160 and "\n" not in value:
+        return value
+    return None
+
+
+def timed() -> tuple[float, Any]:
+    """Return a monotonic timer start and a local elapsed-time closure."""
+    start = perf_counter()
+    return start, lambda: perf_counter() - start

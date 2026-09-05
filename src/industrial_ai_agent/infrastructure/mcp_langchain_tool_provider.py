@@ -5,8 +5,14 @@ Review this module when a stable langchain-mcp-adapters release supports MCP SDK
 
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from contextlib import (
+    AbstractAsyncContextManager,
+    AsyncExitStack,
+    asynccontextmanager,
+    nullcontext,
+)
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Annotated, cast
 
 import httpx
@@ -33,6 +39,7 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
     McpTransport,
     open_mcp_session,
 )
+from industrial_ai_agent.infrastructure.telemetry import Telemetry
 
 DEFAULT_ALLOWED_FACTORY_TOOLS = frozenset(
     {"get_product_history", "get_machine_status", "create_maintenance_ticket"}
@@ -63,6 +70,7 @@ class McpLangChainToolProvider(McpToolProvider):
         transport_or_servers: FactoryMcpTransport | Sequence[McpServerConfiguration],
         *,
         allowed_tool_names: frozenset[str] = DEFAULT_ALLOWED_FACTORY_TOOLS,
+        telemetry: Telemetry | None = None,
     ) -> None:
         if isinstance(transport_or_servers, (tuple, list)):
             self._servers = tuple(transport_or_servers)
@@ -79,6 +87,7 @@ class McpLangChainToolProvider(McpToolProvider):
         server_ids = tuple(server.server_id for server in self._servers)
         if len(set(server_ids)) != len(server_ids):
             raise ValueError("MCP server IDs must be unique")
+        self._telemetry = telemetry
 
     def open_session(self) -> AbstractAsyncContextManager[McpToolSession]:
         return self._open_session()
@@ -94,11 +103,26 @@ class McpLangChainToolProvider(McpToolProvider):
                 server_sessions: list[McpServerSession] = []
                 seen_tool_names: set[str] = set()
                 for configuration in self._servers:
-                    client = await stack.enter_async_context(
-                        open_mcp_session(configuration.transport)
-                    )
-                    initialized = await client.initialize()
-                    listed_tools = await client.list_tools()
+                    discovery_attributes = {"mcp.server": configuration.server_id}
+                    discovery_status = "success"
+                    try:
+                        with self._span("mcp.discovery", discovery_attributes):
+                            client = await stack.enter_async_context(
+                                open_mcp_session(configuration.transport)
+                            )
+                            initialized = await client.initialize()
+                            listed_tools = await client.list_tools()
+                    except Exception:
+                        discovery_status = "failure"
+                        raise
+                    finally:
+                        if self._telemetry is not None:
+                            self._telemetry.record_mcp_discovery(
+                                attributes={
+                                    **discovery_attributes,
+                                    "operation.status": discovery_status,
+                                }
+                            )
                     server_tool_names = tuple(tool.name for tool in listed_tools.tools)
                     duplicate_names = seen_tool_names.intersection(server_tool_names)
                     if duplicate_names:
@@ -130,7 +154,15 @@ class McpLangChainToolProvider(McpToolProvider):
                             "unauthorized tool"
                         ) from error
                     authorized_tools.extend(
-                        _create_langchain_tool(tool, client)
+                        _create_langchain_tool(
+                            tool,
+                            client,
+                            server_id=configuration.server_id,
+                            operation=get_troubleshooting_tool_policy(
+                                tool.name
+                            ).operation.value,
+                            telemetry=self._telemetry,
+                        )
                         for tool in listed_tools.tools
                         if tool.name in configuration.allowed_tool_names
                     )
@@ -170,22 +202,86 @@ class McpLangChainToolProvider(McpToolProvider):
         except* (OSError, TimeoutError, httpx.HTTPError, httpx2.HTTPError) as error:
             raise McpServiceUnavailableError("MCP service is unavailable") from error
 
+    def _span(self, name: str, attributes: Mapping[str, object]):
+        if self._telemetry is None:
+            return nullcontext()
+        return self._telemetry.span(name, attributes)
 
-def _create_langchain_tool(tool: Tool, client: ClientSession) -> BaseTool:
+
+def _create_langchain_tool(
+    tool: Tool,
+    client: ClientSession,
+    *,
+    server_id: str,
+    operation: str,
+    telemetry: Telemetry | None,
+) -> BaseTool:
     arguments_schema = _create_arguments_schema(tool)
 
     async def invoke_mcp_tool(**arguments: object) -> str:
+        attributes = {
+            "mcp.server": server_id,
+            "mcp.tool": tool.name,
+            "mcp.operation": operation,
+            "data.classification": "CONFIDENTIAL",
+        }
+        started = perf_counter()
+        status = "success"
         try:
-            response = await client.call_tool(tool.name, dict(arguments))
+            if telemetry is None:
+                response = await client.call_tool(tool.name, dict(arguments))
+            else:
+                with telemetry.span("mcp.tool", attributes):
+                    if tool.name == "search_documentation":
+                        with telemetry.span(
+                            "retrieval.search",
+                            {
+                                "retrieval.strategy": "mcp",
+                                "data.classification": "CONFIDENTIAL",
+                            },
+                        ):
+                            response = await client.call_tool(
+                                tool.name, dict(arguments)
+                            )
+                    elif tool.name == "create_maintenance_ticket":
+                        with telemetry.span(
+                            "maintenance_ticket.create",
+                            {"data.classification": "CONFIDENTIAL"},
+                        ):
+                            response = await client.call_tool(
+                                tool.name, dict(arguments)
+                            )
+                    else:
+                        response = await client.call_tool(tool.name, dict(arguments))
+            if not isinstance(response, CallToolResult):
+                status = "failure"
+                raise McpServiceUnavailableError(
+                    "MCP tool did not return a completed result"
+                )
+            if response.is_error or response.structured_content is None:
+                status = "failure"
+                raise McpServiceUnavailableError(
+                    "MCP tool did not return structured content"
+                )
         except (OSError, TimeoutError, httpx.HTTPError, httpx2.HTTPError) as error:
+            status = "failure"
             raise McpServiceUnavailableError("MCP service is unavailable") from error
-        if not isinstance(response, CallToolResult):
-            raise McpServiceUnavailableError(
-                "MCP tool did not return a completed result"
-            )
-        if response.is_error or response.structured_content is None:
-            raise McpServiceUnavailableError(
-                "MCP tool did not return structured content"
+        except Exception:
+            status = "failure"
+            raise
+        finally:
+            if telemetry is not None:
+                telemetry.record_mcp_call(
+                    attributes={**attributes, "operation.status": status},
+                    duration_seconds=perf_counter() - started,
+                )
+        if telemetry is not None and tool.name == "search_documentation":
+            telemetry.record_retrieval(
+                attributes={
+                    "retrieval.strategy": "mcp",
+                    "data.classification": "CONFIDENTIAL",
+                    "operation.status": status,
+                }
             )
         return json.dumps(response.structured_content, sort_keys=True)
 
