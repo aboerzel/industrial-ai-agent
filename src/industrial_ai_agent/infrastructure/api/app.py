@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import NoReturn
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, FastAPI, Request, status
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -96,10 +96,10 @@ def create_app(
     async def health() -> HealthResponse:
         return HealthResponse()
 
-    runs = APIRouter(prefix=API_PREFIX, tags=["runs"])
+    runs = app
 
     @runs.post(
-        "/runs",
+        f"{API_PREFIX}/runs",
         response_model=RunResponse,
         responses={
             status.HTTP_403_FORBIDDEN: {"model": ApiErrorResponse},
@@ -115,7 +115,7 @@ def create_app(
         return await _start_run(request, message=payload.message, policy=policy)
 
     @runs.post(
-        "/diagnostics",
+        f"{API_PREFIX}/diagnostics",
         response_model=RunResponse,
         responses={
             status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse},
@@ -146,7 +146,7 @@ def create_app(
         )
 
     @runs.get(
-        "/runs/{run_id}",
+        f"{API_PREFIX}/runs/{{run_id}}",
         response_model=RunResponse,
         responses={status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse}},
         summary="Get the persisted record for one agent run",
@@ -162,7 +162,7 @@ def create_app(
         return _to_run_response(record)
 
     @runs.post(
-        "/runs/{run_id}/resume",
+        f"{API_PREFIX}/runs/{{run_id}}/resume",
         response_model=RunResponse,
         responses={
             status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse},
@@ -221,7 +221,6 @@ def create_app(
                 message="The agent run could not be completed.",
             )
 
-    app.include_router(runs)
     if telemetry is not None:
         instrument_fastapi(app, telemetry)
 

@@ -82,17 +82,19 @@ boundaries may add `retrieval.embedding`, `retrieval.lexical`, `retrieval.fusion
 `retrieval.rerank`, `approval.wait`, and checkpoint spans.
 
 The API trace spans MCP process boundaries through standard W3C `traceparent` and
-`tracestate` propagation on Streamable HTTP requests. The Infrastructure client attaches
-the global OTel propagator through the public `httpx2` request-hook API, and each MCP
-process adds maintained OTel ASGI middleware to its public Starlette app. This establishes
+`tracestate` propagation on Streamable HTTP requests. The Infrastructure client uses an
+explicit standard `TraceContextTextMapPropagator` through the public `httpx2`
+request-hook API, replacing any caller-supplied trace or baggage headers for every
+request. Each MCP process configures the public OTel ASGI middleware to extract that
+trace-context-only propagator before the MCP SDK dispatches a request. This establishes
 the remote parent before the MCP SDK dispatches a request. Factory emits `factory.tool`;
-Knowledge emits `knowledge.search` with `retrieval.embedding`, `retrieval.lexical`,
-`retrieval.semantic`, `retrieval.fusion`, and `retrieval.rerank` beneath it where those
+Knowledge emits `knowledge.search` with `retrieval.search`, `retrieval.embedding`,
+`retrieval.lexical`, `retrieval.semantic`, `retrieval.fusion`, and `retrieval.rerank` beneath it where those
 stable owned boundaries exist. The service names are `industrial-ai-agent`,
 `factory-mcp`, and `knowledge-mcp`. Bearer authentication remains an independent
 ADR-015 concern: trace headers neither establish identity nor influence clearance or
-permissions. Missing or malformed context starts a valid independent server trace and
-never fails an MCP business request.
+permissions. Baggage is neither injected nor used. Missing or malformed context starts
+a valid independent server trace and never fails an MCP business request.
 
 The MCP SDK also emits its own protocol-level request spans. They are correlated through
 the ASGI server parent but are not treated as the project-owned operational boundary.

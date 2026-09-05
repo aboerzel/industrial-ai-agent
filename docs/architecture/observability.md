@@ -66,18 +66,20 @@ datasets/experiments without replacing deterministic scoring.
 ## MCP Distributed Traces
 
 The Streamable HTTP boundary propagates standard W3C `traceparent` and `tracestate`.
-The MCP client uses the global OTel propagator from a public `httpx2` request hook, so
-every HTTP POST, GET, or DELETE receives context from its active operation span. The
-public MCP Starlette app uses OTel ASGI middleware to extract that context before the SDK
-dispatches the request. No custom correlation header exists, and `run_id` remains a
-separate business identifier.
+The MCP client uses an explicit W3C Trace Context propagator from a public `httpx2`
+request hook, so every HTTP POST, GET, or DELETE receives context from its active
+operation span. The hook removes caller-supplied trace and baggage headers first; no
+baggage is injected. The public MCP Starlette app uses OTel ASGI middleware configured
+with the same trace-context-only propagator before the SDK dispatches the request. No
+custom correlation header exists, and `run_id` remains a separate business identifier.
 
 ```mermaid
 flowchart LR
     API["industrial-ai-agent\nagent.run"] --> Client["mcp.tool"]
     Client -->|"W3C traceparent/tracestate"| Factory["factory-mcp\nfactory.tool"]
     Client -->|"W3C traceparent/tracestate"| Knowledge["knowledge-mcp\nknowledge.search"]
-    Knowledge --> Embedding["retrieval.embedding"]
+    Knowledge --> Search["retrieval.search"]
+    Search --> Embedding["retrieval.embedding"]
     Knowledge --> Lexical["retrieval.lexical"]
     Knowledge --> Semantic["retrieval.semantic"]
     Knowledge --> Fusion["retrieval.fusion"]
@@ -129,8 +131,8 @@ categories only. They never include run/trace/span IDs, product or station IDs, 
 text, user text, or tool arguments.
 
 The API-side `retrieval.search` span and metric describe the MCP-backed retrieval call.
-Knowledge MCP adds `knowledge.search`, embedding, lexical, semantic, fusion, and rerank
-timings to that same trace. MCP-process metrics use only bounded service-resource and
+Knowledge MCP adds `knowledge.search`, `retrieval.search`, embedding, lexical, semantic,
+fusion, and rerank timings to that same trace. MCP-process metrics use only bounded service-resource and
 tool/operation/status/classification dimensions. Checkpoint load/save remain
 uninstrumented: the current LangGraph saver exposes no stable public operation boundary
 without framework intrusion.

@@ -22,9 +22,11 @@ from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Span
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.trace.status import Status, StatusCode
 
 TELEMETRY_SCOPE = "industrial_ai_agent.observability"
+_MCP_TRACE_CONTEXT_PROPAGATOR = TraceContextTextMapPropagator()
 _FORBIDDEN_ATTRIBUTE_PARTS = frozenset(
     {
         "authorization",
@@ -477,12 +479,15 @@ def instrument_mcp_http_client(
 
 
 def instrument_mcp_http_app(app: object, telemetry: Telemetry) -> None:
-    """Add public ASGI tracing at the MCP HTTP process boundary."""
+    """Add W3C Trace Context-only ASGI tracing at the MCP HTTP boundary."""
     if not telemetry.enabled or telemetry.tracer_provider is None:
         return
     try:
         from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
 
+        # The public ASGI instrumentation extracts from OTel's global propagator.
+        # MCP deliberately allows only W3C trace context, never baggage.
+        propagate.set_global_textmap(_MCP_TRACE_CONTEXT_PROPAGATOR)
         app.add_middleware(  # type: ignore[attr-defined]
             OpenTelemetryMiddleware,
             tracer_provider=telemetry.tracer_provider,
@@ -515,9 +520,12 @@ def run_instrumented_mcp_http_server(
 
 
 async def _inject_mcp_trace_context(request: object) -> None:
-    """Use the global W3C propagator without touching authorization headers."""
+    """Replace caller-supplied context with active W3C trace context only."""
     try:
-        propagate.inject(request.headers)  # type: ignore[attr-defined]
+        headers = request.headers  # type: ignore[attr-defined]
+        for header in ("traceparent", "tracestate", "baggage"):
+            headers.pop(header, None)
+        _MCP_TRACE_CONTEXT_PROPAGATOR.inject(headers)
     except Exception:  # noqa: BLE001 - telemetry must not block MCP calls.
         return
 

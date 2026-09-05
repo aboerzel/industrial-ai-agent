@@ -1,9 +1,14 @@
+from types import SimpleNamespace
+
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
+from industrial_ai_agent.infrastructure.knowledge_mcp_server import (
+    _invoke_knowledge_search,
+)
 from industrial_ai_agent.infrastructure.observed_knowledge_retrieval import (
     ObservedEmbeddingClient,
     ObservedKnowledgeRetriever,
@@ -65,6 +70,26 @@ def test_retrieval_stage_spans_share_the_knowledge_search_trace() -> None:
     )
     assert spans["retrieval.lexical"].attributes["retrieval.result_count"] == 1
     assert spans["retrieval.rerank"].attributes["retrieval.candidate_count"] == 1
+
+
+def test_knowledge_search_wraps_the_pipeline_in_retrieval_search_span() -> None:
+    telemetry, exporter = _recording_telemetry()
+
+    _invoke_knowledge_search(
+        telemetry=telemetry,
+        action=lambda: SimpleNamespace(results=()),
+    )
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["retrieval.search"].parent is not None
+    assert (
+        spans["retrieval.search"].parent.span_id
+        == spans["knowledge.search"].context.span_id
+    )
+    assert spans["retrieval.search"].attributes["retrieval.strategy"] == (
+        "hybrid_reranked"
+    )
+    assert spans["retrieval.search"].attributes["operation.status"] == "success"
 
 
 def _recording_telemetry() -> tuple[Telemetry, InMemorySpanExporter]:

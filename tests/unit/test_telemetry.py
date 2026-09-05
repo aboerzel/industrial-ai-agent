@@ -5,9 +5,10 @@ import asyncio
 import httpx
 import pytest
 from mcp.types import CallToolResult, Tool
-from opentelemetry import propagate, trace
+from opentelemetry import baggage, propagate, trace
 from opentelemetry.context import attach, detach
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -145,18 +146,29 @@ def test_attribute_allowlist_drops_tool_results_tokens_and_unknown_values() -> N
 def test_mcp_http_hook_injects_w3c_context_without_changing_authorization() -> None:
     telemetry, _ = _recording_telemetry()
     client = _HookClient()
-    request = _HookRequest(headers={"Authorization": "Bearer unchanged"})
+    request = _HookRequest(
+        headers={
+            "Authorization": "Bearer unchanged",
+            "baggage": "clearance=forged",
+            "traceparent": "00-00000000000000000000000000000001-0000000000000001-01",
+            "tracestate": "vendor=forged",
+        }
+    )
     token = attach(
-        trace.set_span_in_context(
-            NonRecordingSpan(
-                SpanContext(
-                    trace_id=0x4BF92F3577B34DA6A3CE929D0E0E4736,
-                    span_id=0x00F067AA0BA902B7,
-                    is_remote=False,
-                    trace_flags=TraceFlags(TraceFlags.SAMPLED),
-                    trace_state=TraceState([("vendor", "state")]),
+        baggage.set_baggage(
+            "identity",
+            "forged",
+            trace.set_span_in_context(
+                NonRecordingSpan(
+                    SpanContext(
+                        trace_id=0x4BF92F3577B34DA6A3CE929D0E0E4736,
+                        span_id=0x00F067AA0BA902B7,
+                        is_remote=False,
+                        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+                        trace_state=TraceState([("vendor", "state")]),
+                    )
                 )
-            )
+            ),
         )
     )
     try:
@@ -170,6 +182,7 @@ def test_mcp_http_hook_injects_w3c_context_without_changing_authorization() -> N
         "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     )
     assert request.headers["tracestate"] == "vendor=state"
+    assert "baggage" not in request.headers
 
 
 def test_w3c_extraction_keeps_parent_trace_and_malformed_context_is_safe() -> None:
@@ -250,6 +263,85 @@ def test_mcp_asgi_boundary_starts_a_trace_when_context_is_missing() -> None:
     )
 
 
+def test_mcp_http_client_and_server_continue_one_w3c_trace() -> None:
+    client_telemetry, client_exporter = _recording_telemetry(
+        service_name="industrial-ai-agent"
+    )
+    server_telemetry, server_exporter = _recording_telemetry(
+        service_name="knowledge-mcp"
+    )
+
+    async def endpoint(request: Request) -> JSONResponse:
+        del request
+        context = trace.get_current_span().get_span_context()
+        return JSONResponse({"trace_id": f"{context.trace_id:032x}"})
+
+    app = Starlette(routes=[Route("/mcp", endpoint, methods=["POST"])])
+    instrument_mcp_http_app(app, server_telemetry)
+
+    async def request_app() -> str:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            instrument_mcp_http_client(client, client_telemetry)
+            response = await client.post("/mcp")
+        return response.json()["trace_id"]
+
+    with client_telemetry.span(
+        "mcp.tool", {"mcp.tool": "search_documentation"}
+    ) as span:
+        trace_id = asyncio.run(request_app())
+        client_span_context = span.get_span_context()
+
+    server_spans = server_exporter.get_finished_spans()
+    assert trace_id == f"{client_span_context.trace_id:032x}"
+    assert any(
+        server_span.parent is not None
+        and server_span.parent.span_id == client_span_context.span_id
+        and server_span.context.trace_id == client_span_context.trace_id
+        for server_span in server_spans
+    )
+    assert client_exporter.get_finished_spans()[0].resource.attributes[
+        SERVICE_NAME
+    ] == ("industrial-ai-agent")
+    assert all(
+        span.resource.attributes[SERVICE_NAME] == "knowledge-mcp"
+        for span in server_spans
+    )
+
+
+def test_mcp_asgi_boundary_ignores_malformed_context() -> None:
+    telemetry, exporter = _recording_telemetry()
+
+    async def endpoint(request: Request) -> JSONResponse:
+        del request
+        context = trace.get_current_span().get_span_context()
+        return JSONResponse({"trace_id": f"{context.trace_id:032x}"})
+
+    app = Starlette(routes=[Route("/mcp", endpoint, methods=["POST"])])
+    instrument_mcp_http_app(app, telemetry)
+
+    async def request_app() -> str:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/mcp",
+                headers={"traceparent": "not-a-traceparent", "baggage": "role=admin"},
+            )
+        return response.json()["trace_id"]
+
+    trace_id = asyncio.run(request_app())
+
+    assert trace_id != "0" * 32
+    assert all(
+        f"{span.context.trace_id:032x}" == trace_id
+        for span in exporter.get_finished_spans()
+    )
+
+
 def test_disabled_telemetry_does_not_add_mcp_http_hook() -> None:
     client = _HookClient()
 
@@ -309,12 +401,16 @@ def test_maintenance_span_is_emitted_only_for_the_actual_tool_invocation() -> No
     assert "private ticket content" not in str(maintenance_spans[0].attributes)
 
 
-def _recording_telemetry() -> tuple[Telemetry, InMemorySpanExporter]:
+def _recording_telemetry(
+    *, service_name: str = "industrial-ai-agent"
+) -> tuple[Telemetry, InMemorySpanExporter]:
     exporter = InMemorySpanExporter()
-    tracer_provider = TracerProvider()
+    tracer_provider = TracerProvider(
+        resource=Resource.create({SERVICE_NAME: service_name})
+    )
     tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
     telemetry = Telemetry(
-        TelemetryConfiguration(enabled=True),
+        TelemetryConfiguration(enabled=True, service_name=service_name),
         tracer_provider=tracer_provider,
         meter_provider=MeterProvider(),
     )

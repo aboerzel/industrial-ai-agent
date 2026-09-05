@@ -486,12 +486,13 @@ in `agent_runtime.agent_runs`. Both preserve their distinct responsibilities und
 
 ADR-016 now completes the implemented observability path across the existing Streamable
 HTTP MCP boundary. The API MCP client injects standard W3C `traceparent` and `tracestate`
-per HTTP request; the public MCP ASGI boundary extracts it before dispatch. The stable
-resources are `industrial-ai-agent`, `factory-mcp`, and `knowledge-mcp`, and trace
-headers never participate in ADR-015 identity, clearance, or permission resolution.
+per HTTP request after removing caller-supplied trace and baggage headers; the public MCP
+ASGI boundary extracts trace context only before dispatch. The stable resources are
+`industrial-ai-agent`, `factory-mcp`, and `knowledge-mcp`, and trace headers never
+participate in ADR-015 identity, clearance, or permission resolution.
 Factory owns `factory.tool`; Knowledge owns `knowledge.search` and the bounded
-`retrieval.embedding`, `retrieval.lexical`, `retrieval.semantic`, `retrieval.fusion`,
-and `retrieval.rerank` stage spans. Prompts, tool arguments/results, document content,
+`retrieval.search`, `retrieval.embedding`, `retrieval.lexical`, `retrieval.semantic`,
+`retrieval.fusion`, and `retrieval.rerank` stage spans. Prompts, tool arguments/results, document content,
 and security headers are excluded from these spans, logs, and metric labels.
 
 ```mermaid
@@ -499,7 +500,8 @@ flowchart LR
     API["industrial-ai-agent\nagent.run"] --> Tool["mcp.tool"]
     Tool -->|"W3C trace context"| Factory["factory-mcp\nfactory.tool"]
     Tool -->|"W3C trace context"| Search["knowledge-mcp\nknowledge.search"]
-    Search --> Retrieval["embedding / lexical / semantic / fusion / rerank"]
+    Search --> Retrieval["retrieval.search"]
+    Retrieval --> Stages["embedding / lexical / semantic / fusion / rerank"]
 ```
 
 ## Tool Selection Evaluation Baseline

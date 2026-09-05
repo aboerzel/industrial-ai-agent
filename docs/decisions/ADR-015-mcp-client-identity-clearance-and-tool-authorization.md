@@ -57,6 +57,10 @@ MCP permission authorizes a client to invoke a tool. It does not replace the Ind
 Agent's `ToolPolicy` or LangGraph approval interrupt: maintenance-ticket execution still
 requires an explicit approved resume after the model proposes the action.
 
+W3C `traceparent` and `tracestate` are observability metadata only. They, baggage, and
+all other telemetry headers are excluded from identity resolution, clearance, permissions,
+RLS, model egress, and HITL. The MCP HTTP trace boundary does not inject baggage.
+
 Opaque bearer tokens are only the local demo authentication mechanism. A future
 JWT/OIDC, mTLS, or workload-identity adapter may establish `McpClientIdentity` and use
 the same resolver without changing Domain types, capabilities, repositories, RLS,

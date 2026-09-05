@@ -390,7 +390,11 @@ def _invoke_knowledge_search(
     status = "success"
     try:
         with telemetry.span("knowledge.search", attributes) as span:
-            result = action()
+            with telemetry.span(
+                "retrieval.search",
+                {"retrieval.strategy": "hybrid_reranked"},
+            ):
+                result = action()
             classifications = [item.classification for item in result.results]
             if classifications:
                 telemetry.set_span_attributes(
