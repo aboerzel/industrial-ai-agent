@@ -157,3 +157,19 @@ boundary decision.
 `POST /api/v1/runs/{run_id}/resume` accepts a Pydantic-validated
 `ResumeRunRequest { decision: approve | reject }`. Invalid decisions receive `422`,
 unknown IDs receive `404`, and a run that is no longer waiting receives `409`.
+
+## Strict Public Projection
+
+All public request, response, approval, and normalized tool-call contracts are Pydantic
+v2 models with `extra="forbid"`. FastAPI therefore rejects unknown request fields and
+invalid `ResumeDecision` values with its normal `422` response before a run is started
+or resumed. The public request cannot name a model, provider, profile, execution zone,
+classification, tool, or idempotency key.
+
+Successful responses are also a security boundary. The API projects only the public
+run ID, lifecycle status, final text, normalized executed calls, and a pending approval
+summary. It never serializes LangGraph checkpoints, message state, MCP objects, raw tool
+payloads, prompts, or exceptions. Before projection, strings resembling stack traces,
+database URLs, credential assignments, local paths, or checkpoint data are replaced by a
+safe generic result. This is defense in depth; inner failures already map to stable API
+errors.

@@ -7,7 +7,7 @@ from industrial_ai_agent.domain.security import DataClassification
 
 
 class MachineStatusResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     station_id: str
     found: bool

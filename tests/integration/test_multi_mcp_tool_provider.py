@@ -35,6 +35,19 @@ class Retriever:
         return (KnowledgeRetrievalResult(content="E-STOP-17 documentation", document_id="error_codes", source="error_codes.md", chunk_id="error_codes::chunk-002", relevance_score=0.9, metadata={"title": "E-STOP-17"}),)[:limit]
 create_knowledge_mcp_server(documentation_search=DocumentationSearchCapability(Retriever())).run(transport="stdio")
 """
+_FACTORY_SERVER_WITH_UNAUTHORIZED_TOOL_SOURCE = """
+from industrial_ai_agent.infrastructure.factory_mcp_server import create_default_factory_mcp_server
+from industrial_ai_agent.infrastructure.mcp_schema_validation import require_strict_mcp_tool_arguments
+
+server = create_default_factory_mcp_server()
+
+@server.tool(name="diagnostic_export", structured_output=True)
+def diagnostic_export(station_id: str) -> dict[str, str]:
+    return {"station_id": station_id}
+
+require_strict_mcp_tool_arguments(server, "diagnostic_export")
+server.run(transport="stdio")
+"""
 
 
 class FakeLLMClient:
@@ -105,6 +118,30 @@ def test_multi_mcp_discovery_binds_all_unique_authorized_tools_once_per_run() ->
         "search_documentation",
     )
     assert [tool.name for tool in session.tools] == list(session.discovered_tool_names)
+
+
+def test_discovered_tool_outside_allowlist_is_not_bound_to_the_agent() -> None:
+    provider = McpLangChainToolProvider(
+        (
+            McpServerConfiguration(
+                server_id="factory",
+                transport=StdioServerParameters(
+                    command=sys.executable,
+                    args=["-c", _FACTORY_SERVER_WITH_UNAUTHORIZED_TOOL_SOURCE],
+                ),
+                allowed_tool_names=DEFAULT_ALLOWED_FACTORY_TOOLS,
+            ),
+        )
+    )
+
+    async def discover():
+        async with provider.open_session() as opened_session:
+            return opened_session
+
+    session = asyncio.run(discover())
+
+    assert "diagnostic_export" in session.discovered_tool_names
+    assert "diagnostic_export" not in {tool.name for tool in session.tools}
 
 
 def test_multi_mcp_langgraph_run_is_sequential_and_has_no_direct_retriever_access() -> (

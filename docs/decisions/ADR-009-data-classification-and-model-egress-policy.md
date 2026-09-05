@@ -322,6 +322,15 @@ necessary even if an external enforcement adapter is added later.
 
 ## Consequences
 
+### Guardrail Clarification
+
+PostgreSQL RLS and retrieval clearance remain the primary data-access controls. As
+defense in depth, the troubleshooting graph requires a valid classification on every
+read observation when a run classification is present and rejects an observation above
+that run clearance before it becomes a `ToolMessage` or later model context. This check
+does not replace RLS, authorization, or the final egress check before every provider
+call. Classification found in retrieved text has no authority to modify policy.
+
 Positive:
 
 * sensitive-data egress is governed by deterministic, testable rules

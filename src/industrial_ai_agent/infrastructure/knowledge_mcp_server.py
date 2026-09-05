@@ -6,9 +6,17 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
+from industrial_ai_agent.infrastructure.mcp_schema_validation import (
+    require_strict_mcp_tool_arguments,
+)
 from industrial_ai_agent.tools.documentation_search import DocumentationSearchCapability
+from industrial_ai_agent.tools.tool_contracts import (
+    DocumentationQuery,
+    DocumentationResultLimit,
+)
 
 KNOWLEDGE_MCP_SERVER_NAME = "knowledge_mcp"
 KNOWLEDGE_MCP_SERVER_VERSION = "0.1.0"
@@ -33,8 +41,12 @@ def create_knowledge_mcp_server(
         name="search_documentation",
         description="Search local technical documentation with preserved chunk provenance.",
         structured_output=True,
+        annotations=ToolAnnotations(read_only_hint=True),
     )
-    def search_documentation(query: str, top_k: int = 3) -> dict[str, Any]:
+    def search_documentation(
+        query: DocumentationQuery,
+        top_k: DocumentationResultLimit = 3,
+    ) -> dict[str, Any]:
         result = documentation_search.search_documentation(query, top_k)
         return {
             "query": result.query,
@@ -43,6 +55,8 @@ def create_knowledge_mcp_server(
                 for rank, item in enumerate(result.results, start=1)
             ],
         }
+
+    require_strict_mcp_tool_arguments(server, "search_documentation")
 
     return server
 

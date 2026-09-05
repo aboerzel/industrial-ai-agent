@@ -1,29 +1,19 @@
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict
 
 from industrial_ai_agent.domain.maintenance_ticket import MaintenanceTicketRequestId
 from industrial_ai_agent.domain.maintenance_ticket_repository import (
     MaintenanceTicketRepository,
 )
 from industrial_ai_agent.domain.product_history import StationId
+from industrial_ai_agent.tools.tool_contracts import (
+    CreateMaintenanceTicketProposalArguments,
+)
 
-
-class CreateMaintenanceTicketArguments(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    station_id: str
-    summary: str
-
-    @field_validator("station_id", "summary")
-    @classmethod
-    def validate_non_empty_text(cls, value: str) -> str:
-        normalized_value = value.strip()
-        if not normalized_value:
-            raise ValueError("Value must not be empty")
-        return normalized_value
+CreateMaintenanceTicketArguments = CreateMaintenanceTicketProposalArguments
 
 
 class MaintenanceTicketResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     ticket_id: str
     station_id: str

@@ -43,6 +43,18 @@ def test_get_product_history_returns_structured_not_found_result() -> None:
     assert result.steps == ()
 
 
+@pytest.mark.parametrize("value", ("P47", "4711", "P47A1", ""))
+def test_product_id_rejects_invalid_domain_format(value: str) -> None:
+    with pytest.raises(ValueError, match="invalid format|must not be empty"):
+        ProductId(value)
+
+
+@pytest.mark.parametrize("value", ("S4", "04", "S0A", ""))
+def test_station_id_rejects_invalid_domain_format(value: str) -> None:
+    with pytest.raises(ValueError, match="invalid format|must not be empty"):
+        StationId(value)
+
+
 def test_get_product_history_preserves_production_step_order() -> None:
     result = create_capability().get_product_history("P4711")
 

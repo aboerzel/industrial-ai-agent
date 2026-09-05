@@ -1,5 +1,28 @@
 # Architecture Overview
 
+## Guardrail Boundaries
+
+```mermaid
+flowchart LR
+    API["FastAPI + strict public Pydantic"] --> Service["Run service"]
+    Service --> Graph["LangGraph sequential loop"]
+    Graph --> Policy["Tool allowlist + read/write metadata"]
+    Policy --> MCP["MCP strict Pydantic JSON Schema"]
+    MCP --> Data["Capabilities + PostgreSQL RLS"]
+    Data --> Context["Classified ToolMessage data"]
+    Context --> Egress["EgressCheckedLLMClient"]
+    Graph --> HITL["interrupt() before write"]
+    Graph --> Output["Sanitized public response projection"]
+```
+
+The diagram shows enforcement boundaries, not a second orchestration path. The sole
+LangGraph troubleshooting loop still admits at most one model-selected call per
+iteration and at most four executed calls per run. Tool discovery is an availability
+mechanism only: `ToolPolicy` maps the fixed troubleshooting allowlist to `READ` or
+approval-required `WRITE`; unknown discovered tools are never bound. Knowledge and tool
+payloads remain `ToolMessage` data and cannot alter this policy, a classification, model
+routing, provider selection, or HITL.
+
 ## Current Architecture
 
 The local Compose deployment names its PostgreSQL service `factory-db`. In this
@@ -11,9 +34,10 @@ dedicated migration Job instead.
 
 The project currently implements product-history retrieval, current machine-status
 retrieval, a provider-independent LLM integration boundary, and one bounded
-`LangGraphTroubleshootingAgent` path over runtime-discovered read-only MCP tools. A
-separate action-only graph can receive an explicitly injected demonstration action
-capability that pauses for human approval. Focused deterministic baselines evaluate the
+`LangGraphTroubleshootingAgent` path over runtime-discovered, allowlisted MCP tools. Its
+sole write tool is `create_maintenance_ticket`; the graph exposes only a strict proposal
+schema to the model, then pauses for human approval before the separate execution step.
+Focused deterministic baselines evaluate the
 first LLM tool decision and complete bounded trajectories through the LangGraph MCP path.
 Local lexical, semantic, hybrid, and reranked knowledge-retrieval strategies are
 implemented behind one inner port and are exposed to LangGraph only through
@@ -23,9 +47,9 @@ invoking the provider adapter. LangGraph and LangChain Core are used narrowly fo
 orchestration. The runtime uses LangGraph's official PostgreSQL async checkpointer for
 durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
 dynamic tool registry, LangSmith integration, or general evaluation framework.
-Two read-only MCP services expose existing capabilities through the official MCP SDK v2.
-`factory_mcp` provides product history and machine status; `knowledge_mcp` provides
-documentation search. Both retain stdio for process-coupled development and
+Two MCP services expose existing capabilities through the official MCP SDK v2.
+`factory_mcp` provides product history, machine status, and the approval-gated
+maintenance-ticket action; `knowledge_mcp` provides documentation search. Both retain stdio for process-coupled development and
 deterministic tests, and run as separate Streamable HTTP `/mcp` Docker services.
 `LangGraphTroubleshootingAgent` opens one session per explicitly configured server,
 discovers and authorizes tools through the temporary LangChain bridge, executes the
@@ -53,7 +77,9 @@ process-local liveness only, and `GET /api/v1/runs/{run_id}` reads the durable a
 record. The separate static `frontend/` browser client communicates only with this public
 HTTP/JSON API. The local API entry point permits only `http://localhost:8080` through
 explicit CORS configuration; it does not serve frontend assets. The API has no CORS
-wildcard, authentication, TLS, rate limiting, streaming, or HITL resume endpoint.
+wildcard, authentication, TLS, rate limiting, or streaming endpoint. Its explicit
+`POST /api/v1/runs/{run_id}/resume` endpoint only accepts the strict `approve` or
+`reject` decision contract for a persisted pending action.
 Swagger UI at `/docs` remains the generated API contract explorer.
 
 ```mermaid
@@ -178,7 +204,8 @@ their prepared in-memory indexes. The semantic adapter receives the separate inn
 and embeds only the query at runtime through local Ollama.
 
 `factory_mcp` and `knowledge_mcp` are Infrastructure transport adapters, not sources of
-factory or retrieval semantics. Factory delegates to its two injected capabilities;
+factory or retrieval semantics. Factory delegates to its injected read and
+maintenance-action capabilities;
 Knowledge delegates `search_documentation(query, top_k=3)` to the existing
 documentation-search capability. Its default composition is the frozen local pipeline:
 BM25 plus semantic candidates, RRF, then `BAAI/bge-reranker-v2-m3`, preserving stable
@@ -198,8 +225,9 @@ service transport, not permission to egress tool data to a public model. Knowled
 uses local Ollama embeddings and a local Hugging Face cache for reranking; queries,
 chunks, embeddings, and reranker inputs do not reach a public provider. The local Docker
 demo has no MCP authentication; remote or production exposure requires explicit future
-authentication and transport security. This slice does not add MCP write tools, MCP
-HITL, generalized multi-server routing, or automatic fallback.
+authentication and transport security. The write tool remains fixed, strict, and
+approval-gated; this slice does not add generalized multi-server routing or automatic
+fallback.
 
 ## Knowledge Retrieval Baseline
 
@@ -371,7 +399,9 @@ flowchart LR
     Adapter --> Model["model node"]
     Model --> Route{"conditional route"}
     Route -->|"final / invalid / limit"| End["END"]
-    Route -->|"read request"| Tool["MCP tool node"]
+    Route -->|"read request"| Tool["MCP read-tool node"]
+    Route -->|"write proposal"| Approval["HITL interrupt"]
+    Approval -->|"approved"| Action["MCP action node"]
     Tool -->|"structured observation"| Model
     Tool --> Provider["MCP Tool Provider"]
     Provider --> Factory["factory_mcp"]
@@ -381,7 +411,7 @@ flowchart LR
     classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class CR,Router,Provider,Factory,Knowledge core
-    class Adapter,Model,Route,Tool,End framework
+    class Adapter,Model,Route,Tool,Approval,Action,End framework
     class Security security
 ```
 
@@ -393,14 +423,13 @@ one-call dispatch explicit instead of adopting a framework default that could ch
 ADR-004 behavior. The Graph does not select a model: the Composition Root injects an
 already routed profile and a client whose final ADR-009 egress check remains active.
 
-For the separate action-only resumable run, the graph is compiled with LangGraph's official
+For the resumable write path, the graph is compiled with LangGraph's official
 `AsyncPostgresSaver` and invoked
 with `configurable.thread_id`. The approval node emits a JSON-serializable
 `action_approval` interrupt and resumes through `Command(resume="approve" | "reject")`
-using the same thread ID. The read-only MCP graph does not expose write tools.
-`create_maintenance_ticket` is an
-in-memory demonstration action: it is prepared before the interrupt, executes only after
-approval, and uses its tool-call ID as an idempotency key. Nodes before an
+using the same thread ID. `create_maintenance_ticket` is prepared before the interrupt,
+executes through Factory MCP only after approval, and uses its tool-call ID as a
+server-derived idempotency key. Nodes before an
 interrupt remain side-effect-free because LangGraph restarts the node from its beginning
 on resume. The checkpoint schema is framework-owned; application lifecycle records stay
 in `agent_runtime.agent_runs`. Both preserve their distinct responsibilities under
@@ -556,9 +585,9 @@ results. The isolated
 `DocumentationSearchCapability.search_documentation(query, top_k=3)` returns structured
 `DocumentationSearchResult` data. LangGraph receives it only through discovered and
 authorized `knowledge_mcp` tools, never through direct retriever injection.
-`MaintenanceTicketCapability.create_maintenance_ticket(...)` is an optional,
-action-only LangGraph demonstration capability. Its deterministic approval boundary
-executes it only after explicit approval; it is not exposed through MCP.
+`MaintenanceTicketCapability.create_maintenance_ticket(...)` is exposed only through
+the fixed Factory MCP action contract. Its deterministic approval boundary executes it
+only after explicit approval.
 
 ### `agent`
 

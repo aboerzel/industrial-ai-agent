@@ -20,9 +20,6 @@ from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     create_default_troubleshooting_run_service,
 )
 
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_FRONTEND_ORIGIN = "http://localhost:8080"
 
@@ -52,11 +49,17 @@ app = create_default_app()
 
 def main() -> None:
     """Run the local FastAPI development server."""
-    uvicorn.run(
-        "industrial_ai_agent.infrastructure.agent_api:app",
+    config = uvicorn.Config(
+        app,
         host=os.getenv("AGENT_API_HOST", "127.0.0.1"),
         port=int(os.getenv("AGENT_API_PORT", "8000")),
     )
+    server = uvicorn.Server(config)
+    if sys.platform == "win32":
+        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            runner.run(server.serve())
+        return
+    server.run()
 
 
 if __name__ == "__main__":

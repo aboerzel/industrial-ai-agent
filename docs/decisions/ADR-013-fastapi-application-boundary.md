@@ -115,6 +115,14 @@ tool, routing, and security boundaries.
 
 ## Consequences
 
+### Guardrail Clarification
+
+Public API request, response, approval, and tool-call models forbid unknown fields.
+FastAPI supplies the normal `422` contract for malformed requests and unknown resume
+decisions. The response projection additionally sanitizes successful external text so
+stack traces, connection strings, credentials, local paths, internal exception
+representations, and checkpoint data cannot escape the public boundary.
+
 Positive:
 
 * API clients receive a versioned, validated, documented run contract.

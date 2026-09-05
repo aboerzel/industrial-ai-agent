@@ -6,7 +6,10 @@ from dataclasses import dataclass
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
-from industrial_ai_agent.agent.agent_run import AgentRunStatus
+from industrial_ai_agent.agent.agent_run import (
+    AgentRunStatus,
+    InvalidToolArgumentsError,
+)
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     CREATE_MAINTENANCE_TICKET_TOOL_NAME,
     LangGraphTroubleshootingAgent,
@@ -206,6 +209,45 @@ def test_invalid_resume_value_fails_without_executing_action() -> None:
         agent.resume(thread_id="invalid-thread", approval="later")
 
     assert ticket_repository.tickets == ()
+
+
+def test_action_proposal_rejects_model_supplied_idempotency_key() -> None:
+    response = action_response()
+    invalid_response = response.model_copy(
+        update={
+            "tool_calls": (
+                response.tool_calls[0].model_copy(
+                    update={
+                        "arguments": {
+                            "station_id": "S04",
+                            "summary": "Investigate E-STOP-17",
+                            "request_id": "model-controlled",
+                        }
+                    }
+                ),
+            )
+        }
+    )
+    agent, ticket_repository = create_hitl_agent(
+        FakeLLMClient(invalid_response),
+        checkpointer=InMemorySaver(),
+    )
+
+    with pytest.raises(InvalidToolArgumentsError, match="Invalid arguments"):
+        agent.start("Create a maintenance ticket for S04.", thread_id="key-thread")
+
+    assert ticket_repository.tickets == ()
+
+
+def test_action_tool_schema_does_not_expose_server_request_id() -> None:
+    llm_client = FakeLLMClient(action_response())
+    agent, _ = create_hitl_agent(llm_client, checkpointer=InMemorySaver())
+
+    agent.start("Create a maintenance ticket for S04.", thread_id="schema-thread")
+
+    action_tool = llm_client.requests[0][1].tools[0]
+    assert action_tool.name == CREATE_MAINTENANCE_TICKET_TOOL_NAME
+    assert "request_id" not in action_tool.parameters["properties"]
 
 
 def test_multiple_model_tool_calls_admit_only_the_first_call() -> None:

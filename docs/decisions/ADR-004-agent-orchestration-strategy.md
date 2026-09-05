@@ -172,6 +172,16 @@ before its value is demonstrated.
 
 ## Consequences
 
+### Guardrail Clarification
+
+The fixed troubleshooting profile additionally maps each authorized tool to explicit
+`READ` or approval-required `WRITE` metadata. Discovery is not authorization; unknown
+or newly advertised MCP tools remain unbound. The model may propose a write only through
+its proposal contract, while deterministic graph nodes validate it, interrupt before the
+side effect, and inject server-controlled idempotency material after approval. Tool and
+knowledge results are data observations only, never policy instructions. These are
+deterministic refinements of the existing bounded loop, not a planner or second agent.
+
 Positive:
 
 * dependent observations can support multi-step troubleshooting

@@ -154,6 +154,14 @@ while a separate SQLAlchemy adapter persists application-owned lifecycle records
 
 ## Consequences
 
+### Guardrail Clarification
+
+The persisted pending action is a strict Pydantic contract. For
+`create_maintenance_ticket`, the model never owns `request_id` or an idempotency key;
+the post-approval execution node derives it only from the actual tool-call ID. The
+database repository's unique request ID remains the second idempotency defense for a
+duplicate or concurrent resume. A reject clears the pending action and never executes it.
+
 Positive:
 
 * the graph can pause and continue a single run deterministically

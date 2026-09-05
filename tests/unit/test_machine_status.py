@@ -1,3 +1,5 @@
+import pytest
+
 from industrial_ai_agent.domain.machine_status import MachineState, MachineStatus
 from industrial_ai_agent.domain.product_history import StationId
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
@@ -56,3 +58,10 @@ def test_repository_accepts_custom_machine_statuses() -> None:
 
     assert repository.get_machine_status(StationId("S21")) == custom_status
     assert repository.get_machine_status(StationId("S04")) is None
+
+
+def test_machine_status_capability_rejects_invalid_station_before_repository_access() -> (
+    None
+):
+    with pytest.raises(ValueError, match="invalid format"):
+        create_capability().get_machine_status("station-four")

@@ -124,7 +124,7 @@ def test_schema_seed_and_repository_mapping_are_available_to_application_role() 
     assert history.classification is DataClassification.CONFIDENTIAL
     assert history.steps[1].status is ProductionStepStatus.WARNING
     assert history.steps[-1].error_code == "QUALITY-09"
-    assert len(documents) == 10
+    assert len(documents) == 11
     assert all(
         document.classification <= DataClassification.CONFIDENTIAL
         for document in documents

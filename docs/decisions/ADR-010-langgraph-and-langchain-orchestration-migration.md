@@ -203,6 +203,14 @@ dependent on framework behavior.
 
 ## Consequences
 
+### Guardrail Clarification
+
+LangChain native tool calling remains the structured model-decision interface. The
+current OpenAI-compatible profiles have no demonstrated provider-independent reliable
+JSON-schema final-answer mode, so the final answer remains text and no manual JSON parser
+or second planner is added. Pydantic contracts validate pending approval state and tool
+arguments, while LangGraph remains the sole loop and owns interrupt/resume mechanics.
+
 Positive:
 
 * the project gains practical LangGraph and LangChain experience on an already measured

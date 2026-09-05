@@ -7,7 +7,7 @@ DEFAULT_DOCUMENTATION_RESULT_LIMIT = 3
 
 
 class DocumentationSearchResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     query: str
     results: tuple[KnowledgeRetrievalResult, ...]

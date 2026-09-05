@@ -25,8 +25,8 @@ Model selection uses explicit task requirements and the deterministic model rout
 `LangGraphTroubleshootingAgent` is the sole troubleshooting loop. It receives only
 runtime-discovered, authorized MCP tools and preserves the bounded sequential semantics:
 one validated and dispatched call per LLM decision, structured observations in the
-current conversation context, and at most three successfully executed tools per run. A
-final model answer returns structured `SUCCESS`; a further tool request after the third
+current conversation context, and at most four successfully executed tools per run. A
+final model answer returns structured `SUCCESS`; a further tool request after the fourth
 result returns `LIMIT_REACHED` without executing that call or invoking the LLM again.
 LangGraph uses LangChain Core messages and tool contracts through a narrow adapter to
 the existing security-checked `LLMClient`. HITL checkpoints use LangGraph's official
@@ -46,13 +46,14 @@ rarity-aware IDF, and BM25 ranking. Results retain document, source, chunk, scor
 metadata provenance. LangGraph receives retrieval only through `knowledge_mcp`, never
 through direct retriever injection.
 
-Two read-only MCP services adapt existing capabilities through the official MCP SDK v2.
-`factory_mcp` exposes `get_product_history` and `get_machine_status`; `knowledge_mcp`
-exposes `search_documentation`. Both support process-coupled stdio for development/tests
+Two MCP services adapt existing capabilities through the official MCP SDK v2.
+`factory_mcp` exposes `get_product_history`, `get_machine_status`, and the approval-gated
+`create_maintenance_ticket`; `knowledge_mcp` exposes `search_documentation`. Both support process-coupled stdio for development/tests
 and Streamable HTTP at `/mcp` for deployment. The asynchronous LangGraph path discovers
 and authorizes all configured server tools, rejects duplicate tool names, opens one
 session per server for the run, and calls tools sequentially. There is no generalized
-MCP router or MCP write action.
+MCP router. The only write tool is the explicitly authorized,
+approval-gated `create_maintenance_ticket` Factory-MCP action.
 
 ## Local FastAPI API
 
@@ -88,7 +89,7 @@ unknown IDs return `404`, policy denial returns `403`, and unavailable models or
 services return `503`.
 
 The API is local/demo only: it has no authentication, authorization, TLS, rate limiting,
-streaming, or HITL resume endpoint. A remotely reachable deployment
+or streaming. A remotely reachable deployment
 requires those controls in a later slice. See
 [FastAPI Application Boundary](docs/learning/fastapi-application-boundary.md).
 
@@ -135,6 +136,7 @@ With both MCP containers and local Ollama running, execute the sequential real s
 
 ```powershell
 python scripts/smoke_test_fastapi.py
+python scripts/smoke_test_persistent_hitl_api.py
 ```
 
 ## Local Browser Demo
@@ -360,3 +362,25 @@ run normally. A `create_maintenance_ticket` proposal pauses at native LangGraph
 `interrupt()` before its Factory-MCP side effect. The persisted approval request records
 normalized arguments, summary, classification, model profile, status, and timestamp.
 `POST /api/v1/runs/{run_id}/resume` accepts only `approve` or `reject`.
+
+## Guardrails and Strict Contracts
+
+The productive path validates at each existing boundary. FastAPI public request and
+response models forbid unknown fields. MCP SDK-generated Pydantic input models use
+strict types, domain-aware constraints, and `additionalProperties: false`; the
+LangChain bridge rejects a discovered schema that is not strict. The troubleshooting
+profile binds only its fixed allowlist. Its explicit metadata distinguishes read tools
+from approval-required write tools, so discovery alone never authorizes a capability.
+
+Tool calling is the native structured model-decision interface. The action proposal
+shown to the model contains only station and summary; the required MCP `request_id` is
+injected after approval from the actual model tool-call ID. A retrieved document or tool
+result is always a `ToolMessage` data payload, never a replacement for system policy.
+The synthetic confidential `S02 Service Comment Review` document intentionally contains
+an injection-like sentence and is retrievable only as evidence.
+
+The API projects only a small public response and replaces strings resembling stack
+traces, connection URLs, credentials, local paths, or checkpoint data. PostgreSQL RLS
+remains the primary data-access control; the agent also rejects a read result whose
+classification is absent or exceeds the run clearance before it can become model context.
+See [Guardrails and Boundary Validation](docs/learning/guardrails-and-boundary-validation.md).

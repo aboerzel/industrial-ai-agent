@@ -132,6 +132,46 @@ def test_create_run_uses_fastapi_validation_for_invalid_request() -> None:
     assert response.status_code == 422
 
 
+def test_create_run_rejects_unknown_request_fields_fail_closed() -> None:
+    client = TestClient(create_app(FakeRunService(result=_success_result())))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P4711.", "model": "public_fast"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == "extra_forbidden"
+
+
+def test_resume_rejects_unknown_decision_before_run_lookup() -> None:
+    client = TestClient(create_app(FakeRunService(result=_success_result())))
+
+    response = client.post(
+        "/api/v1/runs/0ca96c57-66f6-4e12-b151-6f7f6ef9c9f8/resume",
+        json={"decision": "later"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_successful_public_response_sanitizes_diagnostic_text() -> None:
+    result = AgentRunResult(
+        status=AgentRunStatus.SUCCESS,
+        final_answer="Traceback (most recent call last): postgresql://user:password@db",
+        tool_call_count=0,
+    )
+    client = TestClient(create_app(FakeRunService(result=result)))
+
+    response = client.post("/api/v1/runs", json={"message": "Investigate P4711."})
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == (
+        "The requested result contains non-public diagnostic data."
+    )
+    assert "postgresql" not in response.text
+
+
 def test_get_unknown_run_returns_sanitized_not_found_error() -> None:
     client = TestClient(create_app(FakeRunService(result=_success_result())))
 

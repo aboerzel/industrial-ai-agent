@@ -9,7 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
-from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
+from industrial_ai_agent.agent.model_egress import (
+    DataClassificationBoundaryError,
+    ModelEgressDeniedError,
+)
 from industrial_ai_agent.agent.model_routing import NoEligibleModelError
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
@@ -18,6 +21,10 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     TroubleshootingRunService,
 )
 from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.infrastructure.api.output_sanitization import (
+    sanitize_public_text,
+    sanitize_public_value,
+)
 from industrial_ai_agent.infrastructure.api.run_store import (
     AgentRunStore,
     StoredAgentRun,
@@ -27,6 +34,7 @@ from industrial_ai_agent.infrastructure.api.schemas import (
     ApprovalRequestResponse,
     CreateRunRequest,
     HealthResponse,
+    PublicToolName,
     ResumeRunRequest,
     RunResponse,
     RunStatus,
@@ -121,7 +129,7 @@ def create_app(
                 code="no_eligible_model",
                 message="No eligible model is available for this request.",
             )
-        except ModelEgressDeniedError:
+        except (ModelEgressDeniedError, DataClassificationBoundaryError):
             await store.fail(run_id, "model_egress_denied")
             _raise_api_run_error(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -135,6 +143,7 @@ def create_app(
                 code="mcp_service_unavailable",
                 message="A required MCP service is unavailable.",
             )
+        # noinspection PyBroadException
         except Exception:  # noqa: BLE001 - public API must sanitize unexpected errors.
             await store.fail(run_id, "internal_error")
             _raise_api_run_error(
@@ -214,13 +223,14 @@ def create_app(
                 decision=payload.decision.value,
             )
             return _to_run_response(await _persist_execution(store, run_id, execution))
-        except ModelEgressDeniedError:
+        except (ModelEgressDeniedError, DataClassificationBoundaryError):
             await store.fail(run_id, "model_egress_denied")
             _raise_api_run_error(
                 status_code=status.HTTP_403_FORBIDDEN,
                 code="model_egress_denied",
                 message="Model execution is not permitted for this request.",
             )
+        # noinspection PyBroadException
         except Exception:  # noqa: BLE001
             await store.fail(run_id, "internal_error")
             _raise_api_run_error(
@@ -258,7 +268,9 @@ def _to_run_response(record: StoredAgentRun) -> RunResponse:
     return RunResponse(
         run_id=record.run_id,
         status=record.status,
-        answer=result.final_answer if result is not None else None,
+        answer=sanitize_public_text(result.final_answer)
+        if result is not None
+        else None,
         tool_calls=_to_tool_calls(result),
         approval_request=_to_approval_request(record.approval_request),
     )
@@ -294,14 +306,17 @@ def _to_approval_request(
 ) -> ApprovalRequestResponse | None:
     if payload is None:
         return None
-    return ApprovalRequestResponse.model_validate(payload)
+    return ApprovalRequestResponse.model_validate(sanitize_public_value(payload))
 
 
 def _to_tool_calls(result: AgentRunResult | None) -> tuple[ToolCallResponse, ...]:
     if result is None:
         return ()
     return tuple(
-        ToolCallResponse(tool=call.tool, arguments=call.arguments)
+        ToolCallResponse(
+            tool=PublicToolName(call.tool),
+            arguments=sanitize_public_value(call.arguments),
+        )
         for call in result.executed_tool_calls
     )
 

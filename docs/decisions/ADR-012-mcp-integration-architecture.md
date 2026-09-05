@@ -129,6 +129,16 @@ MCP availability dependent on a particular agent runtime.
 
 ## Consequences
 
+### Guardrail Clarification
+
+MCP server inputs use SDK-generated Pydantic argument models configured with strict
+types and `extra="forbid"`; their advertised schemas declare
+`additionalProperties: false`. The compatibility bridge accepts only those strict
+schemas and maps their limited primitive constraints into the LangChain Pydantic
+contract. `create_maintenance_ticket` is now a deliberately exposed write tool, but the
+MCP protocol annotation is only descriptive: the application's explicit tool policy and
+LangGraph approval interrupt are the enforcement points.
+
 * MCP becomes the standard external tool transport for deliberately exposed project
   capabilities.
 * Each server remains an Infrastructure adapter over a bounded set of existing

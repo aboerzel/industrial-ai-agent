@@ -7,19 +7,23 @@ import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from typing import cast
+from typing import Annotated, cast
 
 import httpx
 import httpx2
 from langchain_core.tools import BaseTool, StructuredTool
 from mcp import ClientSession
 from mcp.types import CallToolResult, Tool
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from industrial_ai_agent.agent.mcp_tool_provider import (
     McpServerSession,
     McpToolProvider,
     McpToolSession,
+)
+from industrial_ai_agent.agent.tool_policy import (
+    ToolPolicy,
+    get_troubleshooting_tool_policy,
 )
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpServiceUnavailableError,
@@ -85,6 +89,7 @@ class McpLangChainToolProvider(McpToolProvider):
         try:
             async with AsyncExitStack() as stack:
                 authorized_tools: list[BaseTool] = []
+                authorized_tool_policies: list[ToolPolicy] = []
                 discovered_tool_names: list[str] = []
                 server_sessions: list[McpServerSession] = []
                 seen_tool_names: set[str] = set()
@@ -114,11 +119,22 @@ class McpLangChainToolProvider(McpToolProvider):
                             f"Required MCP tools were not discovered from "
                             f"{configuration.server_id}: {missing}"
                         )
+                    try:
+                        policies = tuple(
+                            get_troubleshooting_tool_policy(tool_name)
+                            for tool_name in configuration.allowed_tool_names
+                        )
+                    except ValueError as error:
+                        raise RuntimeError(
+                            f"MCP server {configuration.server_id} configured an "
+                            "unauthorized tool"
+                        ) from error
                     authorized_tools.extend(
                         _create_langchain_tool(tool, client)
                         for tool in listed_tools.tools
                         if tool.name in configuration.allowed_tool_names
                     )
+                    authorized_tool_policies.extend(policies)
                     discovered_tool_names.extend(server_tool_names)
                     server_sessions.append(
                         McpServerSession(
@@ -149,6 +165,7 @@ class McpLangChainToolProvider(McpToolProvider):
                         else "multiple"
                     ),
                     servers=tuple(server_sessions),
+                    tool_policies=tuple(authorized_tool_policies),
                 )
         except* (OSError, TimeoutError, httpx.HTTPError, httpx2.HTTPError) as error:
             raise McpServiceUnavailableError("MCP service is unavailable") from error
@@ -181,40 +198,83 @@ def _create_langchain_tool(tool: Tool, client: ClientSession) -> BaseTool:
 
 
 def _create_arguments_schema(tool: Tool) -> type[BaseModel]:
-    """Translate the small supported MCP JSON-schema subset to a Pydantic model."""
+    """Translate strict MCP JSON Schema into the LangChain Pydantic boundary."""
     schema = tool.input_schema
     properties = schema.get("properties")
     required = schema.get("required", ())
-    if not isinstance(properties, Mapping) or not isinstance(required, list):
+    if (
+        schema.get("type") != "object"
+        or schema.get("additionalProperties") is not False
+        or not isinstance(properties, Mapping)
+        or not isinstance(required, list)
+    ):
         raise TypeError(f"MCP tool {tool.name} has an unsupported input schema")
 
-    fields: dict[str, tuple[type[object], object]] = {}
+    fields: dict[str, tuple[object, object]] = {}
     required_names = set(required)
     for field_name, field_schema in properties.items():
         if not isinstance(field_name, str) or not isinstance(field_schema, Mapping):
             raise TypeError(f"MCP tool {tool.name} has an unsupported input schema")
-        json_type = field_schema.get("type")
-        python_type = _json_type_to_python_type(json_type)
+        python_type = _json_schema_to_pydantic_type(field_schema)
         default = ... if field_name in required_names else None
         fields[field_name] = (python_type, default)
 
     return create_model(
         f"{_to_pascal_case(tool.name)}Arguments",
-        __config__=ConfigDict(extra="forbid"),
+        __config__=ConfigDict(extra="forbid", strict=True),
         **fields,
     )
 
 
-def _json_type_to_python_type(json_type: object) -> type[object]:
+def _json_schema_to_pydantic_type(field_schema: Mapping[str, object]) -> object:
+    json_type = field_schema.get("type")
     if json_type == "string":
-        return str
+        return Annotated[
+            str,
+            Field(
+                min_length=_integer_keyword(field_schema, "minLength"),
+                max_length=_integer_keyword(field_schema, "maxLength"),
+                pattern=_string_keyword(field_schema, "pattern"),
+            ),
+        ]
     if json_type == "integer":
-        return int
+        return Annotated[
+            int,
+            Field(
+                ge=_number_keyword(field_schema, "minimum"),
+                le=_number_keyword(field_schema, "maximum"),
+            ),
+        ]
     if json_type == "number":
-        return float
+        return Annotated[
+            float,
+            Field(
+                ge=_number_keyword(field_schema, "minimum"),
+                le=_number_keyword(field_schema, "maximum"),
+            ),
+        ]
     if json_type == "boolean":
         return bool
     raise ValueError("MCP tool input schema contains an unsupported JSON type")
+
+
+def _integer_keyword(schema: Mapping[str, object], key: str) -> int | None:
+    value = schema.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _number_keyword(schema: Mapping[str, object], key: str) -> float | None:
+    value = schema.get(key)
+    return (
+        float(value)
+        if isinstance(value, int | float) and not isinstance(value, bool)
+        else None
+    )
+
+
+def _string_keyword(schema: Mapping[str, object], key: str) -> str | None:
+    value = schema.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _to_pascal_case(value: str) -> str:

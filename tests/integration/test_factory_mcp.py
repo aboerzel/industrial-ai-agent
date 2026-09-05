@@ -43,6 +43,8 @@ def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> No
         "summary",
         "request_id",
     ]
+    for tool in tools_by_name.values():
+        assert tool.input_schema["additionalProperties"] is False
 
 
 def test_factory_mcp_tool_handlers_delegate_to_injected_capabilities() -> None:
@@ -98,6 +100,27 @@ def test_factory_mcp_rejects_invalid_maintenance_ticket_inputs_before_dispatch()
                 await server.call_tool("create_maintenance_ticket", arguments)
 
     asyncio.run(call_invalid_tools())
+
+
+def test_factory_mcp_rejects_unknown_arguments_before_capability_dispatch() -> None:
+    product_history = _RecordingProductHistoryCapability()
+    machine_status = _RecordingMachineStatusCapability()
+    server = create_factory_mcp_server(
+        product_history=product_history,  # type: ignore[arg-type]
+        machine_status=machine_status,  # type: ignore[arg-type]
+    )
+
+    async def call_invalid_tool() -> None:
+        with pytest.raises(ToolError, match="Error executing tool"):
+            await server.call_tool(
+                "get_product_history",
+                {"product_id": "P4711", "unexpected": "reject"},
+            )
+
+    asyncio.run(call_invalid_tool())
+
+    assert product_history.product_ids == []
+    assert machine_status.station_ids == []
 
 
 def test_factory_mcp_preserves_structured_not_found_results() -> None:

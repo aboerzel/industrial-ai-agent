@@ -2,8 +2,10 @@
 
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
 from industrial_ai_agent.agent.llm import ModelProfile
@@ -29,11 +31,14 @@ class AgentRunService(Protocol):
     async def run(self, message: str) -> AgentRunResult: ...
 
 
-@dataclass(frozen=True, slots=True)
-class PendingApproval:
-    action: str
-    arguments: dict[str, object]
-    summary: str
+class PendingApproval(BaseModel):
+    """Strict application contract between a LangGraph interrupt and FastAPI."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    action: Literal["create_maintenance_ticket"]
+    arguments: dict[str, str]
+    summary: str = Field(min_length=1, max_length=500)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,8 +180,8 @@ def _execution_from_state(
         details = payload.get("details")
         if not isinstance(details, dict) or not isinstance(payload.get("action"), str):
             raise RuntimeError("LangGraph returned an invalid approval payload")
-        arguments = {str(key): value for key, value in details.items()}
-        summary = str(arguments.get("summary", "Approval required."))
+        arguments = {str(key): str(value) for key, value in details.items()}
+        summary = arguments.get("summary", "Approval required.")
         return RunExecution(
             approval=PendingApproval(
                 action=payload["action"], arguments=arguments, summary=summary

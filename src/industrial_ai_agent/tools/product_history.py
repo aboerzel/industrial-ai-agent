@@ -13,7 +13,7 @@ from industrial_ai_agent.domain.security import DataClassification
 
 
 class ProductionStepResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     station_id: str
     timestamp: datetime
@@ -22,7 +22,7 @@ class ProductionStepResult(BaseModel):
 
 
 class ProductHistoryResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     product_id: str
     found: bool

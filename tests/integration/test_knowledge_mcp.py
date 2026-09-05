@@ -63,6 +63,8 @@ def test_knowledge_mcp_server_advertises_the_expected_schema() -> None:
     assert schema["properties"]["query"]["type"] == "string"
     assert schema["properties"]["top_k"]["type"] == "integer"
     assert schema["properties"]["top_k"]["default"] == 3
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["top_k"]["maximum"] == 5
 
 
 def test_knowledge_mcp_handler_delegates_and_preserves_structured_provenance() -> None:

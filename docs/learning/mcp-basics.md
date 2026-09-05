@@ -76,9 +76,27 @@ structured result. It must be reviewed and removed when stable
 `langchain-mcp-adapters` supports MCP SDK v2.
 
 MCP discovery and agent authorization are separate: discovery observes everything the
-server advertises, while the troubleshooting agent receives only its authorized
-read-only factory and knowledge tools. Existing `create_maintenance_ticket` HITL behavior
-is action-only and is not an MCP tool.
+server advertises, while the troubleshooting agent receives only its fixed authorized
+tools. The current allowlist contains three `READ` tools and the
+approval-required `WRITE` tool `create_maintenance_ticket`; a discovered tool is never
+authorized merely because it is advertised.
+
+## Strict Tool Contracts and Write Proposals
+
+The MCP SDK validates tool inputs with its generated Pydantic models before a capability
+is called. SDK 2.1 exposes no public decorator parameter for that model configuration,
+so the Infrastructure adapter configures the generated model as strict and
+`extra="forbid"` and republishes its JSON Schema. The published schema therefore uses
+`additionalProperties: false`, required fields, strict primitive types, and supported
+constraints. The temporary LangChain bridge rejects a discovered schema that is not an
+object with `additionalProperties: false`; it retains only the supported Pydantic
+constraints instead of implementing a second JSON-schema validator.
+
+`create_maintenance_ticket` has two deliberately different contracts. Its published MCP
+execution schema requires `station_id`, `summary`, and `request_id`. The model receives
+only the proposal schema (`station_id`, `summary`), so it cannot supply or replace the
+idempotency key. After a native LangGraph approval resume, the execution node injects
+the actual tool-call ID as `request_id` and calls the strict MCP tool exactly once.
 
 ## Security Boundary
 

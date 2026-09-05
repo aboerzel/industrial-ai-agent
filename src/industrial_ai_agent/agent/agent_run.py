@@ -43,7 +43,7 @@ class ExecutedToolCall(BaseModel):
 
 
 class AgentRunResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: AgentRunStatus
     final_answer: str | None = None

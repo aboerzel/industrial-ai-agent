@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -14,6 +15,8 @@ class ProductId:
         normalized_value = self.value.strip()
         if not normalized_value:
             raise ValueError("Product ID must not be empty")
+        if not re.fullmatch(r"P[0-9]{4,}", normalized_value):
+            raise ValueError("Product ID has an invalid format")
         object.__setattr__(self, "value", normalized_value)
 
 
@@ -25,6 +28,8 @@ class StationId:
         normalized_value = self.value.strip()
         if not normalized_value:
             raise ValueError("Station ID must not be empty")
+        if not re.fullmatch(r"S[0-9]{2,3}", normalized_value):
+            raise ValueError("Station ID has an invalid format")
         object.__setattr__(self, "value", normalized_value)
 
 

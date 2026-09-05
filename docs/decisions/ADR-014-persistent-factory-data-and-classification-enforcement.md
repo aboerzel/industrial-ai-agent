@@ -117,6 +117,13 @@ production data may enter the repository.
 
 ## Consequences
 
+### Guardrail Clarification
+
+The catalog includes one synthetic confidential service-comment document containing an
+injection-like instruction. It is normal retrievable factory data with catalog checksum
+and classification, not a privileged policy source. Its content cannot affect RLS,
+clearance, tool authorization, approval, routing, provider choice, or egress.
+
 Positive:
 
 * Factory and document metadata survive process restarts and are queryable consistently.

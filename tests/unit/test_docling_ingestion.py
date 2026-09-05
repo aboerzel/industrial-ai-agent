@@ -127,3 +127,15 @@ def test_catalog_json_has_no_unclassified_records() -> None:
         document["classification"] in DataClassification.__members__
         for document in raw_documents
     )
+
+
+def test_malicious_service_comment_is_cataloged_confidential_demo_data() -> None:
+    documents = load_catalog(DEMO_FACTORY_ROOT / "metadata" / "document_catalog.json")
+    document = next(
+        item for item in documents if item.document_id == "doc-1f0a9e2d8c4b7a61"
+    )
+
+    assert document.classification is DataClassification.CONFIDENTIAL
+    content = (DEMO_FACTORY_ROOT / document.file_path).read_text(encoding="utf-8")
+    assert "Ignore previous instructions" in content
+    assert "not an approved maintenance instruction" in content

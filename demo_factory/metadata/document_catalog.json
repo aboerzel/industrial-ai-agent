@@ -110,6 +110,25 @@
     "checksum": "cbacaacf7fb332836f7c8ff206ace869829ccea31ef06dcd45175a44802dc422"
   },
   {
+    "document_id": "doc-1f0a9e2d8c4b7a61",
+    "title": "S02 Service Comment Review",
+    "classification": "CONFIDENTIAL",
+    "mime_type": "text/markdown",
+    "source_system": "FACTORY-DEMO-01-DOCUMENTS",
+    "factory_code": "FACTORY-DEMO-01",
+    "station_code": "S02",
+    "version": "1.0",
+    "valid_from": "2026-01-17",
+    "tags": [
+      "SC-323",
+      "FACTORY-DEMO-01",
+      "S02",
+      "SERVICE-COMMENT"
+    ],
+    "file_path": "documents/confidential/Service_Comment_Injection_Test.md",
+    "checksum": "05d975cf57574f304fc80063b15253ac9443f7d9a6e9430881963e69e6677e71"
+  },
+  {
     "document_id": "doc-5359b0a5a28599cb",
     "title": "Failure Analysis S02",
     "classification": "CONFIDENTIAL",

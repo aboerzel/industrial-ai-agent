@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
@@ -16,6 +17,9 @@ from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository 
 from industrial_ai_agent.infrastructure.in_memory_product_history_repository import (
     InMemoryProductHistoryRepository,
 )
+from industrial_ai_agent.infrastructure.mcp_schema_validation import (
+    require_strict_mcp_tool_arguments,
+)
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlMachineStatusRepository,
     PostgreSqlMaintenanceTicketRepository,
@@ -25,6 +29,12 @@ from industrial_ai_agent.infrastructure.persistence.postgres import (
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
+from industrial_ai_agent.tools.tool_contracts import (
+    MaintenanceSummary,
+    ProductIdentifier,
+    StationIdentifier,
+    ToolCallIdentifier,
+)
 
 FACTORY_MCP_SERVER_NAME = "factory_mcp"
 FACTORY_MCP_SERVER_VERSION = "0.1.0"
@@ -48,8 +58,9 @@ def create_factory_mcp_server(
         name="get_product_history",
         description="Get historical production information for a product ID.",
         structured_output=True,
+        annotations=ToolAnnotations(read_only_hint=True),
     )
-    def get_product_history(product_id: str) -> dict[str, Any]:
+    def get_product_history(product_id: ProductIdentifier) -> dict[str, Any]:
         result = product_history.get_product_history(product_id)
         return result.model_dump(mode="json")
 
@@ -57,29 +68,41 @@ def create_factory_mcp_server(
         name="get_machine_status",
         description="Get the current operating state of a station ID.",
         structured_output=True,
+        annotations=ToolAnnotations(read_only_hint=True),
     )
-    def get_machine_status(station_id: str) -> dict[str, Any]:
+    def get_machine_status(station_id: StationIdentifier) -> dict[str, Any]:
         result = machine_status.get_machine_status(station_id)
         return result.model_dump(mode="json")
 
     if maintenance_ticket is not None:
+        ticket_capability = maintenance_ticket
 
         @server.tool(
             name="create_maintenance_ticket",
             description="Create an approved maintenance ticket for a station.",
             structured_output=True,
+            annotations=ToolAnnotations(
+                read_only_hint=False,
+                destructive_hint=False,
+                idempotent_hint=True,
+            ),
         )
         def create_maintenance_ticket(
-            station_id: str,
-            summary: str,
-            request_id: str,
+            station_id: StationIdentifier,
+            summary: MaintenanceSummary,
+            request_id: ToolCallIdentifier,
         ) -> dict[str, Any]:
-            result = maintenance_ticket.create_maintenance_ticket(
+            result = ticket_capability.create_maintenance_ticket(
                 request_id=request_id,
                 station_id=station_id,
                 summary=summary,
             )
             return result.model_dump(mode="json")
+
+    for tool_name in ("get_product_history", "get_machine_status"):
+        require_strict_mcp_tool_arguments(server, tool_name)
+    if maintenance_ticket is not None:
+        require_strict_mcp_tool_arguments(server, "create_maintenance_ticket")
 
     return server
 

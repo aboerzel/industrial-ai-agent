@@ -32,7 +32,7 @@ class FinishReason(StrEnum):
 
 
 class LLMToolCall(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     name: str
@@ -40,7 +40,7 @@ class LLMToolCall(BaseModel):
 
 
 class LLMMessage(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     role: MessageRole
     content: str | None
@@ -70,7 +70,7 @@ class LLMMessage(BaseModel):
 
 
 class LLMToolDefinition(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     description: str
@@ -78,14 +78,14 @@ class LLMToolDefinition(BaseModel):
 
 
 class LLMRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     messages: tuple[LLMMessage, ...] = Field(min_length=1)
     tools: tuple[LLMToolDefinition, ...] = ()
 
 
 class LLMResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     text: str | None
     tool_calls: tuple[LLMToolCall, ...] = ()

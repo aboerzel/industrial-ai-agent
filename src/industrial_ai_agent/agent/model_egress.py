@@ -22,6 +22,10 @@ class ModelEgressDeniedError(RuntimeError):
     pass
 
 
+class DataClassificationBoundaryError(RuntimeError):
+    """A tool result cannot enter a run whose clearance is lower than its label."""
+
+
 class ModelExecutionZoneResolver(Protocol):
     def get_execution_zone(self, profile_name: str) -> object | None: ...
 
