@@ -11,6 +11,11 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import Tool
 
+from industrial_ai_agent.infrastructure.telemetry import (
+    Telemetry,
+    instrument_mcp_http_client,
+)
+
 
 @dataclass(frozen=True)
 class StreamableHttpServerParameters:
@@ -47,6 +52,8 @@ class FactoryMcpSmokeResult:
 @asynccontextmanager
 async def open_mcp_session(
     transport: McpTransport,
+    *,
+    telemetry: Telemetry | None = None,
 ) -> AsyncIterator[ClientSession]:
     """Open and close one official-SDK session for either supported transport."""
     async with AsyncExitStack() as stack:
@@ -61,6 +68,9 @@ async def open_mcp_session(
             http_client = await stack.enter_async_context(
                 create_mcp_http_client(headers or None)
             )
+            # The public HTTP-client request hook injects W3C context for each
+            # real Streamable HTTP request, not once per MCP session.
+            instrument_mcp_http_client(http_client, telemetry)
             read_stream, write_stream = await stack.enter_async_context(
                 streamable_http_client(transport.url, http_client=http_client)
             )

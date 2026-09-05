@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-from opentelemetry import metrics, trace
+from opentelemetry import metrics, propagate, trace
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -44,6 +44,7 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
     {
         "approval.decision",
         "data.classification",
+        "embedding.model",
         "error.code",
         "error.type",
         "execution.zone",
@@ -53,10 +54,12 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "model.name",
         "model.profile",
         "operation.status",
+        "operation.type",
         "persistence.operation",
         "retrieval.candidate_count",
         "retrieval.result_count",
         "retrieval.strategy",
+        "reranker.model",
         "run.id",
         "telemetry.metadata_only",
         "token.input_count",
@@ -73,6 +76,7 @@ _METRIC_ATTRIBUTE_KEYS = frozenset(
         "mcp.tool",
         "model.profile",
         "operation.status",
+        "operation.type",
         "persistence.operation",
         "retrieval.strategy",
     }
@@ -81,6 +85,8 @@ _ALLOWED_LOG_EVENTS = frozenset(
     {
         "agent.run.completed",
         "agent.run.failed",
+        "mcp.server.completed",
+        "mcp.server.failed",
     }
 )
 
@@ -91,7 +97,7 @@ class TelemetryConfiguration:
 
     enabled: bool = False
     otlp_endpoint: str = "127.0.0.1:4317"
-    service_name: str = "industrial-ai-agent-api"
+    service_name: str = "industrial-ai-agent"
     service_version: str = "0.1.0"
 
 
@@ -158,6 +164,11 @@ class Telemetry:
         """Emit a fixed, metadata-only operational event correlated by the active span."""
         self._log(event=event, run_id=run_id, error_code=None, level="info")
 
+    def set_span_attributes(self, span: Span, attributes: Mapping[str, object]) -> None:
+        """Add dynamic metadata only after applying the telemetry allowlist."""
+        for key, value in safe_attributes(attributes).items():
+            span.set_attribute(key, value)
+
     def shutdown(self) -> None:
         """Flush optional telemetry before an API process exits; never raise to business code."""
         for provider in (
@@ -206,7 +217,7 @@ class Telemetry:
         error_code: str | None,
         level: str,
     ) -> None:
-        if event not in _ALLOWED_LOG_EVENTS:
+        if not self.enabled or event not in _ALLOWED_LOG_EVENTS:
             return
         extra: dict[str, str] = {"event.name": event}
         if run_id is not None:
@@ -339,6 +350,65 @@ def instrument_fastapi(app: object, telemetry: Telemetry) -> None:
         meter_provider=telemetry.meter_provider,
         excluded_urls="health",
     )
+
+
+def instrument_mcp_http_client(
+    http_client: object, telemetry: Telemetry | None
+) -> None:
+    """Inject W3C context through the public request-hook API of MCP's HTTP client."""
+    if telemetry is None or not telemetry.enabled or telemetry.tracer_provider is None:
+        return
+    try:
+        event_hooks = http_client.event_hooks  # type: ignore[attr-defined]
+        event_hooks.setdefault("request", []).append(_inject_mcp_trace_context)
+    except Exception:  # noqa: BLE001 - telemetry must not block MCP calls.
+        return
+
+
+def instrument_mcp_http_app(app: object, telemetry: Telemetry) -> None:
+    """Add public ASGI tracing at the MCP HTTP process boundary."""
+    if not telemetry.enabled or telemetry.tracer_provider is None:
+        return
+    try:
+        from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
+
+        app.add_middleware(  # type: ignore[attr-defined]
+            OpenTelemetryMiddleware,
+            tracer_provider=telemetry.tracer_provider,
+            meter_provider=telemetry.meter_provider,
+        )
+    except Exception:  # noqa: BLE001 - telemetry must not block MCP startup.
+        return
+
+
+def run_instrumented_mcp_http_server(
+    server: object,
+    *,
+    host: str,
+    port: int,
+    streamable_http_path: str,
+    telemetry: Telemetry,
+) -> None:
+    """Run the public MCP Starlette app with optional ASGI trace extraction."""
+    import uvicorn
+
+    app = server.streamable_http_app(  # type: ignore[attr-defined]
+        host=host,
+        streamable_http_path=streamable_http_path,
+    )
+    instrument_mcp_http_app(app, telemetry)
+    try:
+        uvicorn.run(app, host=host, port=port)
+    finally:
+        telemetry.shutdown()
+
+
+async def _inject_mcp_trace_context(request: object) -> None:
+    """Use the global W3C propagator without touching authorization headers."""
+    try:
+        propagate.inject(request.headers)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - telemetry must not block MCP calls.
+        return
 
 
 def safe_attributes(

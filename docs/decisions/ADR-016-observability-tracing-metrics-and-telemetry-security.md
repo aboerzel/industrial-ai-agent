@@ -39,13 +39,24 @@ The current API emits operational spans for `agent.run`, `model.routing`, `llm.c
 boundaries may add `retrieval.embedding`, `retrieval.lexical`, `retrieval.fusion`,
 `retrieval.rerank`, `approval.wait`, and checkpoint spans.
 
-The initial API trace covers its own stable boundaries. `retrieval.search` represents a
-Knowledge MCP call in the API trace; the current MCP transport does not propagate OTel
-context into the separate Knowledge MCP process, so its embedding, lexical, fusion, and
-rerank operations are not yet child spans. LangGraph checkpoint load/save are likewise
-not instrumented because no stable public boundary exposes those operations without
-wrapping framework internals. The explicit run-store boundary remains the durable
-persistence measurement.
+The API trace spans MCP process boundaries through standard W3C `traceparent` and
+`tracestate` propagation on Streamable HTTP requests. The Infrastructure client attaches
+the global OTel propagator through the public `httpx2` request-hook API, and each MCP
+process adds maintained OTel ASGI middleware to its public Starlette app. This establishes
+the remote parent before the MCP SDK dispatches a request. Factory emits `factory.tool`;
+Knowledge emits `knowledge.search` with `retrieval.embedding`, `retrieval.lexical`,
+`retrieval.semantic`, `retrieval.fusion`, and `retrieval.rerank` beneath it where those
+stable owned boundaries exist. The service names are `industrial-ai-agent`,
+`factory-mcp`, and `knowledge-mcp`. Bearer authentication remains an independent
+ADR-015 concern: trace headers neither establish identity nor influence clearance or
+permissions. Missing or malformed context starts a valid independent server trace and
+never fails an MCP business request.
+
+The MCP SDK also emits its own protocol-level request spans. They are correlated through
+the ASGI server parent but are not treated as the project-owned operational boundary.
+LangGraph checkpoint load/save remain uninstrumented because no stable public boundary
+exposes those operations without wrapping framework internals. The explicit run-store
+boundary remains the durable persistence measurement.
 
 Logs, metrics, and traces use different models. Logs retain sanitized structured events
 and trace/span/run correlation. Metrics use bounded labels and aggregate signals.
@@ -68,7 +79,9 @@ allowlisted sanitized error type/code. The Collector also deletes accidental SQL
 source-code-path, exception-stacktrace, and raw/dynamic HTTP request attributes, plus
 dynamic `service.instance.id`. Fixed Python logging events retain only event name,
 severity, resource service name, trace/span correlation, optional `run.id`, and safe
-error code.
+error code. Factory and Knowledge use the fixed `mcp.server.completed` and
+`mcp.server.failed` events; their resource `service.name` lets Loki distinguish the
+emitting service without payload logging.
 
 FastAPI uses maintained OTel instrumentation. SQLAlchemy auto-instrumentation remains
 disabled because statement capture would add avoidable RLS and sensitive-data exposure
@@ -83,6 +96,8 @@ runs, errors, LLM calls, MCP calls, retrieval calls, and approvals.
 * Infrastructure decorators at existing client/provider boundaries replace a custom
   tracing platform or a second agent loop.
 * Collector/backend outages do not fail valid business work but degrade observability.
+* Each MCP service configures the same optional bootstrap with its own stable resource
+  service name and exports its bounded metrics through the Collector.
 * Raw prompts and results require a separate classification-governed decision. Langfuse
   is explicitly out of scope for this slice.
 

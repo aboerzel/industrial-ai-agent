@@ -3,6 +3,7 @@
 import argparse
 import os
 from collections.abc import Callable
+from time import perf_counter
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -37,6 +38,13 @@ from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlMaintenanceTicketRepository,
     PostgreSqlProductHistoryRepository,
     PostgreSqlSessionFactory,
+)
+from industrial_ai_agent.infrastructure.telemetry import (
+    Telemetry,
+    TelemetryConfiguration,
+    configure_telemetry,
+    run_instrumented_mcp_http_server,
+    sanitized_error_code,
 )
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
@@ -75,6 +83,7 @@ def create_factory_mcp_server(
     maintenance_ticket: MaintenanceTicketCapability | None = None,
     access_control: McpHttpAccessControl | None = None,
     capabilities_for_context: FactoryCapabilitiesForContext | None = None,
+    telemetry: Telemetry | None = None,
 ) -> MCPServer:
     """Create an MCP adapter over the injected factory capabilities."""
     server = MCPServer(
@@ -99,7 +108,12 @@ def create_factory_mcp_server(
             access_control=access_control,
             capabilities_for_context=capabilities_for_context,
         )
-        result = active_product_history.get_product_history(product_id)
+        result = _invoke_factory_tool(
+            telemetry=telemetry,
+            tool_name="get_product_history",
+            operation_type="read",
+            action=lambda: active_product_history.get_product_history(product_id),
+        )
         return result.model_dump(mode="json")
 
     @server.tool(
@@ -118,7 +132,12 @@ def create_factory_mcp_server(
             access_control=access_control,
             capabilities_for_context=capabilities_for_context,
         )
-        result = active_machine_status.get_machine_status(station_id)
+        result = _invoke_factory_tool(
+            telemetry=telemetry,
+            tool_name="get_machine_status",
+            operation_type="read",
+            action=lambda: active_machine_status.get_machine_status(station_id),
+        )
         return result.model_dump(mode="json")
 
     if maintenance_ticket is not None:
@@ -149,10 +168,15 @@ def create_factory_mcp_server(
             )
             if active_ticket_capability is None:
                 raise PermissionError("MCP tool is not authorized")
-            result = active_ticket_capability.create_maintenance_ticket(
-                request_id=request_id,
-                station_id=station_id,
-                summary=summary,
+            result = _invoke_factory_tool(
+                telemetry=telemetry,
+                tool_name="create_maintenance_ticket",
+                operation_type="write",
+                action=lambda: active_ticket_capability.create_maintenance_ticket(
+                    request_id=request_id,
+                    station_id=station_id,
+                    summary=summary,
+                ),
             )
             return result.model_dump(mode="json")
 
@@ -167,7 +191,9 @@ def create_factory_mcp_server(
     return server
 
 
-def create_default_factory_mcp_server() -> MCPServer:
+def create_default_factory_mcp_server(
+    *, telemetry: Telemetry | None = None
+) -> MCPServer:
     """Build the persistent service when configured, retaining in-memory stdio tests."""
     database_url = os.getenv("FACTORY_DATABASE_URL")
     if database_url:
@@ -188,6 +214,7 @@ def create_default_factory_mcp_server() -> MCPServer:
                     session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
                 )
             ),
+            telemetry=telemetry,
         )
     return create_factory_mcp_server(
         product_history=ProductHistoryCapability(InMemoryProductHistoryRepository()),
@@ -195,10 +222,13 @@ def create_default_factory_mcp_server() -> MCPServer:
         maintenance_ticket=MaintenanceTicketCapability(
             InMemoryMaintenanceTicketRepository()
         ),
+        telemetry=telemetry,
     )
 
 
-def create_secure_factory_mcp_server() -> MCPServer:
+def create_secure_factory_mcp_server(
+    *, telemetry: Telemetry | None = None
+) -> MCPServer:
     """Build the HTTP composition with request-derived RLS clearance."""
     database_url = os.getenv("FACTORY_DATABASE_URL")
     if not database_url:
@@ -247,6 +277,7 @@ def create_secure_factory_mcp_server() -> MCPServer:
         maintenance_ticket=placeholder_ticket,
         access_control=access_control,
         capabilities_for_context=capabilities_for_context,
+        telemetry=telemetry,
     )
     return server
 
@@ -254,19 +285,22 @@ def create_secure_factory_mcp_server() -> MCPServer:
 def main() -> None:
     """Run the demo server through the transport chosen at process startup."""
     args = _parse_args()
+    telemetry = _create_factory_telemetry() if args.transport != "stdio" else None
     server = (
-        create_default_factory_mcp_server()
+        create_default_factory_mcp_server(telemetry=telemetry)
         if args.transport == "stdio"
-        else create_secure_factory_mcp_server()
+        else create_secure_factory_mcp_server(telemetry=telemetry)
     )
     if args.transport == "stdio":
         server.run(transport="stdio")
         return
-    server.run(
-        transport="streamable-http",
+    assert telemetry is not None
+    run_instrumented_mcp_http_server(
+        server,
         host=args.host,
         port=args.port,
         streamable_http_path=FACTORY_MCP_HTTP_PATH,
+        telemetry=telemetry,
     )
 
 
@@ -288,6 +322,58 @@ def _parse_args() -> argparse.Namespace:
 
 def _required_factory_permission(tool_name: str) -> McpPermission:
     return _FACTORY_TOOL_PERMISSIONS[tool_name]
+
+
+def _create_factory_telemetry() -> Telemetry:
+    return configure_telemetry(
+        TelemetryConfiguration(
+            enabled=os.getenv("OTEL_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"},
+            otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317"),
+            service_name=os.getenv("OTEL_SERVICE_NAME", "factory-mcp"),
+        )
+    )
+
+
+def _invoke_factory_tool(
+    *,
+    telemetry: Telemetry | None,
+    tool_name: str,
+    operation_type: str,
+    action: Callable[[], Any],
+) -> Any:
+    if telemetry is None:
+        return action()
+    attributes = {
+        "mcp.tool": tool_name,
+        "mcp.operation": operation_type,
+        "operation.type": operation_type,
+    }
+    started = perf_counter()
+    status = "success"
+    try:
+        with telemetry.span("factory.tool", attributes) as span:
+            result = action()
+            classification = getattr(result, "classification", None)
+            if isinstance(classification, DataClassification):
+                telemetry.set_span_attributes(
+                    span, {"data.classification": classification.name}
+                )
+        telemetry.log_event(event="mcp.server.completed", run_id=None)
+        return result
+    except BaseException as error:
+        status = "failure"
+        telemetry.log_error(
+            event="mcp.server.failed",
+            run_id=None,
+            error_code=sanitized_error_code(error),
+        )
+        raise
+    finally:
+        telemetry.record_mcp_call(
+            attributes={**attributes, "operation.status": status},
+            duration_seconds=perf_counter() - started,
+        )
 
 
 def _capabilities_for_request(

@@ -108,7 +108,10 @@ class McpLangChainToolProvider(McpToolProvider):
                     try:
                         with self._span("mcp.discovery", discovery_attributes):
                             client = await stack.enter_async_context(
-                                open_mcp_session(configuration.transport)
+                                open_mcp_session(
+                                    configuration.transport,
+                                    telemetry=self._telemetry,
+                                )
                             )
                             initialized = await client.initialize()
                             listed_tools = await client.list_tools()

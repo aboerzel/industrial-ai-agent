@@ -47,7 +47,7 @@ def create_default_app():
         TelemetryConfiguration(
             enabled=_environment_bool("OTEL_ENABLED", False),
             otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317"),
-            service_name=os.getenv("OTEL_SERVICE_NAME", "industrial-ai-agent-api"),
+            service_name=os.getenv("OTEL_SERVICE_NAME", "industrial-ai-agent"),
         )
     )
     run_service = create_default_troubleshooting_run_service(

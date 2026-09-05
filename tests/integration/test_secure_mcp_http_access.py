@@ -105,6 +105,9 @@ def test_codex_client_discovers_only_read_tools_and_cannot_call_write_tool(
                     "X-Client": "industrial-agent",
                     "X-Clearance": "CONFIDENTIAL",
                     "X-Permissions": "CREATE_MAINTENANCE_TICKET",
+                    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-"
+                    "00f067aa0ba902b7-01",
+                    "tracestate": "vendor=untrusted",
                 },
             )
         ) as session:

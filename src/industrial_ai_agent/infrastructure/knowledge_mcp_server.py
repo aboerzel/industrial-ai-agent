@@ -5,6 +5,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
+from time import perf_counter
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -24,6 +25,13 @@ from industrial_ai_agent.infrastructure.mcp_access_control import (
 )
 from industrial_ai_agent.infrastructure.mcp_schema_validation import (
     require_strict_mcp_tool_arguments,
+)
+from industrial_ai_agent.infrastructure.telemetry import (
+    Telemetry,
+    TelemetryConfiguration,
+    configure_telemetry,
+    run_instrumented_mcp_http_server,
+    sanitized_error_code,
 )
 from industrial_ai_agent.tools.documentation_search import DocumentationSearchCapability
 from industrial_ai_agent.tools.tool_contracts import (
@@ -49,6 +57,7 @@ def create_knowledge_mcp_server(
     documentation_search: DocumentationSearchCapability,
     access_control: McpHttpAccessControl | None = None,
     documentation_search_for_context: DocumentationSearchForContext | None = None,
+    telemetry: Telemetry | None = None,
 ) -> MCPServer:
     """Create an MCP adapter over the injected documentation-search capability."""
     server = MCPServer(
@@ -68,14 +77,16 @@ def create_knowledge_mcp_server(
         top_k: DocumentationResultLimit = 3,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        active_search = _documentation_search_for_request(
-            ctx=ctx,
-            tool_name="search_documentation",
-            fallback=documentation_search,
-            access_control=access_control,
-            documentation_search_for_context=documentation_search_for_context,
+        result = _invoke_knowledge_search(
+            telemetry=telemetry,
+            action=lambda: _documentation_search_for_request(
+                ctx=ctx,
+                tool_name="search_documentation",
+                fallback=documentation_search,
+                access_control=access_control,
+                documentation_search_for_context=documentation_search_for_context,
+            ).search_documentation(query, top_k),
         )
-        result = active_search.search_documentation(query, top_k)
         return {
             "query": result.query,
             "results": [
@@ -99,6 +110,7 @@ def create_default_knowledge_mcp_server(
     reranker_local_files_only: bool = True,
     database_url: str | None = None,
     demo_factory_root: Path = DEFAULT_DEMO_FACTORY_ROOT,
+    telemetry: Telemetry | None = None,
 ) -> MCPServer:
     """Assemble the frozen local retrieval pipeline at the server composition root."""
     # Import expensive local-model adapters only when this production composition runs.
@@ -139,9 +151,11 @@ def create_default_knowledge_mcp_server(
         embedding_base_url=embedding_base_url,
         reranker_device=reranker_device,
         reranker_local_files_only=reranker_local_files_only,
+        telemetry=telemetry,
     )
     return create_knowledge_mcp_server(
-        documentation_search=DocumentationSearchCapability(retriever)
+        documentation_search=DocumentationSearchCapability(retriever),
+        telemetry=telemetry,
     )
 
 
@@ -156,12 +170,14 @@ class ClearanceAwareDocumentationSearchFactory:
         reranker_device: str | None,
         reranker_local_files_only: bool,
         demo_factory_root: Path,
+        telemetry: Telemetry | None = None,
     ) -> None:
         self._database_url = database_url
         self._embedding_base_url = embedding_base_url
         self._reranker_device = reranker_device
         self._reranker_local_files_only = reranker_local_files_only
         self._demo_factory_root = demo_factory_root
+        self._telemetry = telemetry
         self._cache: dict[SecurityContext, DocumentationSearchCapability] = {}
         self._lock = Lock()
 
@@ -206,6 +222,7 @@ class ClearanceAwareDocumentationSearchFactory:
             embedding_base_url=self._embedding_base_url,
             reranker_device=self._reranker_device,
             reranker_local_files_only=self._reranker_local_files_only,
+            telemetry=self._telemetry,
         )
         return DocumentationSearchCapability(retriever)
 
@@ -217,6 +234,7 @@ def create_secure_knowledge_mcp_server(
     reranker_local_files_only: bool,
     database_url: str,
     demo_factory_root: Path,
+    telemetry: Telemetry | None = None,
 ) -> MCPServer:
     """Build the HTTP composition with clearance-isolated retrieval pipelines."""
     search_factory = ClearanceAwareDocumentationSearchFactory(
@@ -225,6 +243,7 @@ def create_secure_knowledge_mcp_server(
         reranker_device=reranker_device,
         reranker_local_files_only=reranker_local_files_only,
         demo_factory_root=demo_factory_root,
+        telemetry=telemetry,
     )
     # This fallback is never reached by authenticated HTTP calls. It remains PUBLIC
     # so constructing the secure server never parses a higher-clearance corpus.
@@ -249,6 +268,7 @@ def create_secure_knowledge_mcp_server(
         documentation_search=fallback,
         access_control=access_control,
         documentation_search_for_context=search_factory.for_context,
+        telemetry=telemetry,
     )
     return server
 
@@ -256,6 +276,7 @@ def create_secure_knowledge_mcp_server(
 def main() -> None:
     """Run the knowledge server through the transport chosen at process startup."""
     args = _parse_args()
+    telemetry = _create_knowledge_telemetry() if args.transport != "stdio" else None
     database_url = os.getenv("KNOWLEDGE_DATABASE_URL")
     demo_factory_root = Path(
         os.getenv("KNOWLEDGE_MCP_DEMO_FACTORY_ROOT", DEFAULT_DEMO_FACTORY_ROOT)
@@ -268,6 +289,7 @@ def main() -> None:
             reranker_local_files_only=args.reranker_local_files_only,
             database_url=database_url,
             demo_factory_root=demo_factory_root,
+            telemetry=telemetry,
         )
         if args.transport == "stdio"
         else create_secure_knowledge_mcp_server(
@@ -276,16 +298,19 @@ def main() -> None:
             reranker_local_files_only=args.reranker_local_files_only,
             database_url=_require_knowledge_database_url(database_url),
             demo_factory_root=demo_factory_root,
+            telemetry=telemetry,
         )
     )
     if args.transport == "stdio":
         server.run(transport="stdio")
         return
-    server.run(
-        transport="streamable-http",
+    assert telemetry is not None
+    run_instrumented_mcp_http_server(
+        server,
         host=args.host,
         port=args.port,
         streamable_http_path=KNOWLEDGE_MCP_HTTP_PATH,
+        telemetry=telemetry,
     )
 
 
@@ -337,6 +362,62 @@ def _environment_bool(name: str, default: bool) -> bool:
 
 def _required_knowledge_permission(tool_name: str) -> McpPermission:
     return _KNOWLEDGE_TOOL_PERMISSIONS[tool_name]
+
+
+def _create_knowledge_telemetry() -> Telemetry:
+    return configure_telemetry(
+        TelemetryConfiguration(
+            enabled=os.getenv("OTEL_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"},
+            otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317"),
+            service_name=os.getenv("OTEL_SERVICE_NAME", "knowledge-mcp"),
+        )
+    )
+
+
+def _invoke_knowledge_search(
+    *, telemetry: Telemetry | None, action: Callable[[], Any]
+) -> Any:
+    if telemetry is None:
+        return action()
+    attributes = {
+        "mcp.tool": "search_documentation",
+        "mcp.operation": "read",
+        "operation.type": "read",
+        "retrieval.strategy": "hybrid_reranked",
+    }
+    started = perf_counter()
+    status = "success"
+    try:
+        with telemetry.span("knowledge.search", attributes) as span:
+            result = action()
+            classifications = [item.classification for item in result.results]
+            if classifications:
+                telemetry.set_span_attributes(
+                    span,
+                    {"data.classification": max(classifications).name},
+                )
+            telemetry.set_span_attributes(
+                span, {"retrieval.result_count": len(result.results)}
+            )
+        telemetry.log_event(event="mcp.server.completed", run_id=None)
+        return result
+    except BaseException as error:
+        status = "failure"
+        telemetry.log_error(
+            event="mcp.server.failed",
+            run_id=None,
+            error_code=sanitized_error_code(error),
+        )
+        raise
+    finally:
+        telemetry.record_mcp_call(
+            attributes={**attributes, "operation.status": status},
+            duration_seconds=perf_counter() - started,
+        )
+        telemetry.record_retrieval(
+            attributes={**attributes, "operation.status": status}
+        )
 
 
 def _documentation_search_for_request(

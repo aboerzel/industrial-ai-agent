@@ -27,6 +27,9 @@ services:
       FACTORY_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
       MCP_INDUSTRIAL_AGENT_TOKEN: ${MCP_INDUSTRIAL_AGENT_TOKEN:?Set MCP_INDUSTRIAL_AGENT_TOKEN in .env}
       MCP_CODEX_DEVELOPMENT_TOKEN: ${MCP_CODEX_DEVELOPMENT_TOKEN:?Set MCP_CODEX_DEVELOPMENT_TOKEN in .env}
+      OTEL_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SERVICE_NAME: factory-mcp
     ports:
       - "8001:8001"
     healthcheck:
@@ -53,6 +56,9 @@ services:
       KNOWLEDGE_MCP_DEMO_FACTORY_ROOT: /app/demo_factory
       MCP_INDUSTRIAL_AGENT_TOKEN: ${MCP_INDUSTRIAL_AGENT_TOKEN:?Set MCP_INDUSTRIAL_AGENT_TOKEN in .env}
       MCP_CODEX_DEVELOPMENT_TOKEN: ${MCP_CODEX_DEVELOPMENT_TOKEN:?Set MCP_CODEX_DEVELOPMENT_TOKEN in .env}
+      OTEL_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SERVICE_NAME: knowledge-mcp
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -83,7 +89,7 @@ services:
       MODEL_CONFIGURATION_PATH: /app/config/model_profiles.docker.toml
       OTEL_ENABLED: "true"
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
-      OTEL_SERVICE_NAME: industrial-ai-agent-api
+      OTEL_SERVICE_NAME: industrial-ai-agent
     ports:
       - "8000:8000"
     depends_on:

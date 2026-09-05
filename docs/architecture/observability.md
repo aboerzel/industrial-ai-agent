@@ -36,6 +36,32 @@ The dashboard contains run/error, MCP, LLM, execution-zone, retrieval, approval,
 run-rate, HTTP-latency, recent-error, and service-health panels. Its cost panel
 deliberately states that cost is not yet emitted.
 
+## MCP Distributed Traces
+
+The Streamable HTTP boundary propagates standard W3C `traceparent` and `tracestate`.
+The MCP client uses the global OTel propagator from a public `httpx2` request hook, so
+every HTTP POST, GET, or DELETE receives context from its active operation span. The
+public MCP Starlette app uses OTel ASGI middleware to extract that context before the SDK
+dispatches the request. No custom correlation header exists, and `run_id` remains a
+separate business identifier.
+
+```mermaid
+flowchart LR
+    API["industrial-ai-agent\nagent.run"] --> Client["mcp.tool"]
+    Client -->|"W3C traceparent/tracestate"| Factory["factory-mcp\nfactory.tool"]
+    Client -->|"W3C traceparent/tracestate"| Knowledge["knowledge-mcp\nknowledge.search"]
+    Knowledge --> Embedding["retrieval.embedding"]
+    Knowledge --> Lexical["retrieval.lexical"]
+    Knowledge --> Semantic["retrieval.semantic"]
+    Knowledge --> Fusion["retrieval.fusion"]
+    Knowledge --> Rerank["retrieval.rerank"]
+```
+
+Each span in either process has the originating trace ID. Missing or malformed W3C
+headers start a valid independent server trace. Bearer authentication, subject,
+clearance, and permissions are resolved solely by ADR-015; trace headers do not affect
+them. Stable resources are `industrial-ai-agent`, `factory-mcp`, and `knowledge-mcp`.
+
 ## Correlation and Trace Search
 
 `run_id` is the persisted application UUID. It remains separate from OpenTelemetry
@@ -60,6 +86,10 @@ service-instance metadata. The RCA workflow is: find a run by `run_id`; inspect 
 hierarchy and first ERROR span in Tempo; open the correlated Loki event through its
 trace/span IDs; inspect Prometheus error-rate and latency history for the same time
 window; then compare MCP, model, and retrieval boundaries to identify the likely cause.
+Factory and Knowledge emit only `mcp.server.completed` or `mcp.server.failed`; the Loki
+resource `service.name`, `trace_id`, and `span_id` identify the source without payload
+logging. Tempo service filters can select `industrial-ai-agent`, `factory-mcp`, or
+`knowledge-mcp` to inspect the cross-service hierarchy.
 
 ## Metrics
 
@@ -72,10 +102,11 @@ categories only. They never include run/trace/span IDs, product or station IDs, 
 text, user text, or tool arguments.
 
 The API-side `retrieval.search` span and metric describe the MCP-backed retrieval call.
-Embedding, lexical, fusion, and rerank timings remain in Knowledge MCP until trace-context
-propagation is deliberately added. Checkpoint load/save also remain uninstrumented: the
-current LangGraph saver exposes no stable public operation boundary without framework
-intrusion.
+Knowledge MCP adds `knowledge.search`, embedding, lexical, semantic, fusion, and rerank
+timings to that same trace. MCP-process metrics use only bounded service-resource and
+tool/operation/status/classification dimensions. Checkpoint load/save remain
+uninstrumented: the current LangGraph saver exposes no stable public operation boundary
+without framework intrusion.
 
 ## Telemetry Security
 
@@ -95,15 +126,15 @@ default, so it is intentionally not installed on the engine in this slice. Expli
 run-store and service spans provide persistence timing without that leak risk.
 
 Telemetry is optional: `OTEL_ENABLED=false` leaves business execution usable if a
-Collector is unavailable. The local Compose API sets it to `true` and sends OTLP to the
-Collector. OTel does not replace model-egress enforcement, MCP authorization, RLS, or
-human approval.
+Collector is unavailable. All three Compose application services set it to `true` and
+send OTLP to the Collector. OTel does not replace model-egress enforcement, MCP
+authorization, RLS, or human approval.
 
 ## Scope and Next Slice
 
-This local/self-hosted demonstration has no authentication. The Collector can later add
-OTLP exporters for Honeycomb, Grafana Cloud, or another OTel-compatible backend; no
-cloud credentials are configured here.
+The local/self-hosted demonstration retains ADR-015 bearer authentication for MCP HTTP.
+The Collector can later add OTLP exporters for Honeycomb, Grafana Cloud, or another
+OTel-compatible backend; no cloud credentials are configured here.
 
 Langfuse is intentionally absent. A possible next slice is classification-governed
 LLM/agent observability for provider token usage, costs, prompts/responses, sessions,
