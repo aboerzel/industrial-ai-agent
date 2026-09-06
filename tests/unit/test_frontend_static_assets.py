@@ -23,6 +23,16 @@ def test_frontend_static_assets_are_present_and_use_es_modules() -> None:
     assert 'from "./markdown.js"' in app
 
 
+def test_frontend_workspace_keeps_the_input_panel_fixed_and_allows_result_growth() -> None:
+    css = (FRONTEND_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+
+    assert ".shell {\n  width: calc(100% - 32px);" in css
+    assert "grid-template-columns: 495px minmax(0, 1fr);" in css
+    assert ".investigation-panel,\n.result-panel {\n  min-width: 0;" in css
+    assert "@media (max-width: 760px)" in css
+    assert ".workspace {\n    grid-template-columns: 1fr;" in css
+
+
 def test_frontend_http_transport_is_isolated_to_api_module() -> None:
     api = (FRONTEND_ROOT / "js" / "api.js").read_text(encoding="utf-8")
     app = (FRONTEND_ROOT / "js" / "app.js").read_text(encoding="utf-8")

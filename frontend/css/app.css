@@ -22,7 +22,7 @@ select {
 }
 
 .shell {
-  width: min(1120px, calc(100% - 32px));
+  width: calc(100% - 32px);
   margin: 0 auto;
   padding: 56px 0 72px;
 }
@@ -76,13 +76,14 @@ h3 {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  grid-template-columns: 495px minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
 
 .investigation-panel,
 .result-panel {
+  min-width: 0;
   border: 1px solid #cbd6d1;
   border-radius: 8px;
   background: #ffffff;
