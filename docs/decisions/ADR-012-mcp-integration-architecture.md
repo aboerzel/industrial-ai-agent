@@ -27,6 +27,10 @@ Each MCP server is an Infrastructure adapter over one bounded, cohesive capabili
 area. The first two servers are `factory_mcp` and `knowledge_mcp`. `factory_mcp`
 exposes these cohesive factory tools:
 
+* `list_stations()` and `get_station_overview(station_id)` for bounded factory
+  orientation and a station's visible current state and recent products.
+* `list_products()` and `get_product_overview(product_id)` for bounded product
+  orientation and a visible product's latest production state.
 * `get_product_history(product_id)` for historical production information.
 * `get_machine_status(station_id)` for the current state of a station.
 * `create_maintenance_ticket(station_id, summary, request_id)` for an approved,
@@ -41,6 +45,13 @@ ports, repositories, and capability semantics remain the source of truth; no bus
 logic or repository access is copied into MCP handlers. Tool responses use MCP's
 structured-content support and preserve the capability result semantics, including IDs,
 found/not-found status, timestamps, states, and error codes.
+
+Discovery is a classified capability, not a static demo catalogue. The request-scoped
+`SecurityContext` reaches the PostgreSQL adapter, whose RLS transaction filters station,
+product, event, and machine-state rows before names, relationships, or a collection
+classification are constructed. Lists deliberately expose neither hidden counts nor
+clearance requirements; an inaccessible overview uses the same neutral not-found result
+as a genuinely unknown identifier.
 
 Clients must discover tools from the MCP server through the protocol. They must not keep
 a separate static tool catalogue. A small official-SDK client demonstrates initialization,

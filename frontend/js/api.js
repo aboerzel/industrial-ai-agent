@@ -128,6 +128,10 @@ function isApprovalRequest(value) {
 
 function isPublicToolName(value) {
   return [
+    "list_stations",
+    "get_station_overview",
+    "list_products",
+    "get_product_overview",
     "get_product_history",
     "get_machine_status",
     "search_documentation",

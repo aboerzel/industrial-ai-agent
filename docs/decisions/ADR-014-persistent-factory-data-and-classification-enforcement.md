@@ -107,7 +107,11 @@ Retrieval applies clearance filtering before BM25, semantic retrieval, RRF, and
 reranking. The agent continues to see only `search_documentation`; neither it nor the
 MCP handler knows files, Docling, PostgreSQL, or retrieval storage details.
 
-Factory MCP continues to expose only `get_product_history` and `get_machine_status`.
+Factory MCP exposes bounded classified discovery through `list_stations`,
+`get_station_overview`, `list_products`, and `get_product_overview`, alongside
+`get_product_history` and `get_machine_status`. Discovery queries execute through the
+same request-scoped PostgreSQL RLS context before returning any entity name, relationship,
+or collection classification; they expose no hidden counts.
 Knowledge MCP continues to expose only `search_documentation`. Their production
 composition roots use the persistent adapters while stdio remains a valid local/test MCP
 transport.

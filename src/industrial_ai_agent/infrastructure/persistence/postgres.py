@@ -8,6 +8,12 @@ from sqlalchemy import Connection, Engine, create_engine, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
+from industrial_ai_agent.domain.factory_discovery import (
+    ProductDiscovery,
+    ProductOverview,
+    StationDiscovery,
+    StationOverview,
+)
 from industrial_ai_agent.domain.machine_status import MachineState, MachineStatus
 from industrial_ai_agent.domain.maintenance_ticket import (
     MaintenanceTicket,
@@ -27,6 +33,7 @@ from industrial_ai_agent.infrastructure.persistence.models import (
     MaintenanceTicketRecord,
     ProductEventRecord,
     ProductRecord,
+    StationRecord,
 )
 
 
@@ -134,6 +141,144 @@ class PostgreSqlMachineStatusRepository:
             active_error_code=record.active_error_code,
             classification=DataClassification(record.classification),
         )
+
+
+class PostgreSqlFactoryDiscoveryRepository:
+    """Read bounded discovery projections from RLS-filtered factory records."""
+
+    def __init__(
+        self,
+        session_factory: PostgreSqlSessionFactory,
+        security_context: SecurityContext,
+    ) -> None:
+        self._session_factory = session_factory
+        self._security_context = security_context
+
+    def list_stations(self) -> tuple[StationDiscovery, ...]:
+        with self._session_factory.session(self._security_context) as session:
+            stations = tuple(
+                session.scalars(select(StationRecord).order_by(StationRecord.code))
+            )
+            return tuple(
+                self._station_discovery(session, station) for station in stations
+            )
+
+    def get_station_overview(self, station_id: StationId) -> StationOverview | None:
+        with self._session_factory.session(self._security_context) as session:
+            station = session.scalar(
+                select(StationRecord).where(StationRecord.code == station_id.value)
+            )
+            if station is None:
+                return None
+            events = tuple(
+                session.scalars(
+                    select(ProductEventRecord)
+                    .join(ProductRecord)
+                    .where(ProductEventRecord.station_id == station.id)
+                    .order_by(ProductEventRecord.event_at.desc())
+                    .limit(20)
+                )
+            )
+            return StationOverview(
+                station=self._station_discovery(session, station),
+                recent_product_ids=_distinct_product_ids(events),
+            )
+
+    def list_products(self) -> tuple[ProductDiscovery, ...]:
+        with self._session_factory.session(self._security_context) as session:
+            products = tuple(
+                session.scalars(
+                    select(ProductRecord).order_by(ProductRecord.product_code)
+                )
+            )
+            return tuple(
+                self._product_discovery(session, product) for product in products
+            )
+
+    def get_product_overview(self, product_id: ProductId) -> ProductOverview | None:
+        with self._session_factory.session(self._security_context) as session:
+            product = session.scalar(
+                select(ProductRecord).where(
+                    ProductRecord.product_code == product_id.value
+                )
+            )
+            if product is None:
+                return None
+            events = self._product_events(session, product)
+            return ProductOverview(
+                product=self._product_discovery(session, product, events),
+                passed_station_ids=tuple(
+                    StationId(event.station.code) for event in events
+                ),
+            )
+
+    def _station_discovery(
+        self, session: Session, station: StationRecord
+    ) -> StationDiscovery:
+        state = session.scalar(
+            select(MachineStateRecord)
+            .where(MachineStateRecord.station_id == station.id)
+            .order_by(MachineStateRecord.observed_at.desc())
+            .limit(1)
+        )
+        classifications = [DataClassification(station.classification)]
+        if state is not None:
+            classifications.append(DataClassification(state.classification))
+        return StationDiscovery(
+            station_id=StationId(station.code),
+            name=station.name,
+            state=MachineState(state.state) if state is not None else None,
+            active_error_code=state.active_error_code if state is not None else None,
+            classification=max(classifications),
+        )
+
+    def _product_discovery(
+        self,
+        session: Session,
+        product: ProductRecord,
+        events: tuple[ProductEventRecord, ...] | None = None,
+    ) -> ProductDiscovery:
+        visible_events = (
+            events if events is not None else self._product_events(session, product)
+        )
+        latest = visible_events[-1] if visible_events else None
+        classifications = [DataClassification(product.classification)]
+        classifications.extend(
+            DataClassification(event.classification) for event in visible_events
+        )
+        return ProductDiscovery(
+            product_id=ProductId(product.product_code),
+            latest_station_id=StationId(latest.station.code) if latest else None,
+            latest_status=ProductionStepStatus(latest.status) if latest else None,
+            latest_error_code=latest.error_code if latest else None,
+            classification=max(classifications),
+        )
+
+    @staticmethod
+    def _product_events(
+        session: Session, product: ProductRecord
+    ) -> tuple[ProductEventRecord, ...]:
+        return tuple(
+            session.scalars(
+                select(ProductEventRecord)
+                .options(joinedload(ProductEventRecord.station))
+                .where(ProductEventRecord.product_id == product.id)
+                .order_by(ProductEventRecord.event_at)
+            )
+        )
+
+
+def _distinct_product_ids(
+    events: tuple[ProductEventRecord, ...],
+) -> tuple[ProductId, ...]:
+    product_ids: list[ProductId] = []
+    seen: set[str] = set()
+    for event in events:
+        product_code = event.product.product_code
+        if product_code not in seen:
+            seen.add(product_code)
+            product_ids.append(ProductId(product_code))
+    return tuple(product_ids)
 
 
 class PostgreSqlMaintenanceTicketRepository:

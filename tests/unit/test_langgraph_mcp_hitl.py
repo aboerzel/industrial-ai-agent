@@ -52,6 +52,7 @@ def test_system_message_requires_compact_investigation_markdown_tables() -> None
     assert "`### Next Steps`" in message
     assert "distinguish collected evidence from inference" in message
     assert "Keep `### Next Steps` concise and actionable" in message
+    assert "or explicit factory-discovery request, do not call a tool" in message
 
 
 @dataclass

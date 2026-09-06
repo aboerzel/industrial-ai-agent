@@ -16,6 +16,9 @@ from industrial_ai_agent.domain.security import (
     DataClassification,
     SecurityContext,
 )
+from industrial_ai_agent.infrastructure.in_memory_factory_discovery_repository import (
+    InMemoryFactoryDiscoveryRepository,
+)
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import (
     InMemoryMachineStatusRepository,
 )
@@ -34,6 +37,7 @@ from industrial_ai_agent.infrastructure.mcp_schema_validation import (
     require_strict_mcp_tool_arguments,
 )
 from industrial_ai_agent.infrastructure.persistence.postgres import (
+    PostgreSqlFactoryDiscoveryRepository,
     PostgreSqlMachineStatusRepository,
     PostgreSqlMaintenanceTicketRepository,
     PostgreSqlProductHistoryRepository,
@@ -46,6 +50,7 @@ from industrial_ai_agent.infrastructure.telemetry import (
     run_instrumented_mcp_http_server,
     sanitized_error_code,
 )
+from industrial_ai_agent.tools.factory_discovery import FactoryDiscoveryCapability
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
 from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
@@ -61,6 +66,10 @@ FACTORY_MCP_SERVER_VERSION = "0.1.0"
 FACTORY_MCP_HTTP_PATH = "/mcp"
 
 _FACTORY_TOOL_PERMISSIONS = {
+    "list_stations": McpPermission.READ_FACTORY,
+    "get_station_overview": McpPermission.READ_FACTORY,
+    "list_products": McpPermission.READ_FACTORY,
+    "get_product_overview": McpPermission.READ_FACTORY,
     "get_product_history": McpPermission.READ_FACTORY,
     "get_machine_status": McpPermission.READ_FACTORY,
     "create_maintenance_ticket": McpPermission.CREATE_MAINTENANCE_TICKET,
@@ -71,6 +80,7 @@ type FactoryCapabilitiesForContext = Callable[
     tuple[
         ProductHistoryCapability,
         MachineStatusCapability,
+        FactoryDiscoveryCapability,
         MaintenanceTicketCapability | None,
     ],
 ]
@@ -80,6 +90,7 @@ def create_factory_mcp_server(
     *,
     product_history: ProductHistoryCapability,
     machine_status: MachineStatusCapability,
+    factory_discovery: FactoryDiscoveryCapability,
     maintenance_ticket: MaintenanceTicketCapability | None = None,
     access_control: McpHttpAccessControl | None = None,
     capabilities_for_context: FactoryCapabilitiesForContext | None = None,
@@ -93,6 +104,118 @@ def create_factory_mcp_server(
     )
 
     @server.tool(
+        name="list_stations",
+        description="List stations visible to the authenticated factory clearance.",
+        structured_output=True,
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
+    def list_stations(ctx: Context) -> dict[str, Any]:
+        _, _, active_discovery, _ = _capabilities_for_request(
+            ctx=ctx,
+            tool_name="list_stations",
+            fallback=(
+                product_history,
+                machine_status,
+                factory_discovery,
+                maintenance_ticket,
+            ),
+            access_control=access_control,
+            capabilities_for_context=capabilities_for_context,
+        )
+        result = _invoke_factory_tool(
+            telemetry=telemetry,
+            tool_name="list_stations",
+            operation_type="read",
+            action=active_discovery.list_stations,
+        )
+        return result.model_dump(mode="json")
+
+    @server.tool(
+        name="get_station_overview",
+        description="Get a bounded overview of one visible station and recent products.",
+        structured_output=True,
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
+    def get_station_overview(
+        station_id: StationIdentifier, ctx: Context
+    ) -> dict[str, Any]:
+        _, _, active_discovery, _ = _capabilities_for_request(
+            ctx=ctx,
+            tool_name="get_station_overview",
+            fallback=(
+                product_history,
+                machine_status,
+                factory_discovery,
+                maintenance_ticket,
+            ),
+            access_control=access_control,
+            capabilities_for_context=capabilities_for_context,
+        )
+        result = _invoke_factory_tool(
+            telemetry=telemetry,
+            tool_name="get_station_overview",
+            operation_type="read",
+            action=lambda: active_discovery.get_station_overview(station_id),
+        )
+        return result.model_dump(mode="json")
+
+    @server.tool(
+        name="list_products",
+        description="List products visible to the authenticated factory clearance.",
+        structured_output=True,
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
+    def list_products(ctx: Context) -> dict[str, Any]:
+        _, _, active_discovery, _ = _capabilities_for_request(
+            ctx=ctx,
+            tool_name="list_products",
+            fallback=(
+                product_history,
+                machine_status,
+                factory_discovery,
+                maintenance_ticket,
+            ),
+            access_control=access_control,
+            capabilities_for_context=capabilities_for_context,
+        )
+        result = _invoke_factory_tool(
+            telemetry=telemetry,
+            tool_name="list_products",
+            operation_type="read",
+            action=active_discovery.list_products,
+        )
+        return result.model_dump(mode="json")
+
+    @server.tool(
+        name="get_product_overview",
+        description="Get a bounded overview of one visible product.",
+        structured_output=True,
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
+    def get_product_overview(
+        product_id: ProductIdentifier, ctx: Context
+    ) -> dict[str, Any]:
+        _, _, active_discovery, _ = _capabilities_for_request(
+            ctx=ctx,
+            tool_name="get_product_overview",
+            fallback=(
+                product_history,
+                machine_status,
+                factory_discovery,
+                maintenance_ticket,
+            ),
+            access_control=access_control,
+            capabilities_for_context=capabilities_for_context,
+        )
+        result = _invoke_factory_tool(
+            telemetry=telemetry,
+            tool_name="get_product_overview",
+            operation_type="read",
+            action=lambda: active_discovery.get_product_overview(product_id),
+        )
+        return result.model_dump(mode="json")
+
+    @server.tool(
         name="get_product_history",
         description="Get historical production information for a product ID.",
         structured_output=True,
@@ -101,10 +224,15 @@ def create_factory_mcp_server(
     def get_product_history(
         product_id: ProductIdentifier, ctx: Context
     ) -> dict[str, Any]:
-        active_product_history, _, _ = _capabilities_for_request(
+        active_product_history, _, _, _ = _capabilities_for_request(
             ctx=ctx,
             tool_name="get_product_history",
-            fallback=(product_history, machine_status, maintenance_ticket),
+            fallback=(
+                product_history,
+                machine_status,
+                factory_discovery,
+                maintenance_ticket,
+            ),
             access_control=access_control,
             capabilities_for_context=capabilities_for_context,
         )
@@ -125,10 +253,15 @@ def create_factory_mcp_server(
     def get_machine_status(
         station_id: StationIdentifier, ctx: Context
     ) -> dict[str, Any]:
-        _, active_machine_status, _ = _capabilities_for_request(
+        _, active_machine_status, _, _ = _capabilities_for_request(
             ctx=ctx,
             tool_name="get_machine_status",
-            fallback=(product_history, machine_status, maintenance_ticket),
+            fallback=(
+                product_history,
+                machine_status,
+                factory_discovery,
+                maintenance_ticket,
+            ),
             access_control=access_control,
             capabilities_for_context=capabilities_for_context,
         )
@@ -159,10 +292,15 @@ def create_factory_mcp_server(
             request_id: ToolCallIdentifier,
             ctx: Context,
         ) -> dict[str, Any]:
-            _, _, active_ticket_capability = _capabilities_for_request(
+            _, _, _, active_ticket_capability = _capabilities_for_request(
                 ctx=ctx,
                 tool_name="create_maintenance_ticket",
-                fallback=(product_history, machine_status, ticket_capability),
+                fallback=(
+                    product_history,
+                    machine_status,
+                    factory_discovery,
+                    ticket_capability,
+                ),
                 access_control=access_control,
                 capabilities_for_context=capabilities_for_context,
             )
@@ -180,7 +318,14 @@ def create_factory_mcp_server(
             )
             return result.model_dump(mode="json")
 
-    for tool_name in ("get_product_history", "get_machine_status"):
+    for tool_name in (
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
+        "get_product_history",
+        "get_machine_status",
+    ):
         require_strict_mcp_tool_arguments(server, tool_name)
     if maintenance_ticket is not None:
         require_strict_mcp_tool_arguments(server, "create_maintenance_ticket")
@@ -209,6 +354,11 @@ def create_default_factory_mcp_server(
                     session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
                 )
             ),
+            factory_discovery=FactoryDiscoveryCapability(
+                PostgreSqlFactoryDiscoveryRepository(
+                    session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
+                )
+            ),
             maintenance_ticket=MaintenanceTicketCapability(
                 PostgreSqlMaintenanceTicketRepository(
                     session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
@@ -219,6 +369,9 @@ def create_default_factory_mcp_server(
     return create_factory_mcp_server(
         product_history=ProductHistoryCapability(InMemoryProductHistoryRepository()),
         machine_status=MachineStatusCapability(InMemoryMachineStatusRepository()),
+        factory_discovery=FactoryDiscoveryCapability(
+            InMemoryFactoryDiscoveryRepository()
+        ),
         maintenance_ticket=MaintenanceTicketCapability(
             InMemoryMaintenanceTicketRepository()
         ),
@@ -243,6 +396,9 @@ def create_secure_factory_mcp_server(
             MachineStatusCapability(
                 PostgreSqlMachineStatusRepository(session_factory, security_context)
             ),
+            FactoryDiscoveryCapability(
+                PostgreSqlFactoryDiscoveryRepository(session_factory, security_context)
+            ),
             MaintenanceTicketCapability(
                 PostgreSqlMaintenanceTicketRepository(session_factory, security_context)
             ),
@@ -250,14 +406,17 @@ def create_secure_factory_mcp_server(
 
     # Authenticated handlers replace these with request-derived capabilities.
     # Keep the inert composition fallback at the minimum clearance as defense in depth.
-    placeholder_product_history, placeholder_machine_status, placeholder_ticket = (
-        capabilities_for_context(
-            SecurityContext(
-                subject_id="secure-http-fallback",
-                roles=("fallback",),
-                clearance=DataClassification.PUBLIC,
-                authenticated=False,
-            )
+    (
+        placeholder_product_history,
+        placeholder_machine_status,
+        placeholder_factory_discovery,
+        placeholder_ticket,
+    ) = capabilities_for_context(
+        SecurityContext(
+            subject_id="secure-http-fallback",
+            roles=("fallback",),
+            clearance=DataClassification.PUBLIC,
+            authenticated=False,
         )
     )
     server: MCPServer
@@ -274,6 +433,7 @@ def create_secure_factory_mcp_server(
     server = create_factory_mcp_server(
         product_history=placeholder_product_history,
         machine_status=placeholder_machine_status,
+        factory_discovery=placeholder_factory_discovery,
         maintenance_ticket=placeholder_ticket,
         access_control=access_control,
         capabilities_for_context=capabilities_for_context,
@@ -383,6 +543,7 @@ def _capabilities_for_request(
     fallback: tuple[
         ProductHistoryCapability,
         MachineStatusCapability,
+        FactoryDiscoveryCapability,
         MaintenanceTicketCapability | None,
     ],
     access_control: McpHttpAccessControl | None,
@@ -390,6 +551,7 @@ def _capabilities_for_request(
 ) -> tuple[
     ProductHistoryCapability,
     MachineStatusCapability,
+    FactoryDiscoveryCapability,
     MaintenanceTicketCapability | None,
 ]:
     if access_control is None or capabilities_for_context is None:

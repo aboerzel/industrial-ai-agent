@@ -59,6 +59,19 @@ test("renders every public terminal and approval lifecycle state", async (t) => 
   }
 });
 
+test("accepts discovery tool calls in the existing run result contract", async () => {
+  const payload = {
+    run_id: RUN_ID,
+    status: "success",
+    data_classification: "INTERNAL",
+    answer: "Visible stations are S01, S02, S03, and S05.",
+    tool_calls: [{ tool: "list_stations", arguments: {} }],
+    approval_request: null,
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
 test("rejects malformed approval data instead of accepting an arbitrary object", async () => {
   await assert.rejects(
     requestRun({

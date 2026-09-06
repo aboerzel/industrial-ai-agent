@@ -9,6 +9,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.infrastructure.api.postgres_run_store import _safe_tool_names
 from industrial_ai_agent.infrastructure.api.run_store import (
     RecentRuntimeRunsQuery,
     RuntimeRunInspection,
@@ -42,6 +43,16 @@ def test_runtime_mcp_exposes_only_bounded_read_only_tools() -> None:
         for tool in tools
         for forbidden in ("prompt", "answer", "arguments", "results", "checkpoint")
     )
+
+
+def test_runtime_projection_keeps_discovery_tool_names() -> None:
+    assert _safe_tool_names(
+        [
+            {"tool": "list_stations"},
+            {"tool": "get_product_overview"},
+            {"tool": "unknown_tool"},
+        ]
+    ) == ("list_stations", "get_product_overview")
 
 
 def test_runtime_mcp_projects_a_successful_run_without_internal_payloads() -> None:
@@ -147,7 +158,9 @@ def test_runtime_mcp_returns_empty_trajectory_and_not_found_for_unknown_run() ->
     server = _server(_FakeRuntimeStore(records=(_inspection(tool_names=()),)))
 
     async def call() -> None:
-        empty = await server.call_tool("get_run_tool_trajectory", {"run_id": str(RUN_ID)})
+        empty = await server.call_tool(
+            "get_run_tool_trajectory", {"run_id": str(RUN_ID)}
+        )
         assert empty.structured_content["trajectory"] == []
         with pytest.raises(ToolError, match="Error executing tool"):
             await server.call_tool(
@@ -170,7 +183,12 @@ def test_runtime_mcp_validates_run_ids_and_bounded_recent_filters() -> None:
             await server.call_tool("list_recent_agent_runs", {"lookback": "90d"})
         result = await server.call_tool(
             "list_recent_agent_runs",
-            {"status": "success", "classification": "INTERNAL", "limit": 1, "lookback": "1h"},
+            {
+                "status": "success",
+                "classification": "INTERNAL",
+                "limit": 1,
+                "lookback": "1h",
+            },
         )
         return result.structured_content
 
@@ -182,7 +200,12 @@ def test_runtime_mcp_validates_run_ids_and_bounded_recent_filters() -> None:
     assert store.last_query.limit == 1
     assert store.last_query.status is RunStatus.SUCCESS
     assert store.last_query.data_classification is DataClassification.INTERNAL
-    assert NOW - timedelta(hours=1, seconds=2) <= store.last_query.created_after <= NOW + timedelta(days=1)
+    observed_now = datetime.now(UTC)
+    assert (
+        observed_now - timedelta(hours=1, seconds=2)
+        <= store.last_query.created_after
+        <= observed_now
+    )
 
 
 async def _call(name: str, arguments: dict[str, object]) -> dict[str, object]:
@@ -211,9 +234,13 @@ def _inspection(
         tool_call_count=len(tool_names),
         tool_names=tool_names,
         error_code=error_code,
-        approval_action="create_maintenance_ticket" if status is RunStatus.WAITING_FOR_APPROVAL or approval_decision else None,
+        approval_action="create_maintenance_ticket"
+        if status is RunStatus.WAITING_FOR_APPROVAL or approval_decision
+        else None,
         approval_decision=approval_decision,
-        approval_requested_at=NOW if approval_decision or status is RunStatus.WAITING_FOR_APPROVAL else None,
+        approval_requested_at=NOW
+        if approval_decision or status is RunStatus.WAITING_FOR_APPROVAL
+        else None,
         approval_decided_at=NOW + timedelta(minutes=1) if approval_decision else None,
         created_at=NOW,
         updated_at=NOW + timedelta(minutes=1),
@@ -226,7 +253,9 @@ class _FakeRuntimeStore:
         self.last_query: RecentRuntimeRunsQuery | None = None
 
     async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None:
-        return next((record for record in self.records if record.run_id == run_id), None)
+        return next(
+            (record for record in self.records if record.run_id == run_id), None
+        )
 
     async def list_recent(
         self, query: RecentRuntimeRunsQuery

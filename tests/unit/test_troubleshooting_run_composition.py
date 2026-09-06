@@ -7,7 +7,7 @@ from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
 )
 
 
-def test_public_run_connects_only_to_its_authorized_knowledge_server(
+def test_public_run_connects_only_to_its_authorized_read_only_servers(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN", "test-public-token")
@@ -21,6 +21,13 @@ def test_public_run_connects_only_to_its_authorized_knowledge_server(
         run_policy=policy,
     )
 
-    assert len(servers) == 1
-    assert servers[0].server_id == "knowledge"
-    assert servers[0].allowed_tool_names == frozenset({"search_documentation"})
+    assert [server.server_id for server in servers] == ["factory", "knowledge"]
+    assert servers[0].allowed_tool_names == frozenset(
+        {
+            "list_stations",
+            "get_station_overview",
+            "list_products",
+            "get_product_overview",
+        }
+    )
+    assert servers[1].allowed_tool_names == frozenset({"search_documentation"})

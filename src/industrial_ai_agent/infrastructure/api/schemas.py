@@ -76,6 +76,10 @@ class InternalDiagnosticRequest(BaseModel):
 
 
 class PublicToolName(StrEnum):
+    LIST_STATIONS = "list_stations"
+    GET_STATION_OVERVIEW = "get_station_overview"
+    LIST_PRODUCTS = "list_products"
+    GET_PRODUCT_OVERVIEW = "get_product_overview"
     GET_PRODUCT_HISTORY = "get_product_history"
     GET_MACHINE_STATUS = "get_machine_status"
     SEARCH_DOCUMENTATION = "search_documentation"

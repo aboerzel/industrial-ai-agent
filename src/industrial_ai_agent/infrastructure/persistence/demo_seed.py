@@ -37,12 +37,15 @@ STATIONS = {
     "S07": "00000000-0000-0000-0000-000000000107",
 }
 PRODUCTS = {
+    "P4101": "00000000-0000-0000-0000-000000004101",
+    "P4102": "00000000-0000-0000-0000-000000004102",
     "P4711": "00000000-0000-0000-0000-000000004711",
     "P4801": "00000000-0000-0000-0000-000000004801",
     "P4802": "00000000-0000-0000-0000-000000004802",
     "P4805": "00000000-0000-0000-0000-000000004805",
     "P4811": "00000000-0000-0000-0000-000000004811",
     "P4900": "00000000-0000-0000-0000-000000004900",
+    "P4901": "00000000-0000-0000-0000-000000004901",
     "P9001": "00000000-0000-0000-0000-000000009001",
 }
 
@@ -69,13 +72,13 @@ def _seed_factory(session: Session) -> None:
             classification=0,
         )
     )
-    for code, name in (
-        ("S01", "Material Intake"),
-        ("S02", "Positioning"),
-        ("S03", "Robot Assembly"),
-        ("S04", "Quality Inspection"),
-        ("S05", "Packaging"),
-        ("S07", "Prototype Commissioning"),
+    for code, name, classification in (
+        ("S01", "Material Intake", 0),
+        ("S02", "Positioning", 1),
+        ("S03", "Robot Assembly", 1),
+        ("S04", "Quality Inspection", 2),
+        ("S05", "Packaging", 0),
+        ("S07", "Prototype Commissioning", 3),
     ):
         session.merge(
             StationRecord(
@@ -83,7 +86,7 @@ def _seed_factory(session: Session) -> None:
                 factory_id=_uuid(FACTORY_ID),
                 code=code,
                 name=name,
-                classification=0,
+                classification=classification,
             )
         )
     for code, identifier in PRODUCTS.items():
@@ -92,23 +95,39 @@ def _seed_factory(session: Session) -> None:
                 id=_uuid(identifier),
                 factory_id=_uuid(FACTORY_ID),
                 product_code=code,
-                classification=3 if code == "P9001" else 1 if code == "P4900" else 2,
+                classification=_product_classification(code),
             )
         )
 
 
 def _seed_product_events(session: Session) -> None:
     events = (
+        ("P4101", "S01", "2026-01-14T07:45:00+00:00", "COMPLETED", None),
+        ("P4101", "S05", "2026-01-14T08:20:00+00:00", "COMPLETED", None),
+        ("P4102", "S01", "2026-01-14T09:10:00+00:00", "COMPLETED", None),
+        ("P4102", "S05", "2026-01-14T09:45:00+00:00", "COMPLETED", None),
         ("P4711", "S01", "2026-01-15T08:00:00+00:00", "COMPLETED", None),
         ("P4711", "S02", "2026-01-15T08:04:00+00:00", "WARNING", "POSITION-ENC-02"),
         ("P4711", "S03", "2026-01-15T08:07:00+00:00", "COMPLETED", None),
         ("P4711", "S04", "2026-01-15T08:09:00+00:00", "FAILED", "QUALITY-09"),
+        ("P4801", "S01", "2026-01-16T07:56:00+00:00", "COMPLETED", None),
         ("P4801", "S02", "2026-01-16T08:00:00+00:00", "WARNING", "POSITION-ENC-02"),
+        ("P4801", "S03", "2026-01-16T08:05:00+00:00", "COMPLETED", None),
+        ("P4801", "S04", "2026-01-16T08:08:00+00:00", "COMPLETED", None),
+        ("P4801", "S05", "2026-01-16T08:12:00+00:00", "COMPLETED", None),
+        ("P4802", "S01", "2026-01-16T08:07:00+00:00", "COMPLETED", None),
         ("P4802", "S02", "2026-01-16T08:11:00+00:00", "WARNING", "POSITION-ENC-02"),
+        ("P4805", "S01", "2026-01-16T08:18:00+00:00", "COMPLETED", None),
         ("P4805", "S02", "2026-01-16T08:22:00+00:00", "WARNING", "POSITION-ENC-02"),
+        ("P4805", "S03", "2026-01-16T08:27:00+00:00", "COMPLETED", None),
+        ("P4811", "S01", "2026-01-16T08:29:00+00:00", "COMPLETED", None),
         ("P4811", "S02", "2026-01-16T08:33:00+00:00", "WARNING", "POSITION-ENC-02"),
+        ("P4811", "S04", "2026-01-16T08:37:00+00:00", "FAILED", "QUALITY-09"),
         ("P4900", "S01", "2026-01-20T08:00:00+00:00", "COMPLETED", None),
         ("P4900", "S02", "2026-01-20T08:04:00+00:00", "WARNING", "POSITION-ENC-02"),
+        ("P4900", "S02", "2026-01-20T08:08:00+00:00", "COMPLETED", None),
+        ("P4901", "S01", "2026-01-21T08:00:00+00:00", "COMPLETED", None),
+        ("P4901", "S02", "2026-01-21T08:04:00+00:00", "FAILED", "POSITION-ENC-02"),
         ("P9001", "S07", "2026-02-02T10:00:00+00:00", "COMPLETED", None),
         ("P9001", "S07", "2026-02-02T10:06:00+00:00", "FAILED", "PROTO-COMM-07"),
     )
@@ -123,13 +142,7 @@ def _seed_product_events(session: Session) -> None:
                 event_at=datetime.fromisoformat(event_at),
                 status=status,
                 error_code=error_code,
-                classification=(
-                    3
-                    if product_code == "P9001"
-                    else 1
-                    if product_code == "P4900"
-                    else 2
-                ),
+                classification=_product_classification(product_code),
             )
         )
 
@@ -153,9 +166,12 @@ def _seed_operational_records(session: Session) -> None:
     )
     for index, (station, observed_at, state, error_code) in enumerate(
         (
+            ("S01", "2026-01-21T08:05:00+00:00", "RUNNING", None),
             ("S02", "2026-01-16T09:00:00+00:00", "FAULTED", "POSITION-ENC-02"),
             ("S04", "2026-01-15T08:10:00+00:00", "FAULTED", "QUALITY-09"),
             ("S02", "2026-01-20T08:05:00+00:00", "RUNNING", None),
+            ("S03", "2026-01-20T08:09:00+00:00", "RUNNING", None),
+            ("S05", "2026-01-20T08:13:00+00:00", "RUNNING", None),
             ("S07", "2026-02-02T10:07:00+00:00", "FAULTED", "PROTO-COMM-07"),
         ),
         start=201,
@@ -171,8 +187,10 @@ def _seed_operational_records(session: Session) -> None:
                     3
                     if station == "S07"
                     else 1
-                    if observed_at == "2026-01-20T08:05:00+00:00"
+                    if station in {"S02", "S03"}
                     else 2
+                    if station == "S04"
+                    else 0
                 ),
             )
         )
@@ -192,6 +210,17 @@ def _seed_operational_records(session: Session) -> None:
             product_id=_uuid(PRODUCTS["P4711"]),
             station_id=_uuid(STATIONS["S04"]),
             inspected_at=datetime(2026, 1, 15, 8, 9, tzinfo=UTC),
+            result="REJECTED",
+            defect_code="QUALITY-09",
+            classification=2,
+        )
+    )
+    session.merge(
+        QualityInspectionRecord(
+            id=_uuid("00000000-0000-0000-0000-000000000703"),
+            product_id=_uuid(PRODUCTS["P4811"]),
+            station_id=_uuid(STATIONS["S04"]),
+            inspected_at=datetime(2026, 1, 16, 8, 37, tzinfo=UTC),
             result="REJECTED",
             defect_code="QUALITY-09",
             classification=2,
@@ -282,3 +311,13 @@ def _seed_document_catalog(session: Session) -> None:
 
 def _uuid(value: str) -> UUID:
     return UUID(value)
+
+
+def _product_classification(product_code: str) -> int:
+    if product_code == "P9001":
+        return 3
+    if product_code in {"P4900", "P4901"}:
+        return 1
+    if product_code in {"P4101", "P4102"}:
+        return 0
+    return 2

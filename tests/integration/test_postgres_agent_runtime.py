@@ -20,6 +20,7 @@ from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
+    _safe_tool_names,
 )
 from industrial_ai_agent.infrastructure.api.schemas import RunStatus
 from industrial_ai_agent.infrastructure.internal_diagnostic_scope import (
@@ -64,6 +65,16 @@ def _result() -> AgentRunResult:
         ),
         model_profile_name="local_quality",
     )
+
+
+def test_runtime_projection_retains_discovery_tool_names_only() -> None:
+    assert _safe_tool_names(
+        [
+            {"tool": "list_stations"},
+            {"tool": "get_product_overview"},
+            {"tool": "unknown_tool"},
+        ]
+    ) == ("list_stations", "get_product_overview")
 
 
 def test_agent_run_store_survives_store_recreation_and_rls() -> None:

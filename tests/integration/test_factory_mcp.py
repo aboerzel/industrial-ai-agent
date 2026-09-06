@@ -19,6 +19,10 @@ from industrial_ai_agent.infrastructure.factory_mcp_server import (
     create_default_factory_mcp_server,
     create_factory_mcp_server,
 )
+from industrial_ai_agent.infrastructure.in_memory_factory_discovery_repository import (
+    InMemoryFactoryDiscoveryRepository,
+)
+from industrial_ai_agent.tools.factory_discovery import FactoryDiscoveryCapability
 from industrial_ai_agent.tools.machine_status import MachineStatusResult
 from industrial_ai_agent.tools.product_history import ProductHistoryResult
 
@@ -28,6 +32,10 @@ def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> No
 
     tools_by_name = {tool.name: tool for tool in tools}
     assert set(tools_by_name) == {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "create_maintenance_ticket",
@@ -37,6 +45,14 @@ def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> No
     ]
     assert tools_by_name["get_machine_status"].input_schema["required"] == [
         "station_id"
+    ]
+    assert "required" not in tools_by_name["list_stations"].input_schema
+    assert "required" not in tools_by_name["list_products"].input_schema
+    assert tools_by_name["get_station_overview"].input_schema["required"] == [
+        "station_id"
+    ]
+    assert tools_by_name["get_product_overview"].input_schema["required"] == [
+        "product_id"
     ]
     assert tools_by_name["create_maintenance_ticket"].input_schema["required"] == [
         "station_id",
@@ -50,26 +66,37 @@ def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> No
 def test_factory_mcp_tool_handlers_delegate_to_injected_capabilities() -> None:
     product_history = _RecordingProductHistoryCapability()
     machine_status = _RecordingMachineStatusCapability()
+    discovery = _RecordingFactoryDiscoveryCapability()
     server = create_factory_mcp_server(
         product_history=product_history,  # type: ignore[arg-type]
         machine_status=machine_status,  # type: ignore[arg-type]
+        factory_discovery=discovery,  # type: ignore[arg-type]
     )
 
-    async def call_tools() -> tuple[dict[str, object], dict[str, object]]:
+    async def call_tools() -> tuple[
+        dict[str, object], dict[str, object], dict[str, object]
+    ]:
         product_call = await server.call_tool(
             "get_product_history", {"product_id": "P4711"}
         )
         machine_call = await server.call_tool(
             "get_machine_status", {"station_id": "S04"}
         )
+        stations_call = await server.call_tool("list_stations", {})
         assert isinstance(product_call, CallToolResult)
         assert isinstance(machine_call, CallToolResult)
-        return product_call.structured_content, machine_call.structured_content
+        assert isinstance(stations_call, CallToolResult)
+        return (
+            product_call.structured_content,
+            machine_call.structured_content,
+            stations_call.structured_content,
+        )
 
-    product_content, machine_content = asyncio.run(call_tools())
+    product_content, machine_content, stations_content = asyncio.run(call_tools())
 
     assert product_history.product_ids == ["P4711"]
     assert machine_status.station_ids == ["S04"]
+    assert discovery.list_station_calls == 1
     assert product_content == {
         "product_id": "P4711",
         "found": False,
@@ -83,6 +110,7 @@ def test_factory_mcp_tool_handlers_delegate_to_injected_capabilities() -> None:
         "active_error_code": None,
         "classification": 2,
     }
+    assert stations_content == {"stations": [], "classification": 0}
 
 
 def test_factory_mcp_rejects_invalid_maintenance_ticket_inputs_before_dispatch() -> (
@@ -108,6 +136,9 @@ def test_factory_mcp_rejects_unknown_arguments_before_capability_dispatch() -> N
     server = create_factory_mcp_server(
         product_history=product_history,  # type: ignore[arg-type]
         machine_status=machine_status,  # type: ignore[arg-type]
+        factory_discovery=FactoryDiscoveryCapability(
+            InMemoryFactoryDiscoveryRepository()
+        ),
     )
 
     async def call_invalid_tool() -> None:
@@ -163,7 +194,11 @@ def test_official_mcp_stdio_client_discovers_and_calls_factory_tools() -> None:
 def test_streamable_http_matches_stdio_factory_mcp_protocol_and_results(
     factory_mcp_http_transport: StreamableHttpServerParameters,
 ) -> None:
-    stdio_result = asyncio.run(run_factory_mcp_smoke(_factory_mcp_stdio_transport()))
+    # The HTTP fixture deliberately uses the default in-memory demo server.
+    # Keep both transports on that same data source when a local PostgreSQL URL is set.
+    stdio_result = asyncio.run(
+        run_factory_mcp_smoke(_factory_mcp_stdio_transport(database_url=""))
+    )
     http_result = asyncio.run(run_factory_mcp_smoke(factory_mcp_http_transport))
 
     assert http_result.server_name == stdio_result.server_name
@@ -176,8 +211,11 @@ def test_streamable_http_matches_stdio_factory_mcp_protocol_and_results(
     assert http_result.unknown_machine_status == stdio_result.unknown_machine_status
 
 
-def _factory_mcp_stdio_transport() -> StdioServerParameters:
-    database_url = os.getenv("FACTORY_DATABASE_URL")
+def _factory_mcp_stdio_transport(
+    database_url: str | None = None,
+) -> StdioServerParameters:
+    if database_url is None:
+        database_url = os.getenv("FACTORY_DATABASE_URL")
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
@@ -190,6 +228,10 @@ def _assert_factory_smoke_result(result: FactoryMcpSmokeResult) -> None:
     assert result.server_version == FACTORY_MCP_SERVER_VERSION
     assert result.protocol_version
     assert result.tool_names == (
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "create_maintenance_ticket",
@@ -244,3 +286,14 @@ class _RecordingMachineStatusCapability:
     def get_machine_status(self, station_id: str) -> MachineStatusResult:
         self.station_ids.append(station_id)
         return MachineStatusResult(station_id=station_id, found=False)
+
+
+class _RecordingFactoryDiscoveryCapability:
+    def __init__(self) -> None:
+        self.list_station_calls = 0
+
+    def list_stations(self):
+        from industrial_ai_agent.tools.factory_discovery import StationListResult
+
+        self.list_station_calls += 1
+        return StationListResult(stations=(), classification=0)

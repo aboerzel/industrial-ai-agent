@@ -112,6 +112,10 @@ def test_multi_mcp_discovery_binds_all_unique_authorized_tools_once_per_run() ->
 
     assert [server.server_id for server in session.servers] == ["factory", "knowledge"]
     assert session.discovered_tool_names == (
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "create_maintenance_ticket",
@@ -169,7 +173,7 @@ def test_multi_mcp_langgraph_run_is_sequential_and_has_no_direct_retriever_acces
         "get_machine_status",
         "search_documentation",
     ]
-    assert all(len(request.tools) == 3 for request in llm.requests)
+    assert all(len(request.tools) == 7 for request in llm.requests)
     agent_source = inspect.getsource(LangGraphTroubleshootingAgent)
     assert "ProductHistoryCapability" not in agent_source
     assert "MachineStatusCapability" not in agent_source

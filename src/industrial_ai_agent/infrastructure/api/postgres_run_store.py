@@ -236,8 +236,12 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 AgentRunRecord.data_classification == int(query.data_classification)
             )
         if query.model_profile is not None:
-            statement = statement.where(AgentRunRecord.model_profile == query.model_profile)
-        statement = statement.order_by(AgentRunRecord.created_at.desc()).limit(query.limit)
+            statement = statement.where(
+                AgentRunRecord.model_profile == query.model_profile
+            )
+        statement = statement.order_by(AgentRunRecord.created_at.desc()).limit(
+            query.limit
+        )
         with self._session_factory.session(self._security_context) as session:
             return tuple(_inspection(record) for record in session.scalars(statement))
 
@@ -318,6 +322,10 @@ def _inspection(record: AgentRunRecord) -> RuntimeRunInspection:
 
 _KNOWN_TOOL_NAMES = frozenset(
     {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "search_documentation",

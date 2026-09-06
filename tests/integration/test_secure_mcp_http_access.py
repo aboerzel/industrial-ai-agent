@@ -23,10 +23,12 @@ from mcp.server.mcpserver import MCPServer
 from industrial_ai_agent.application.mcp_access import McpPermission
 from industrial_ai_agent.infrastructure.factory_mcp_server import create_factory_mcp_server
 from industrial_ai_agent.infrastructure.in_memory_machine_status_repository import InMemoryMachineStatusRepository
+from industrial_ai_agent.infrastructure.in_memory_factory_discovery_repository import InMemoryFactoryDiscoveryRepository
 from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository import InMemoryMaintenanceTicketRepository
 from industrial_ai_agent.infrastructure.in_memory_product_history_repository import InMemoryProductHistoryRepository
 from industrial_ai_agent.infrastructure.mcp_access_control import create_demo_mcp_access_control
 from industrial_ai_agent.tools.machine_status import MachineStatusCapability
+from industrial_ai_agent.tools.factory_discovery import FactoryDiscoveryCapability
 from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 
@@ -37,6 +39,10 @@ async def tools():
 access = create_demo_mcp_access_control(
     tools=tools,
     required_permission=lambda name: {
+        'list_stations': McpPermission.READ_FACTORY,
+        'get_station_overview': McpPermission.READ_FACTORY,
+        'list_products': McpPermission.READ_FACTORY,
+        'get_product_overview': McpPermission.READ_FACTORY,
         'get_product_history': McpPermission.READ_FACTORY,
         'get_machine_status': McpPermission.READ_FACTORY,
         'create_maintenance_ticket': McpPermission.CREATE_MAINTENANCE_TICKET,
@@ -44,13 +50,15 @@ access = create_demo_mcp_access_control(
 )
 product = ProductHistoryCapability(InMemoryProductHistoryRepository())
 machine = MachineStatusCapability(InMemoryMachineStatusRepository())
+discovery = FactoryDiscoveryCapability(InMemoryFactoryDiscoveryRepository())
 ticket = MaintenanceTicketCapability(InMemoryMaintenanceTicketRepository())
 server = create_factory_mcp_server(
     product_history=product,
     machine_status=machine,
+    factory_discovery=discovery,
     maintenance_ticket=ticket,
     access_control=access,
-    capabilities_for_context=lambda context: (product, machine, ticket),
+    capabilities_for_context=lambda context: (product, machine, discovery, ticket),
 )
 server.run(transport='streamable-http', host='127.0.0.1', port=int(os.environ['TEST_MCP_PORT']), streamable_http_path='/mcp')
 """
@@ -89,6 +97,10 @@ def test_industrial_client_discovers_write_tool(secure_factory_server: str) -> N
     names = asyncio.run(_tool_names(secure_factory_server, _INDUSTRIAL_TOKEN))
 
     assert names == {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "create_maintenance_ticket",
@@ -128,7 +140,14 @@ def test_codex_client_discovers_only_read_tools_and_cannot_call_write_tool(
 
     names, outcome = asyncio.run(verify())
 
-    assert names == {"get_product_history", "get_machine_status"}
+    assert names == {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
+        "get_product_history",
+        "get_machine_status",
+    }
     assert outcome == "denied"
 
 
@@ -137,7 +156,14 @@ def test_internal_agent_discovers_only_read_tools_and_cannot_call_write_tool(
 ) -> None:
     names = asyncio.run(_tool_names(secure_factory_server, _INTERNAL_AGENT_TOKEN))
 
-    assert names == {"get_product_history", "get_machine_status"}
+    assert names == {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
+        "get_product_history",
+        "get_machine_status",
+    }
 
 
 def test_missing_and_malformed_authorization_are_denied(

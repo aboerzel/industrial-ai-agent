@@ -187,6 +187,7 @@ def _service(factory: SequentialAgentFactory) -> TroubleshootingRunService:
                 quality_class=QualityClass.HIGH,
                 cost_class=CostClass.LOW,
                 execution_zone=ExecutionZone.LOCAL,
+                max_data_classification=DataClassification.RESTRICTED,
             ),
         ),
         agent_factory=factory,
@@ -227,7 +228,8 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
                     "Investigate the recurring quality problem for product P4711 at "
                     "station S04. Use factory and documentation information and "
                     "create a maintenance ticket if justified."
-                )
+                ),
+                "user_clearance": "CONFIDENTIAL",
             },
         )
     finally:
@@ -287,7 +289,8 @@ def test_fastapi_hitl_reject_survives_runtime_recreation_without_ticket() -> Non
     first_client, first_sessions = _application(factory)
     try:
         started = first_client.post(
-            "/api/v1/runs", json={"message": "Investigate S04."}
+            "/api/v1/runs",
+            json={"message": "Investigate S04.", "user_clearance": "CONFIDENTIAL"},
         )
     finally:
         first_client.close()
@@ -326,7 +329,10 @@ def test_fastapi_hitl_concurrent_approvals_claim_one_postgres_resume() -> None:
     factory = SequentialAgentFactory()
     starter, starter_sessions = _application(factory)
     try:
-        started = starter.post("/api/v1/runs", json={"message": "Investigate S04."})
+        started = starter.post(
+            "/api/v1/runs",
+            json={"message": "Investigate S04.", "user_clearance": "CONFIDENTIAL"},
+        )
     finally:
         starter.close()
         starter_sessions.dispose()

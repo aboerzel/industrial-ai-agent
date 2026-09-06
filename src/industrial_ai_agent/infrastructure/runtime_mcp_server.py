@@ -74,6 +74,10 @@ _TERMINAL_STATUSES = frozenset(
     {RunStatus.SUCCESS, RunStatus.LIMIT_REACHED, RunStatus.FAILED}
 )
 _TOOL_METADATA = {
+    "list_stations": ("factory-mcp", "read", False),
+    "get_station_overview": ("factory-mcp", "read", False),
+    "list_products": ("factory-mcp", "read", False),
+    "get_product_overview": ("factory-mcp", "read", False),
     "get_product_history": ("factory-mcp", "read", False),
     "get_machine_status": ("factory-mcp", "read", False),
     "search_documentation": ("knowledge-mcp", "read", False),
@@ -111,6 +115,10 @@ class _TrajectoryEntry(BaseModel):
 
     sequence: int = Field(ge=1)
     tool_name: Literal[
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "search_documentation",
@@ -178,13 +186,17 @@ def create_runtime_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    async def get_agent_run(run_id: RunIdentifier, ctx: Context | None = None) -> dict[str, Any]:
+    async def get_agent_run(
+        run_id: RunIdentifier, ctx: Context | None = None
+    ) -> dict[str, Any]:
         inspection = await _lookup(run_id, ctx, access_control, store_for_context)
         return _invoke_tool(
             telemetry,
             "runtime.run.lookup",
             run_id,
-            lambda: _RunProjection.model_validate(_run_payload(inspection)).model_dump(mode="json"),
+            lambda: _RunProjection.model_validate(_run_payload(inspection)).model_dump(
+                mode="json"
+            ),
         )
 
     @server.tool(
@@ -223,7 +235,9 @@ def create_runtime_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    async def get_run_approval(run_id: RunIdentifier, ctx: Context | None = None) -> dict[str, Any]:
+    async def get_run_approval(
+        run_id: RunIdentifier, ctx: Context | None = None
+    ) -> dict[str, Any]:
         inspection = await _lookup(run_id, ctx, access_control, store_for_context)
         return _invoke_tool(
             telemetry,
@@ -240,7 +254,9 @@ def create_runtime_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    async def get_run_failure(run_id: RunIdentifier, ctx: Context | None = None) -> dict[str, Any]:
+    async def get_run_failure(
+        run_id: RunIdentifier, ctx: Context | None = None
+    ) -> dict[str, Any]:
         inspection = await _lookup(run_id, ctx, access_control, store_for_context)
         return _invoke_tool(
             telemetry,
@@ -302,13 +318,17 @@ def create_runtime_mcp_server(
     return server
 
 
-def create_secure_runtime_mcp_server(*, telemetry: Telemetry | None = None) -> MCPServer:
+def create_secure_runtime_mcp_server(
+    *, telemetry: Telemetry | None = None
+) -> MCPServer:
     """Compose the HTTP service with ADR-015 access and RLS per MCP request."""
     database_url = os.getenv("AGENT_RUNTIME_DATABASE_URL") or os.getenv(
         "FACTORY_DATABASE_URL"
     )
     if not database_url:
-        raise RuntimeError("AGENT_RUNTIME_DATABASE_URL or FACTORY_DATABASE_URL is required")
+        raise RuntimeError(
+            "AGENT_RUNTIME_DATABASE_URL or FACTORY_DATABASE_URL is required"
+        )
     session_factory = PostgreSqlSessionFactory(database_url)
     server: MCPServer
 
@@ -333,7 +353,9 @@ def main() -> None:
     """Run the independent authenticated Streamable HTTP Runtime MCP service."""
     args = _parse_args()
     if args.transport == "stdio":
-        raise RuntimeError("Runtime MCP stdio composition requires an explicit run store")
+        raise RuntimeError(
+            "Runtime MCP stdio composition requires an explicit run store"
+        )
     telemetry = _create_telemetry()
     server = create_secure_runtime_mcp_server(telemetry=telemetry)
     run_instrumented_mcp_http_server(
@@ -364,12 +386,18 @@ def _context(
     tool_name: str,
 ):
     if access_control is None:
-        return type("LocalAccess", (), {"security_context": SecurityContext(
-            subject_id="runtime-mcp-stdio",
-            roles=("runtime-mcp-stdio",),
-            clearance=DataClassification.CONFIDENTIAL,
-            authenticated=True,
-        )})()
+        return type(
+            "LocalAccess",
+            (),
+            {
+                "security_context": SecurityContext(
+                    subject_id="runtime-mcp-stdio",
+                    roles=("runtime-mcp-stdio",),
+                    clearance=DataClassification.CONFIDENTIAL,
+                    authenticated=True,
+                )
+            },
+        )()
     if ctx is None:
         raise PermissionError("MCP authentication failed")
     context = access_control.access_context_from_headers(ctx.headers)
@@ -480,14 +508,18 @@ def _invoke_tool(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the read-only Runtime MCP server.")
+    parser = argparse.ArgumentParser(
+        description="Run the read-only Runtime MCP server."
+    )
     parser.add_argument(
         "--transport",
         choices=("stdio", "streamable-http"),
         default=os.getenv("RUNTIME_MCP_TRANSPORT", "streamable-http"),
     )
     parser.add_argument("--host", default=os.getenv("RUNTIME_MCP_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("RUNTIME_MCP_PORT", "8004")))
+    parser.add_argument(
+        "--port", type=int, default=int(os.getenv("RUNTIME_MCP_PORT", "8004"))
+    )
     return parser.parse_args()
 
 

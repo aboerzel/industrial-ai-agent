@@ -120,7 +120,9 @@ def create_app(
         )
         try:
             policy = _classification_policy(request).resolve(
-                resolve_demo_run_profile(payload.message),
+                resolve_demo_run_profile(
+                    payload.message, security_context=security_context
+                ),
                 security_context=security_context,
             )
         except RunClearanceDeniedError:

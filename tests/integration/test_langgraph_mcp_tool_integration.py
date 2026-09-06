@@ -104,10 +104,15 @@ def _two_tool_responses() -> tuple[LLMResponse, ...]:
     )
 
 
-def _mcp_agent(llm_client: FakeLLMClient) -> LangGraphTroubleshootingAgent:
+def _mcp_agent(
+    llm_client: FakeLLMClient,
+    database_url: str | None = None,
+) -> LangGraphTroubleshootingAgent:
     return LangGraphTroubleshootingAgent(
         LLMClientChatModel(llm_client, PROFILE),
-        mcp_tool_provider=McpLangChainToolProvider(_factory_server_parameters()),
+        mcp_tool_provider=McpLangChainToolProvider(
+            _factory_server_parameters(database_url)
+        ),
     )
 
 
@@ -146,8 +151,11 @@ def test_confidential_mcp_observation_blocks_next_public_model_call() -> None:
     assert len(llm_client.requests) == 1
 
 
-def _factory_server_parameters() -> StdioServerParameters:
-    database_url = os.getenv("FACTORY_DATABASE_URL")
+def _factory_server_parameters(
+    database_url: str | None = None,
+) -> StdioServerParameters:
+    if database_url is None:
+        database_url = os.getenv("FACTORY_DATABASE_URL")
     return StdioServerParameters(
         command=sys.executable,
         args=["-m", "industrial_ai_agent.infrastructure.factory_mcp_server"],
@@ -178,11 +186,19 @@ def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schema
     assert discovered_session.server_name == "factory_mcp"
     assert discovered_session.protocol_version
     assert discovered_session.discovered_tool_names == (
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "create_maintenance_ticket",
     )
     assert set(tools_by_name) == {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "create_maintenance_ticket",
@@ -208,7 +224,7 @@ def test_langgraph_mcp_http_path_matches_the_stdio_path(
     http_llm = FakeLLMClient(*_two_tool_responses())
 
     stdio_result = asyncio.run(
-        _mcp_agent(stdio_llm).aanswer_via_mcp("Investigate P4711.")
+        _mcp_agent(stdio_llm, database_url="").aanswer_via_mcp("Investigate P4711.")
     )
     http_result = asyncio.run(
         _http_mcp_agent(http_llm, factory_mcp_http_transport).aanswer_via_mcp(

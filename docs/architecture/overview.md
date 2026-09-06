@@ -678,7 +678,7 @@ Contains industrial domain models and rules.
 The current slices define `ProductId`, the shared `StationId`, `ProductionStep`,
 `ProductionStepStatus`, `ProductHistory`, `MachineState`, `MachineStatus`, and
 `KnowledgeRetrievalResult`. The inner ports are `ProductHistoryRepository`,
-`MachineStatusRepository`, `KnowledgeRetriever`, and `EmbeddingClient`. The HITL demonstration additionally
+`MachineStatusRepository`, `FactoryDiscoveryRepository`, `KnowledgeRetriever`, and `EmbeddingClient`. The HITL demonstration additionally
 defines `MaintenanceTicketRequestId` and `MaintenanceTicket` plus the
 `MaintenanceTicketRepository` inner port.
 
@@ -697,6 +697,11 @@ Contains agent-facing capabilities.
 Tools should expose meaningful domain operations rather than low-level implementation details.
 
 The current capabilities are
+`FactoryDiscoveryCapability.list_stations()`,
+`FactoryDiscoveryCapability.get_station_overview(station_id)`,
+`FactoryDiscoveryCapability.list_products()`, and
+`FactoryDiscoveryCapability.get_product_overview(product_id)`. Its PostgreSQL adapter
+constructs only RLS-visible projections and never returns hidden counts. The existing
 `ProductHistoryCapability.get_product_history(product_id)` and
 `MachineStatusCapability.get_machine_status(station_id)`. They return Pydantic
 `ProductHistoryResult` and `MachineStatusResult` models, including structured not-found

@@ -29,6 +29,10 @@ class ToolPolicy:
 TROUBLESHOOTING_TOOL_POLICIES = {
     policy.name: policy
     for policy in (
+        ToolPolicy("list_stations", ToolOperation.READ),
+        ToolPolicy("get_station_overview", ToolOperation.READ),
+        ToolPolicy("list_products", ToolOperation.READ),
+        ToolPolicy("get_product_overview", ToolOperation.READ),
         ToolPolicy("get_product_history", ToolOperation.READ),
         ToolPolicy("get_machine_status", ToolOperation.READ),
         ToolPolicy("search_documentation", ToolOperation.READ),

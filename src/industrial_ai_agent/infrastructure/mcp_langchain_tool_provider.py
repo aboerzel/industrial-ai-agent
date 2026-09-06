@@ -42,10 +42,25 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
 from industrial_ai_agent.infrastructure.telemetry import Telemetry
 
 DEFAULT_ALLOWED_FACTORY_TOOLS = frozenset(
-    {"get_product_history", "get_machine_status", "create_maintenance_ticket"}
+    {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
+        "get_product_history",
+        "get_machine_status",
+        "create_maintenance_ticket",
+    }
 )
 INTERNAL_DIAGNOSTIC_FACTORY_TOOLS = frozenset(
-    {"get_product_history", "get_machine_status"}
+    {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
+        "get_product_history",
+        "get_machine_status",
+    }
 )
 DEFAULT_ALLOWED_KNOWLEDGE_TOOLS = frozenset({"search_documentation"})
 
@@ -321,7 +336,7 @@ def _create_arguments_schema(tool: Tool) -> type[BaseModel]:
     """Translate strict MCP JSON Schema into the LangChain Pydantic boundary."""
     schema = tool.input_schema
     properties = schema.get("properties")
-    required = schema.get("required", ())
+    required = schema.get("required", [])
     if (
         schema.get("type") != "object"
         or schema.get("additionalProperties") is not False

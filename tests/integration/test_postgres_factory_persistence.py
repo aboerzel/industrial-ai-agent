@@ -26,6 +26,7 @@ from industrial_ai_agent.infrastructure.persistence.models import (
 )
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlDocumentCatalogRepository,
+    PostgreSqlFactoryDiscoveryRepository,
     PostgreSqlMachineStatusRepository,
     PostgreSqlProductHistoryRepository,
     PostgreSqlSessionFactory,
@@ -61,7 +62,7 @@ def test_application_role_rls_enforces_clearance_without_repository_filtering() 
     assert DATABASE_URL is not None
     session_factory = PostgreSqlSessionFactory(DATABASE_URL)
     try:
-        assert _count(session_factory, DataClassification.PUBLIC, "product") == 0
+        assert _count(session_factory, DataClassification.PUBLIC, "product") == 2
         assert (
             _count(session_factory, DataClassification.PUBLIC, "document_catalog") == 3
         )
@@ -69,7 +70,7 @@ def test_application_role_rls_enforces_clearance_without_repository_filtering() 
             _count(session_factory, DataClassification.INTERNAL, "document_catalog")
             == 6
         )
-        assert _count(session_factory, DataClassification.CONFIDENTIAL, "product") == 6
+        assert _count(session_factory, DataClassification.CONFIDENTIAL, "product") == 9
         assert (
             _count(
                 session_factory, DataClassification.CONFIDENTIAL, "process_parameter"
@@ -167,7 +168,11 @@ def test_internal_clearance_exposes_only_the_synthetic_internal_scenario() -> No
 
     assert internal_history is not None
     assert internal_history.classification is DataClassification.INTERNAL
-    assert [step.station_id.value for step in internal_history.steps] == ["S01", "S02"]
+    assert [step.station_id.value for step in internal_history.steps] == [
+        "S01",
+        "S02",
+        "S02",
+    ]
     assert confidential_history is not None
     assert confidential_history.classification is DataClassification.CONFIDENTIAL
     assert hidden_history is None
@@ -262,6 +267,80 @@ def test_restricted_user_confidential_run_keeps_confidential_rls_ceiling() -> No
     )
 
 
+def test_factory_discovery_applies_rls_before_entity_names_or_relationships() -> None:
+    assert DATABASE_URL is not None
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    try:
+        public = PostgreSqlFactoryDiscoveryRepository(
+            session_factory, _context(DataClassification.PUBLIC)
+        )
+        internal = PostgreSqlFactoryDiscoveryRepository(
+            session_factory, _context(DataClassification.INTERNAL)
+        )
+        confidential = PostgreSqlFactoryDiscoveryRepository(
+            session_factory, _context(DataClassification.CONFIDENTIAL)
+        )
+        restricted = PostgreSqlFactoryDiscoveryRepository(
+            session_factory, _context(DataClassification.RESTRICTED)
+        )
+        public_station_codes = {
+            item.station_id.value for item in public.list_stations()
+        }
+        public_product_codes = {
+            item.product_id.value for item in public.list_products()
+        }
+        internal_station_codes = {
+            item.station_id.value for item in internal.list_stations()
+        }
+        internal_product_codes = {
+            item.product_id.value for item in internal.list_products()
+        }
+        confidential_station_codes = {
+            item.station_id.value for item in confidential.list_stations()
+        }
+        confidential_product_codes = {
+            item.product_id.value for item in confidential.list_products()
+        }
+        restricted_station_codes = {
+            item.station_id.value for item in restricted.list_stations()
+        }
+        restricted_product_codes = {
+            item.product_id.value for item in restricted.list_products()
+        }
+        public_hidden_station = public.get_station_overview(StationId("S04"))
+        confidential_hidden_station = confidential.get_station_overview(
+            StationId("S07")
+        )
+        confidential_hidden_product = confidential.get_product_overview(
+            ProductId("P9001")
+        )
+        restricted_overview = restricted.get_station_overview(StationId("S07"))
+    finally:
+        session_factory.dispose()
+
+    assert public_station_codes == {"S01", "S05"}
+    assert public_product_codes == {"P4101", "P4102"}
+    assert internal_station_codes == {"S01", "S02", "S03", "S05"}
+    assert "S04" not in internal_station_codes and "S07" not in internal_station_codes
+    assert (
+        "P4711" not in internal_product_codes and "P9001" not in internal_product_codes
+    )
+    assert (
+        "S04" in confidential_station_codes and "S07" not in confidential_station_codes
+    )
+    assert (
+        "P4711" in confidential_product_codes
+        and "P9001" not in confidential_product_codes
+    )
+    assert "S07" in restricted_station_codes
+    assert "P9001" in restricted_product_codes
+    assert public_hidden_station is None
+    assert confidential_hidden_station is None
+    assert confidential_hidden_product is None
+    assert restricted_overview is not None
+    assert restricted_overview.recent_product_ids == (ProductId("P9001"),)
+
+
 def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
     """Guard the data links that make the portfolio documents operationally useful."""
     assert DATABASE_URL is not None
@@ -275,12 +354,15 @@ def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
                     select(ProductRecord.product_code).where(
                         ProductRecord.product_code.in_(
                             (
+                                "P4101",
+                                "P4102",
                                 "P4711",
                                 "P4801",
                                 "P4802",
                                 "P4805",
                                 "P4811",
                                 "P4900",
+                                "P4901",
                                 "P9001",
                             )
                         )
@@ -307,15 +389,18 @@ def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
 
     asset_text = _demo_asset_text()
     assert product_codes == {
+        "P4101",
+        "P4102",
         "P4711",
         "P4801",
         "P4802",
         "P4805",
         "P4811",
         "P4900",
+        "P4901",
         "P9001",
     }
-    assert len(positioning_events) == 6
+    assert len(positioning_events) == 7
     assert maintenance_actions == {
         "encoder replacement",
         "homing",

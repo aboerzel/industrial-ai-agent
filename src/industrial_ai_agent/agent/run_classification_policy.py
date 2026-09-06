@@ -31,11 +31,31 @@ class InternalDiagnosticTarget:
 
 
 INTERNAL_DIAGNOSTIC_TOOLS = frozenset(
-    {"get_product_history", "get_machine_status", "search_documentation"}
+    {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
+        "get_product_history",
+        "get_machine_status",
+        "search_documentation",
+    }
 )
-PUBLIC_INFORMATION_TOOLS = frozenset({"search_documentation"})
+PUBLIC_INFORMATION_TOOLS = frozenset(
+    {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
+        "search_documentation",
+    }
+)
 CONFIDENTIAL_TROUBLESHOOTING_TOOLS = frozenset(
     {
+        "list_stations",
+        "get_station_overview",
+        "list_products",
+        "get_product_overview",
         "get_product_history",
         "get_machine_status",
         "search_documentation",
@@ -166,17 +186,47 @@ def _mcp_identity_for(clearance: DataClassification) -> str:
     }[clearance]
 
 
-def resolve_demo_run_profile(message: str) -> AgentRunProfile:
+def resolve_demo_run_profile(
+    message: str, *, security_context: SecurityContext | None = None
+) -> AgentRunProfile:
     """Classify the bounded synthetic demo cases without accepting a client label.
 
     This narrow resolver deliberately recognizes only the documented scenarios. It is
     an outer-demo convenience, not a general data-classification engine.
     """
     normalized = message.upper()
-    if "P9001" in normalized or "S07" in normalized:
+    if any(
+        identifier in normalized for identifier in ("P9001", "S07", "PROTO-COMM-07")
+    ):
         return AgentRunProfile.RESTRICTED_TROUBLESHOOTING
-    if "P4711" in normalized or "S04" in normalized:
+    if any(
+        identifier in normalized
+        for identifier in ("P4711", "S04", "QUALITY-09", "POSITION-ENC-02")
+    ):
         return AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
-    if "P4900" in normalized or "S02" in normalized:
+    if "P4900" in normalized or "P4901" in normalized or "S02" in normalized:
         return AgentRunProfile.INTERNAL_DIAGNOSTIC
+    if security_context is not None and _is_discovery_request(normalized):
+        return {
+            DataClassification.PUBLIC: AgentRunProfile.PUBLIC_INFORMATION,
+            DataClassification.INTERNAL: AgentRunProfile.INTERNAL_DIAGNOSTIC,
+            DataClassification.CONFIDENTIAL: AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+            DataClassification.RESTRICTED: AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
+        }[security_context.clearance]
     return AgentRunProfile.PUBLIC_INFORMATION
+
+
+def _is_discovery_request(normalized_message: str) -> bool:
+    return any(
+        phrase in normalized_message
+        for phrase in (
+            "STATIONS",
+            "STATION",
+            "PRODUCTS",
+            "PRODUCT",
+            "AVAILABLE",
+            "RECENTLY FAILED",
+            "WARNINGS",
+            "FAILURES",
+        )
+    )

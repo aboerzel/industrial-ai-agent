@@ -7,6 +7,7 @@ from industrial_ai_agent.agent.run_classification_policy import (
     INTERNAL_DIAGNOSTIC_TOOLS,
     AgentRunClassificationPolicy,
     AgentRunProfile,
+    resolve_demo_run_profile,
 )
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
@@ -38,6 +39,27 @@ def test_restricted_user_keeps_confidential_run_at_confidential_data_ceiling() -
     assert policy.data_classification is DataClassification.CONFIDENTIAL
     assert policy.mcp_clearance_ceiling is DataClassification.CONFIDENTIAL
     assert policy.mcp_client_identity == "industrial-agent"
+
+
+def test_discovery_uses_server_resolved_user_clearance_without_broadening_named_case() -> (
+    None
+):
+    restricted_user = SecurityContext(
+        subject_id="restricted-discovery-user",
+        roles=("demo-engineer",),
+        clearance=DataClassification.RESTRICTED,
+        authenticated=True,
+    )
+
+    discovery_profile = resolve_demo_run_profile(
+        "Which stations are available?", security_context=restricted_user
+    )
+    named_profile = resolve_demo_run_profile(
+        "Investigate P4711 at S04.", security_context=restricted_user
+    )
+
+    assert discovery_profile is AgentRunProfile.RESTRICTED_TROUBLESHOOTING
+    assert named_profile is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
 
 
 def test_persisted_policy_rejects_classification_mismatch() -> None:
