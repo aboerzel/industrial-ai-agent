@@ -227,3 +227,24 @@ observed facts from conclusions.
 Factory MCP, Knowledge MCP, Observability MCP, and Runtime MCP are implemented. Vision
 MCP and Cost / Usage MCP remain planned only. Cost / Usage MCP may offer
 `get_model_usage`, `get_model_costs`, `get_token_usage`, and `get_cost_by_model_profile`.
+
+## Automated RCA Foundation
+
+ADR-017's Application-layer RCA contracts, evidence ports, collector, deterministic
+analyzer, and analysis service are implemented. The Infrastructure RCA adapter directly
+reuses the RLS-filtered run store and bounded `ObservabilityEvidenceService`; it does not
+call Runtime MCP or Observability MCP over HTTP. Runtime authorization is established
+before trace correlation. An inaccessible run therefore fails closed without querying
+telemetry, while a runtime-store outage is surfaced as a safe service failure.
+
+Tempo, Loki, and Prometheus are independently mapped to explicit source states. An
+unavailable, missing, or malformed source yields a partial or insufficient RCA report
+with explicit limitations and leaves other evidence usable. The report contains only
+safe provider-independent projections, report-local evidence references, provenance-aware
+measurements, and deterministic `OBSERVED`/`DERIVED` findings. Timing contributions use
+non-overlapping category-owned intervals, so nested MCP and retrieval spans are not
+double-counted. No finding currently has `HYPOTHESIS` or `CONFIRMED_RUN_CAUSE` status.
+
+Langfuse RCA evidence access, RCA MCP, optional LLM reasoning, Codex/UI integration,
+run comparison, and performance policies remain planned. Runtime MCP and Observability
+MCP remain the independent read-only evidence interfaces described above.

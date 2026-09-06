@@ -732,6 +732,9 @@ ADR-011  Agent persistence and human-in-the-loop
 ADR-012  MCP integration architecture
 ADR-013  FastAPI application boundary
 ADR-014  Persistent factory data and classification enforcement
+ADR-015  MCP client identity, clearance, and tool authorization
+ADR-016  Observability, tracing, metrics, and telemetry security
+ADR-017  Automated root-cause analysis evidence and reasoning boundaries
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

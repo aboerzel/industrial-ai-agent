@@ -75,6 +75,41 @@ flowchart LR
 Codex or another consumer may correlate returned evidence by `run_id`; neither MCP
 performs LLM reasoning, RCA orchestration, or cross-MCP calls.
 
+## Automated RCA Foundation
+
+Slices A and B implement provider-independent RCA contracts, evidence ports, a bounded
+collector, deterministic analysis, and `RcaAnalysisService` in the Application layer.
+The collector first obtains RLS-filtered runtime evidence through a request-scoped
+`SecurityContext`; only then does it correlate Tempo evidence. It directly reuses
+underlying Infrastructure services and does not call either MCP transport. An
+inaccessible run fails closed; a runtime-store outage is a safe service failure. Tempo,
+Loki, and Prometheus failures are independent, explicit source states and produce a
+partial or insufficient report while retaining usable evidence.
+
+`RcaEvidenceBundle`, `RcaFinding`, and `RcaAnalysisReport` contain only safe bounded
+projections and report-local evidence references. The analyzer emits `OBSERVED` and
+`DERIVED` findings only: terminal run failure, error spans, bounded MCP/retrieval
+failures, repeated tool names, telemetry limitations, and non-overlapping timing shares.
+There are no cause signatures, hypotheses, LLM reasoning, performance classifications,
+or run comparison in the current implementation.
+
+```mermaid
+flowchart LR
+    Sources["Runtime + telemetry sources"] --> Adapters["Implemented RCA evidence adapters"]
+    Adapters --> Collector["Implemented Evidence Collector"]
+    Collector --> Bundle["Implemented contracts\nRcaEvidenceBundle"]
+    Bundle --> Analyzer["Implemented Deterministic RCA Analyzer"]
+    Analyzer --> Report["Implemented\nRcaAnalysisReport"]
+    Report --> Mcp["Planned RCA MCP"]
+    Report --> Reasoner["Planned optional LLM Reasoner"]
+```
+
+The reusable `RcaAnalysisService` remains independent of MCP transport. It will serve an
+RCA MCP/Codex and, after an authenticated HTTP authorization boundary exists, the
+FastAPI/UI path. Runtime MCP and Observability MCP remain evidence interfaces, not RCA
+reasoning services. The contracts expose no raw telemetry or application payloads;
+`run_id` and `trace_id` remain correlation identifiers only.
+
 ADR-014 adds persistent classified factory data. PostgreSQL is the source of truth for
 structured factory records and document-catalog metadata. Local PDF, DOCX, PPTX, XLSX,
 and image assets remain files and are normalized by local Docling ingestion only after
