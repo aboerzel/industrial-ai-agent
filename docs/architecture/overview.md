@@ -1,27 +1,89 @@
 # Architecture Overview
 
-## Guardrail Boundaries
+## System Components and Control Boundaries
 
 ```mermaid
 flowchart LR
-    API["FastAPI + strict public Pydantic"] --> Service["Run service"]
-    Service --> Graph["LangGraph sequential loop"]
-    Graph --> Policy["Tool allowlist + read/write metadata"]
-    Policy --> MCP["MCP strict Pydantic JSON Schema"]
-    MCP --> Data["Capabilities + PostgreSQL RLS"]
-    Data --> Context["Classified ToolMessage data"]
-    Context --> Egress["EgressCheckedLLMClient"]
-    Graph --> HITL["interrupt() before write"]
-    Graph --> Output["Sanitized public response projection"]
+    subgraph Clients["Clients"]
+        UI["Web UI"]
+        APIClient["API client"]
+        Codex["Codex<br/>authorized diagnostic client"]
+    end
+
+    subgraph Application["Industrial AI Agent"]
+        API["FastAPI"]
+        Run["Run service and durable run state"]
+        Agent["LangGraph troubleshooting workflow"]
+        Policy["Classification, tool policy,<br/>model routing and egress check"]
+        HITL["Human approval boundary"]
+    end
+
+    subgraph MCP["Bounded MCP services"]
+        Factory["Factory MCP"]
+        Knowledge["Knowledge MCP"]
+        Runtime["Runtime MCP"]
+        Observe["Observability MCP"]
+        RCA["RCA MCP"]
+    end
+
+    subgraph Data["Controlled data and model execution"]
+        Postgres["PostgreSQL<br/>classified records and RLS"]
+        Documents["Cataloged knowledge documents"]
+        Local["Local Ollama"]
+        Public["Approved public provider<br/>Groq"]
+    end
+
+    subgraph Telemetry["Observability"]
+        OTel["OpenTelemetry and Collector"]
+        Backends["Tempo, Loki, Prometheus"]
+        Grafana["Grafana"]
+        Langfuse["Langfuse<br/>allowed AI metadata only"]
+    end
+
+    UI --> API
+    APIClient --> API
+    API --> Run --> Agent
+    Agent --> Policy
+    Agent --> Factory
+    Agent --> Knowledge
+    Agent --> HITL
+    Factory --> Postgres
+    Knowledge --> Postgres
+    Knowledge --> Documents
+    Policy --> Local
+    Policy --> Public
+    Agent --> OTel
+    OTel --> Backends --> Grafana
+    Agent --> Langfuse
+    Codex --> Runtime
+    Codex --> Observe
+    Codex --> RCA
+    Runtime --> Postgres
+    Observe --> Backends
+    RCA --> Postgres
+    RCA --> Backends
+    RCA --> Langfuse
+
+    classDef client fill:#1e3a5f,stroke:#0f172a,color:#ffffff
+    classDef core fill:#0f766e,stroke:#134e4a,color:#ffffff
+    classDef mcp fill:#7c2d12,stroke:#431407,color:#ffffff
+    classDef data fill:#334155,stroke:#0f172a,color:#ffffff
+    classDef telemetry fill:#6b21a8,stroke:#3b0764,color:#ffffff
+    class UI,APIClient,Codex client
+    class API,Run,Agent,Policy,HITL core
+    class Factory,Knowledge,Runtime,Observe,RCA mcp
+    class Postgres,Documents,Local,Public data
+    class OTel,Backends,Grafana,Langfuse telemetry
 ```
 
-The diagram shows enforcement boundaries, not a second orchestration path. The sole
-LangGraph troubleshooting loop still admits at most one model-selected call per
-iteration and at most four executed calls per run. Tool discovery is an availability
-mechanism only: `ToolPolicy` maps the fixed troubleshooting allowlist to `READ` or
-approval-required `WRITE`; unknown discovered tools are never bound. Knowledge and tool
-payloads remain `ToolMessage` data and cannot alter this policy, a classification, model
-routing, provider selection, or HITL.
+The Industrial AI Agent is the controlled application boundary: only it orchestrates
+the troubleshooting workflow and selects the bounded Factory and Knowledge tools. The
+other MCP services are independent, read-only diagnostic interfaces for authorized
+clients; they are not agent tools. Server-side authorization and PostgreSQL RLS remain
+between every MCP capability and classified data. The policy component, not the model,
+decides eligible profiles and enforces the final data-to-model check. `RESTRICTED` data
+can only use approved local profiles; a configured public profile can be eligible only
+up to its approved maximum classification.
 
 ## Current Architecture
 
@@ -105,13 +167,28 @@ post-analysis branch; it cannot create deterministic findings or confirmed cause
 
 ```mermaid
 flowchart LR
-    Sources["Runtime + telemetry sources"] --> Adapters["Implemented RCA evidence adapters"]
-    Adapters --> Collector["Implemented Evidence Collector"]
-    Collector --> Bundle["Implemented contracts\nRcaEvidenceBundle"]
-    Bundle --> Analyzer["Implemented Deterministic RCA Analyzer"]
-    Analyzer --> Report["Implemented\nRcaAnalysisReport"]
-    Report --> Mcp["Implemented RCA MCP"]
-    Report --> Reasoner["Implemented optional\negress-checked LLM Reasoner"]
+    Client["Authorized client / Codex"] --> Mcp["RCA MCP<br/>read-only analyze_run"]
+    Mcp --> Auth["Server-side READ_RCA<br/>and runtime RLS gate"]
+    Auth --> Runtime["Permitted run facts"]
+    Runtime --> Collector["RcaEvidenceCollector"]
+    Tempo["Tempo"] --> Collector
+    Loki["Loki"] --> Collector
+    Prometheus["Prometheus"] --> Collector
+    Langfuse["Langfuse metadata<br/>when available"] --> Collector
+    Collector --> Bundle["RcaEvidenceBundle<br/>safe bounded projections"]
+    Bundle --> Analyzer["DeterministicRcaAnalyzer"]
+    Analyzer --> Report["RcaAnalysisReport<br/>OBSERVED / DERIVED findings"]
+    Report --> Reasoner["Optional reasoner<br/>safe report projection only"]
+    Reasoner --> Hypotheses["Bounded explanation<br/>HYPOTHESIS only"]
+
+    classDef entry fill:#1e3a5f,stroke:#0f172a,color:#ffffff
+    classDef security fill:#b91c1c,stroke:#7f1d1d,color:#ffffff
+    classDef core fill:#0f766e,stroke:#134e4a,color:#ffffff
+    classDef evidence fill:#334155,stroke:#0f172a,color:#ffffff
+    class Client,Mcp entry
+    class Auth security
+    class Runtime,Collector,Bundle,Analyzer,Report core
+    class Tempo,Loki,Prometheus,Langfuse,Reasoner,Hypotheses evidence
 ```
 
 The reusable `RcaAnalysisService` remains independent of MCP transport. It serves RCA
@@ -139,11 +216,13 @@ ADR-015 adds an authenticated HTTP MCP client boundary. The transport adapter ve
 local-demo opaque bearer token, resolves a server-owned identity to a request-specific
 `SecurityContext` and immutable MCP permissions, and does not accept client-selected
 identity, clearance, or permission headers. `industrial-agent` resolves to
-`CONFIDENTIAL` with Factory/Knowledge/Observability read and maintenance-ticket permission;
+`CONFIDENTIAL` with Factory/Knowledge/Observability/Runtime read and maintenance-ticket
+permission;
 `industrial-agent-internal` resolves to `INTERNAL` with Factory and Knowledge read-only
 permissions; and
-`codex-development` resolves to `INTERNAL` with Factory/Knowledge/Observability read
-permissions only. Tool filtering runs for both `tools/list` and `tools/call`; it supplements, but
+`codex-development` resolves to `INTERNAL` with Factory, Knowledge, Observability,
+Runtime, and RCA read permissions. Tool filtering runs for both `tools/list` and
+`tools/call`; it supplements, but
 does not replace, LangGraph `ToolPolicy`, PostgreSQL RLS, ADR-009 egress checks, or the
 approval interrupt. Knowledge performs catalog RLS filtering before parsing, indexing,
 embedding, reranking, and result construction, and caches each retrieval pipeline by the
@@ -152,17 +231,32 @@ request.
 
 ```mermaid
 flowchart LR
-    Industrial["Industrial Agent\nBearer identity"] --> HTTP["MCP HTTP boundary"]
-    Codex["Codex Development\nBearer identity"] --> HTTP
-    HTTP --> Resolver["McpClientContextResolver"]
-    Resolver --> IndustrialAccess["industrial-agent\nCONFIDENTIAL + read/write permission"]
-    Resolver --> CodexAccess["codex-development\nINTERNAL + read permission"]
-    IndustrialAccess --> Discovery["Tool discovery and dispatch authorization"]
-    CodexAccess --> Discovery
-    Discovery --> Capability["Request-scoped capability"]
-    Capability --> RLS["PostgreSQL RLS\ntransaction-local app.clearance"]
-    Capability --> Retrieval["Clearance-isolated knowledge pipeline"]
-    Industrial --> HITL["ToolPolicy + interrupt()\nbefore maintenance write"]
+    Agent["Industrial AI Agent"] --> Client["MCP client"]
+    Codex["Codex development client"] --> HTTP["Authenticated MCP HTTP boundary"]
+    Client --> Factory["Factory MCP"]
+    Client --> Knowledge["Knowledge MCP"]
+    HTTP --> Resolver["Server-side identity,<br/>clearance and permissions"]
+    Resolver --> Factory
+    Resolver --> Knowledge
+    Resolver --> Runtime["Runtime MCP<br/>read-only"]
+    Resolver --> Observe["Observability MCP<br/>read-only"]
+    Resolver --> RCA["RCA MCP<br/>read-only"]
+    Factory --> Capabilities["Bounded domain capabilities"]
+    Knowledge --> Capabilities
+    Capabilities --> RLS["PostgreSQL RLS and<br/>clearance-isolated retrieval"]
+    Runtime --> RLS
+    RCA --> RLS
+    Observe --> Evidence["Bounded Tempo, Loki,<br/>and Prometheus projections"]
+    RCA --> Evidence
+
+    classDef client fill:#1e3a5f,stroke:#0f172a,color:#ffffff
+    classDef mcp fill:#7c2d12,stroke:#431407,color:#ffffff
+    classDef security fill:#b91c1c,stroke:#7f1d1d,color:#ffffff
+    classDef data fill:#334155,stroke:#0f172a,color:#ffffff
+    class Agent,Codex,Client client
+    class Factory,Knowledge,Runtime,Observe,RCA mcp
+    class HTTP,Resolver security
+    class Capabilities,RLS,Evidence data
 ```
 
 FastAPI now provides the local/demo external Application Boundary. Its versioned
@@ -190,33 +284,47 @@ execute the maintenance-ticket action. Unavailable targets remain neutral and ne
 trigger a higher-clearance retry.
 
 ```mermaid
-flowchart LR
-    Browser["Static browser frontend\nHTTP/JSON only"] --> API["FastAPI /api/v1"]
-    Client["Local client / Swagger UI"] --> API
-    API --> Service["TroubleshootingRunService"]
-    API --> Store["PostgreSqlAgentRunStore\nagent_runtime.agent_runs + RLS"]
-    API --> Diagnostic["Structured /diagnostics\nINTERNAL RLS preflight"]
-    Diagnostic --> Service
-    Service --> Requirements["Server-resolved RunProfile\nTaskRequirements + MCP scope"]
-    Requirements --> Router["DeterministicModelRouter"]
-    Router --> Graph["LangGraphTroubleshootingAgent"]
-    Graph --> Provider["MCP Tool Provider"]
-    Provider --> Factory["factory_mcp"]
-    Provider --> Knowledge["knowledge_mcp"]
-    Factory --> PostgreSQL["PostgreSQL\nclassified factory records + RLS"]
-    Knowledge --> Catalog["PostgreSQL document_catalog + RLS"]
-    Knowledge --> Files["Local multi-format documents\nDocling -> chunks"]
-    Graph --> Egress["EgressCheckedLLMClient"]
+sequenceDiagram
+    actor User
+    participant UI as Web UI / API client
+    participant API as FastAPI
+    participant Run as Run service and store
+    participant Agent as LangGraph workflow
+    participant Policy as Classification and tool policy
+    participant MCP as Authorized Factory / Knowledge MCP
+    participant Data as RLS-protected data
+    participant Router as Model router
+    participant Egress as Final egress check
+    participant LLM as Approved model
+    participant Telemetry as OpenTelemetry
 
-    classDef boundary fill:#e8f1ff,stroke:#2563eb,color:#172554
-    classDef state fill:#fefce8,stroke:#ca8a04,color:#422006
-    classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    class API,Service,Requirements,Router,Graph,Provider,Factory,Knowledge boundary
-    class Store state
-    class Egress security
+    User->>UI: Troubleshooting request
+    UI->>API: POST /api/v1/runs
+    API->>Run: Create durable run and server-owned context
+    Run->>Policy: Resolve classification and run policy
+    Policy->>Router: Create TaskRequirements
+    Router-->>Run: Selected Model Profile
+    API->>Agent: Invoke bounded workflow with selected profile
+    Agent->>Policy: Discover and admit allowed tool
+    Policy->>MCP: One authorized tool call
+    MCP->>Data: Server-side authorization and RLS
+    Data-->>MCP: Classified structured observation
+    MCP-->>Agent: Bounded tool result
+    Agent->>Egress: Selected profile and request classification
+    Egress->>LLM: Allowed request only
+    LLM-->>Agent: Decision or structured result
+    Agent->>Run: Persist outcome or approval state
+    Agent-->>API: Sanitized public projection
+    API-->>UI: Run status and result
+    Agent-->>Telemetry: Safe runtime metadata and spans
 ```
 
-The implemented request flow is:
+The sequence shows the normal read-oriented path. The implementation remains a bounded
+loop: each model response can admit at most one tool call, and each run can execute at
+most four tools. The final egress check is independent of selection, and observability
+does not include prompts, responses, tool payloads, or production documents.
+
+## Ports and Adapters View
 
 ```mermaid
 flowchart LR
@@ -342,31 +450,26 @@ as `error_codes::chunk-002`.
 
 ```mermaid
 flowchart LR
-    Docs["7 versioned Markdown documents"] --> Load["Explicit load and normalization"]
-    Load --> Chunk["25 heading-section chunks<br/>stable positional IDs"]
-    Chunk --> Index["In-memory token indexes"]
-    Query["search_documentation(query)"] --> Port["KnowledgeRetriever port"]
-    Port --> BM25Search["BM25 ranking<br/>top 3"]
-    Port --> SemanticSearch["Semantic vector ranking<br/>top 3"]
-    Port --> HybridSearch["Hybrid RRF ranking<br/>top 3"]
-    Port --> RerankedSearch["Hybrid + local cross-encoder<br/>top 3"]
-    Index --> BM25Search
-    Chunk --> SemanticSearch
-    BM25Search --> HybridSearch
-    SemanticSearch --> HybridSearch
-    HybridSearch --> RerankedSearch
-    BM25Search --> Results
-    SemanticSearch --> Results
-    HybridSearch --> Results
-    RerankedSearch --> Results
-    Results --> Query
+    Query["Authorized documentation query"] --> MCP["Knowledge MCP"]
+    MCP --> RLS["Catalog RLS and<br/>classification filter"]
+    RLS --> Docs["Permitted cataloged documents"]
+    Docs --> Chunk["Normalized heading chunks<br/>with stable provenance"]
+    Chunk --> Lexical["BM25"]
+    Chunk --> Semantic["Local semantic retrieval"]
+    Lexical --> Fusion["RRF fusion"]
+    Semantic --> Fusion
+    Fusion --> Rerank["Local cross-encoder reranking"]
+    Rerank --> Results["Bounded chunks and provenance"]
+    Results --> Agent["Industrial AI Agent"]
 
-    classDef data fill:#fefce8,stroke:#ca8a04,color:#422006
-    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
-    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
-    class Docs,Load,Chunk data
-    class Query,Port,Results core
-    class Index,BM25Search,SemanticSearch,HybridSearch,RerankedSearch adapter
+    classDef entry fill:#1e3a5f,stroke:#0f172a,color:#ffffff
+    classDef security fill:#b91c1c,stroke:#7f1d1d,color:#ffffff
+    classDef data fill:#334155,stroke:#0f172a,color:#ffffff
+    classDef processing fill:#0f766e,stroke:#134e4a,color:#ffffff
+    class Query,MCP,Agent entry
+    class RLS security
+    class Docs,Chunk,Results data
+    class Lexical,Semantic,Fusion,Rerank processing
 ```
 
 The tokenizer case-folds alphanumeric and hyphenated terms so exact industrial
@@ -442,9 +545,11 @@ quality and relative cost classes, and an Execution Zone independent from its pr
 `PUBLIC_CLOUD`. A caller creates `TaskRequirements`; the router applies the existing
 egress policy before capability, minimum-quality, and cost/quality ordering. Callers
 also supply the request classification to the controlled client for the independent
-final check. The current policy allows all four classifications locally and allows only
-`PUBLIC` data in `PUBLIC_CLOUD`. Missing or unknown classifications, zones, or routing
-metadata fail closed without an adapter call.
+final check. The current policy allows all four classifications locally and allows
+`PUBLIC`, `INTERNAL`, and `CONFIDENTIAL` data in `PUBLIC_CLOUD` only when the
+selected profile permits that classification. `RESTRICTED` data remains local.
+Missing or unknown classifications, zones, or routing metadata fail closed without an
+adapter call.
 
 The implemented tool-calling flow is:
 
@@ -796,32 +901,27 @@ independent `EgressCheckedLLMClient` repeats the ADR-009 check immediately befor
 provider adapter. Application-state classification propagation remains planned.
 
 ```mermaid
-flowchart LR
-    Task["Task / capability"] --> Requirements["Explicit Task Requirements"]
-    Context["Request + tool + retrieval context"] -.-> Classification["Effective Data Classification<br/>planned Application State"]
-    Requirements --> Eligibility["Security eligibility filter<br/>implemented, deny by default"]
-    Requirements --> ExplicitClass["Explicit request classification"]
-    ExplicitClass --> Eligibility
-    Profiles["Configured Model Profiles<br/>validated capabilities, quality,<br/>cost, and Execution Zone"] --> Eligibility
-    Eligibility --> Eligible["Eligible profiles only"]
-    Eligible --> Router["Deterministic task router"]
-    Requirements --> Router
-    Router --> Selected["Selected semantic profile"]
-    Selected --> FinalCheck["EgressCheckedLLMClient<br/>independent final check"]
-    Profiles --> FinalCheck
-    ExplicitClass --> FinalCheck
-    FinalCheck -->|"allow"| Client["Provider LLMClient adapter"]
-    FinalCheck -->|"deny"| Failure["Deterministic failure<br/>no adapter call"]
-    Client --> Endpoint["Configured model endpoint"]
+flowchart TD
+    Requirements["Task requirements<br/>capability, minimum quality, preference"] --> Class["Effective data classification"]
+    Profiles["Validated model profiles<br/>capabilities, quality, cost, zone,<br/>maximum classification"] --> Eligible["Security eligibility filter"]
+    Class --> Eligible
+    Eligible -->|"allowed profiles only"| Rank["Deterministic ranking"]
+    Rank --> Selected["Selected Model Profile"]
+    Selected --> Egress["Independent final egress check"]
+    Class --> Egress
+    Egress -->|"LOCAL: all classifications"| Local["Approved local model"]
+    Egress -->|"PUBLIC_CLOUD: up to profile maximum"| Public["Approved public model"]
+    Egress -->|"unknown, incomplete, or disallowed"| Deny["Deny: no adapter call"]
+    Restricted["RESTRICTED"] -.->|"never public"| Public
 
-    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
-    classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
-    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
-    class Task,Requirements,Context,Classification,ExplicitClass core
-    class Eligibility,FinalCheck,Failure security
-    class Profiles,Eligible,Router,Selected routing
-    class Client,Endpoint adapter
+    classDef input fill:#1e3a5f,stroke:#0f172a,color:#ffffff
+    classDef security fill:#b91c1c,stroke:#7f1d1d,color:#ffffff
+    classDef routing fill:#0f766e,stroke:#134e4a,color:#ffffff
+    classDef execution fill:#334155,stroke:#0f172a,color:#ffffff
+    class Requirements,Class,Profiles input
+    class Eligible,Egress,Deny security
+    class Rank,Selected routing
+    class Local,Public,Restricted execution
 ```
 
 `MINIMIZE_COST` orders by lower relative cost and then the smallest sufficient quality;
@@ -936,14 +1036,45 @@ the decision and its tradeoffs.
 
 ## Persistent HITL Run
 
-```text
-Browser -> FastAPI -> TroubleshootingRunService -> LangGraph
-  -> Factory MCP / Knowledge MCP -> interrupt(action_approval)
-  -> PostgreSQL checkpoint + agent_runtime.agent_runs
-  -> Browser approve/reject -> same LangGraph thread
-  -> Factory MCP create_maintenance_ticket -> PostgreSQL -> final result
+```mermaid
+sequenceDiagram
+    participant Agent as LangGraph workflow
+    participant Policy as Tool policy and authorization
+    participant Store as Run store and checkpoint
+    actor Human as Human / Web UI
+    participant Resume as FastAPI resume endpoint
+    participant Factory as Factory MCP
+
+    Agent->>Policy: Propose create_maintenance_ticket
+    Policy->>Policy: Validate strict proposal and permission
+    Policy->>Store: Persist pending approval and checkpoint
+    Store-->>Human: Run is waiting_for_approval
+    Human->>Resume: approve or reject
+    Resume->>Store: Atomically claim persisted pending action
+    Store-->>Agent: Resume same thread and decision
+    alt approved
+        Agent->>Factory: Execute ticket action once
+        Factory-->>Agent: Structured action result
+    else rejected
+        Agent->>Agent: Do not execute the action
+    end
+    Agent->>Store: Persist terminal result
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> running: create run
+    running --> waiting_for_approval: protected action proposed
+    waiting_for_approval --> running: approve or reject claimed
+    running --> success: final answer or completed action
+    running --> limit_reached: tool-call limit
+    running --> failed: service failure
+    success --> [*]
+    limit_reached --> [*]
+    failed --> [*]
 ```
 
 The public run record persists lifecycle and approval data; official LangGraph
-checkpoints remain framework-managed. Factory MCP owns the cohesive maintenance action
-and its request-ID unique constraint.
+checkpoints remain framework-managed. The process does not keep a Python thread blocked
+while waiting. Factory MCP owns the cohesive maintenance action and its request-ID unique
+constraint; the action node is reached only after an approved resume.

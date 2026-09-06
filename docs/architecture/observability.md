@@ -20,19 +20,39 @@ host from Docker Desktop; it is not a telemetry endpoint and contains no credent
 
 ```mermaid
 flowchart LR
-    API["FastAPI request"] --> OTel["OpenTelemetry SDK"]
-    OTel --> Collector["OTel Collector"]
-    Collector --> Tempo["Tempo traces"]
-    Collector --> Prometheus["Prometheus metrics"]
-    Collector --> Loki["Loki logs"]
+    subgraph App["Instrumented application services"]
+        API["FastAPI / Industrial AI Agent"]
+        Factory["Factory MCP"]
+        Knowledge["Knowledge MCP"]
+    end
+    SDK["OpenTelemetry SDK<br/>safe allowlisted metadata"] --> Collector["OTel Collector"]
+    API --> SDK
+    Factory --> SDK
+    Knowledge --> SDK
+    Collector --> Tempo["Tempo<br/>traces"]
+    Collector --> Loki["Loki<br/>metadata-only logs"]
+    Collector --> Prometheus["Prometheus<br/>bounded metrics"]
     Grafana["Grafana"] --> Tempo
-    Grafana --> Prometheus
     Grafana --> Loki
-    OTel --> Langfuse["Langfuse\nagent + generation only"]
+    Grafana --> Prometheus
+    API --> Langfuse["Langfuse<br/>agent and generation metadata only"]
+
+    classDef app fill:#0f766e,stroke:#134e4a,color:#ffffff
+    classDef pipeline fill:#1e3a5f,stroke:#0f172a,color:#ffffff
+    classDef backend fill:#334155,stroke:#0f172a,color:#ffffff
+    classDef metadata fill:#6b21a8,stroke:#3b0764,color:#ffffff
+    class API,Factory,Knowledge app
+    class SDK,Collector pipeline
+    class Tempo,Loki,Prometheus,Grafana backend
+    class Langfuse metadata
 ```
 
 Grafana provisions Prometheus, Tempo, and Loki datasources and the dashboard set from
 repository files. No dashboard setup through the UI is required.
+
+Grafana does not read Langfuse directly. Langfuse is a separate, metadata-only
+observation path: normal export excludes prompts, responses, tool payloads, documents,
+and arbitrary production data.
 
 ## Grafana Dashboard Set
 
@@ -270,6 +290,40 @@ backend URLs, trace IDs, prompts, model output, tool/document payloads, SQL, cre
 or arbitrary Langfuse metadata. Its telemetry uses `rca.mcp.tool`, `rca.analysis`, and
 `rca.reasoning` with safe trace correlation only; report text and identifiers are never
 metric labels.
+
+```mermaid
+sequenceDiagram
+    actor Client as Engineer / Codex
+    participant MCP as RCA MCP
+    participant Auth as Server-side READ_RCA and RLS
+    participant Runtime as Runtime evidence
+    participant Tempo
+    participant Loki
+    participant Prometheus
+    participant Langfuse
+    participant Analyzer as Deterministic analyzer
+    participant Reasoner as Optional reasoner
+
+    Client->>MCP: analyze_run(run_id, reasoning)
+    MCP->>Auth: Resolve identity and authorize run
+    Note right of Auth: Authorization happens before<br/>any downstream evidence query
+    Auth->>Runtime: Read permitted runtime projection
+    Runtime-->>MCP: Run facts and trace correlation
+    MCP->>Tempo: Bounded trace evidence
+    MCP->>Loki: Bounded metadata-only logs
+    MCP->>Prometheus: Fixed metric aggregates
+    MCP->>Langfuse: Bounded trace-filtered AI metadata
+    Tempo-->>Analyzer: Source projection
+    Loki-->>Analyzer: Source projection
+    Prometheus-->>Analyzer: Source projection
+    Langfuse-->>Analyzer: Source projection
+    Analyzer-->>MCP: Deterministic report
+    opt reasoning=explain
+        MCP->>Reasoner: Safe report projection only
+        Reasoner-->>MCP: Bounded hypotheses and explanation
+    end
+    MCP-->>Client: Read-only RCA projection
+```
 
 ## Runtime and Observability RCA Split
 

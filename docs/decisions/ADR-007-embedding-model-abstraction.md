@@ -267,7 +267,7 @@ signature until implementation prevents speculative API design.
 
 Rejected for the first implementation. A platform would add dependencies, lifecycle,
 and abstractions before the small local baseline demonstrates a need for them, and it
-could obscure the mechanics this learning project intends to evaluate. It may be
+could obscure the mechanics this demonstrator intends to evaluate. It may be
 reconsidered when scale or operational requirements provide evidence.
 
 ## Consequences

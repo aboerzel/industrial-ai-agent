@@ -1,521 +1,249 @@
 # Industrial AI Agent
 
-Production-oriented learning and portfolio project for Agentic / Applied AI in an industrial setting.
+> A secure, observable, and model-aware AI architecture for industrial production, engineering, and troubleshooting.
 
-The project starts with simple, explicit Python building blocks and evolves incrementally toward:
+Industrial AI Agent is a production-oriented demonstrator and reference architecture for investigating product failures, machine status, and technical documentation in a controlled industrial environment. It demonstrates how generative AI can support engineering and maintenance without becoming an uncontrolled path to production data or operational actions.
 
-* LLM tool calling
-* agent state and context management
-* retrieval-augmented generation
-* evaluations
-* observability and tracing
-* guardrails and human approval
-* MCP-based integrations
-* a multi-service industrial AI architecture
+This is not a chatbot demo. The model is a replaceable component inside deterministic boundaries for access control, data classification, model routing, tool use, human approval, testing, and operational traceability. The repository uses only synthetic factory data.
 
-## Current Stage
+![Industrial AI Agent browser demo showing a classified troubleshooting investigation](docs/assets/Troubleshooting-1.png)
 
-Two deterministic domain capabilities are implemented: product history lookup through
-`ProductHistoryCapability.get_product_history(product_id)` and current machine status
-through `MachineStatusCapability.get_machine_status(station_id)`. Production and Docker
-compositions use PostgreSQL repository adapters; deterministic in-memory adapters remain
-focused unit-test doubles. A provider-independent
-`LLMClient` port and one OpenAI-compatible infrastructure adapter are also available.
-Model selection uses explicit task requirements and the deterministic model router.
-`LangGraphTroubleshootingAgent` is the sole troubleshooting loop. It receives only
-runtime-discovered, authorized MCP tools and preserves the bounded sequential semantics:
-one validated and dispatched call per LLM decision, structured observations in the
-current conversation context, and at most four successfully executed tools per run. A
-final model answer returns structured `SUCCESS`; a further tool request after the fourth
-result returns `LIMIT_REACHED` without executing that call or invoking the LLM again.
-LangGraph uses LangChain Core messages and tool contracts through a narrow adapter to
-the existing security-checked `LLMClient`. HITL checkpoints use LangGraph's official
-PostgreSQL saver in the application runtime; `InMemorySaver` remains an isolated test
-fake. There is no dynamic tool registry, LangSmith integration, or context compression.
+*The local browser demo shows a simulated user access level, the resulting classified run, a structured investigation, evidence-based findings, a clearly non-confirmed likely-cause hypothesis, and recommended investigation actions.*
 
-Two deterministic evaluation baselines are available. The first measures the agent's
-initial LLM tool selection and argument extraction against twelve versioned cases
-without executing tools. The second executes ten complete agent runs and compares the
-actual bounded trajectories and termination statuses with structured ground truth.
-Neither baseline evaluates natural-language final-answer quality.
+## Why Industrial AI Needs More Than an LLM
 
-`DocumentationSearchCapability.search_documentation(query, top_k=3)` searches a
-versioned local technical knowledge base through an inner `KnowledgeRetriever` port.
-The productive pipeline combines BM25, semantic retrieval, RRF, and local reranking.
-Results retain document, source, chunk, score, and metadata provenance. LangGraph
-receives retrieval only through `knowledge_mcp`, never through direct retriever
-injection.
+| Challenge | How this project addresses it |
+|---|---|
+| **Reliability** | Deterministic code owns validation, authorization, tool limits, and protected actions; versioned evaluations test defined model behavior. |
+| **Data and IP protection** | Data is classified as `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, or `RESTRICTED`; model egress is checked before every provider call. |
+| **Cost and efficiency** | Explicit task requirements select eligible model profiles by capability, quality, protection level, and cost preference. The router is deterministic, not self-learning. |
+| **Access control** | Server-derived identity and permissions, MCP authorization, and PostgreSQL Row-Level Security (RLS) prevent the AI path from bypassing source-data access rules. |
+| **Operability and traceability** | Metadata-only telemetry, dashboards, and bounded root-cause analysis make runs, failures, and model/tool activity inspectable without exposing sensitive content. |
 
-Three MCP services adapt bounded capabilities through the official MCP SDK v2.
-`factory_mcp` exposes `get_product_history`, `get_machine_status`, and the approval-gated
-`create_maintenance_ticket`; `knowledge_mcp` exposes `search_documentation`; and
-`observability_mcp` exposes bounded, read-only RCA evidence. The Industrial Agent does
-not discover or depend on Observability MCP. All support process-coupled stdio for development/tests
-and Streamable HTTP at `/mcp` for deployment. The asynchronous LangGraph path discovers
-and authorizes all configured server tools, rejects duplicate tool names, opens one
-session per server for the run, and calls tools sequentially. There is no generalized
-MCP router. The only write tool is the explicitly authorized,
-approval-gated `create_maintenance_ticket` Factory-MCP action.
+For the full industrial-value and scope statement, see [Capabilities and Industrial Value](docs/architecture/capabilities-and-industrial-value.md).
 
-HTTP MCP access is authenticated at the server boundary. A verified opaque bearer token
-resolves to a request-specific identity, `SecurityContext`, and immutable MCP
-permissions under ADR-015; callers cannot select a clearance or permission through
-headers. `industrial-agent` has `CONFIDENTIAL` read access and the maintenance-ticket
-permission, while `codex-development` has `INTERNAL` factory and knowledge read access
-only. Discovery and dispatch both enforce this mapping. The Industrial Agent still
-requires its existing `ToolPolicy` and LangGraph approval interrupt before a ticket is
-created.
+## Highlights
 
-## Local FastAPI API
+- **Classification-aware model routing:** Semantic model profiles are selected deterministically from task requirements; `RESTRICTED` data is eligible only for approved local execution.
+- **Final egress enforcement:** An independent, deny-by-default check runs immediately before every model-provider call; model selection alone cannot authorize data transfer.
+- **Bounded industrial tools:** Factory, Knowledge, Runtime, Observability, and RCA capabilities are exposed through five authenticated MCP (Model Context Protocol) services with strict schemas and bounded operations.
+- **Deterministic security boundaries:** Authorization, RLS, validation, tool allowlists, execution limits, and approval policy remain outside the LLM.
+- **Hybrid deterministic and AI processing:** Code owns guarantees; the model is used for bounded semantic decisions such as selecting the next approved tool or formulating an explanation.
+- **Human-in-the-loop write protection:** The implemented `create_maintenance_ticket` action pauses and executes only after explicit approval.
+- **Controlled knowledge access:** Classified factory records and engineering documents are filtered by server-side authorization and PostgreSQL RLS before they reach tools or retrieval.
+- **Repeatable model evaluation:** Versioned datasets measure initial tool selection, bounded tool trajectories, retrieval behavior, and evidence-before-action expectations.
+- **Metadata-only observability:** OpenTelemetry, Tempo, Loki, Prometheus, Grafana, and Langfuse trace operational metadata while excluding prompts, responses, tool content, documents, and secrets.
+- **Evidence-based RCA:** Recorded facts, deterministic derivations, and optional AI hypotheses are explicitly separated; an LLM cannot claim a confirmed root cause.
+- **Modern, testable architecture:** Python, FastAPI, LangGraph, Pydantic, MCP, PostgreSQL, Docker Compose, pytest, Ruff, focused integration tests, and documented ADRs support incremental evolution.
 
-FastAPI is the local/demo HTTP Application Boundary, not an agent, MCP, routing, or
-egress replacement. It delegates each run to `TroubleshootingRunService`, which resolves
-the free-form API use case to the server-owned `CONFIDENTIAL_TROUBLESHOOTING` profile, selects an eligible semantic model profile
-through the existing deterministic router, and invokes the LangGraph multi-MCP path.
-The API never accepts a model, provider, profile, execution zone, or client-controlled
-data classification.
+## System Context
 
-Start Factory and Knowledge MCP over HTTP first, then start the API locally:
+```mermaid
+flowchart LR
+    subgraph Clients["Users and authorized clients"]
+        User["Operator / Engineer / Maintenance"] --> UI["Web UI"]
+        UI --> API["FastAPI API"]
+        Codex["Codex / authorized AI clients"]
+    end
 
-```powershell
-docker compose up --build -d factory-mcp knowledge-mcp
-python -m industrial_ai_agent.infrastructure.agent_api
+    subgraph Agent["Industrial AI Agent"]
+        API --> Workflow["Controlled workflow"]
+        Workflow --> Policies["Deterministic policies\nand guardrails"]
+        Policies --> Tools["Tool selection and\nretrieval ranking"]
+        Policies --> Routing["Deterministic model routing\nand final egress check"]
+        Policies --> HITL["Human approval\nbefore protected write"]
+    end
+
+    subgraph MCP["Authenticated MCP services"]
+        FactoryMcp["Factory MCP"]
+        KnowledgeMcp["Knowledge MCP"]
+        RuntimeMcp["Runtime MCP\nread-only"]
+        ObservabilityMcp["Observability MCP\nread-only"]
+        RcaMcp["RCA MCP\nread-only"]
+    end
+
+    subgraph Data["Classified data and access boundary"]
+        RLS["PostgreSQL RLS\nserver-derived access context"]
+        FactoryData["Factory data and\ndocument catalogue"]
+        Documents["Catalogued local\nengineering documents"]
+        RLS --> FactoryData
+        RLS --> Documents
+    end
+
+    subgraph Models["Approved model execution"]
+        Ollama["Local Ollama models\nPUBLIC to RESTRICTED"]
+        Groq["Groq public profile\nPUBLIC to CONFIDENTIAL\nwhen policy permits"]
+    end
+
+    subgraph Observe["Metadata-only observability"]
+        OTel["OpenTelemetry"] --> Collector["OTel Collector"]
+        Collector --> Tempo["Tempo"]
+        Collector --> Loki["Loki"]
+        Collector --> Prometheus["Prometheus"]
+        Grafana["Grafana"] --> Tempo
+        Grafana --> Loki
+        Grafana --> Prometheus
+        Langfuse["Langfuse\nallowed agent and generation metadata"]
+    end
+
+    Tools --> FactoryMcp
+    Tools --> KnowledgeMcp
+    FactoryMcp --> RLS
+    KnowledgeMcp --> RLS
+    Routing --> Ollama
+    Routing --> Groq
+    Workflow -. "technical metadata" .-> OTel
+    Workflow -. "allowed model metadata" .-> Langfuse
+
+    Codex --> FactoryMcp
+    Codex --> KnowledgeMcp
+    Codex --> RuntimeMcp
+    Codex --> ObservabilityMcp
+    Codex --> RcaMcp
+    RuntimeMcp --> RLS
+    ObservabilityMcp --> Tempo
+    ObservabilityMcp --> Loki
+    ObservabilityMcp --> Prometheus
+    RcaMcp --> RCA["Deterministic RCA\noptional AI hypotheses"]
+    RCA -. "authorized runtime evidence" .-> RLS
+    RCA -. "bounded telemetry evidence" .-> Tempo
+    RCA -. "allowed AI metadata" .-> Langfuse
+
+    classDef client fill:#0f172a,stroke:#475569,color:#f8fafc
+    classDef core fill:#14532d,stroke:#22c55e,color:#f0fdf4
+    classDef service fill:#1e3a8a,stroke:#60a5fa,color:#eff6ff
+    classDef data fill:#713f12,stroke:#f59e0b,color:#fffbeb
+    classDef model fill:#4c1d95,stroke:#c084fc,color:#faf5ff
+    classDef observe fill:#164e63,stroke:#22d3ee,color:#ecfeff
+    class User,UI,API,Codex client
+    class Workflow,Policies,Tools,Routing,HITL,RCA core
+    class FactoryMcp,KnowledgeMcp,RuntimeMcp,ObservabilityMcp,RcaMcp service
+    class RLS,FactoryData,Documents data
+    class Ollama,Groq model
+    class OTel,Collector,Tempo,Loki,Prometheus,Grafana,Langfuse observe
 ```
 
-The API listens on `127.0.0.1:8000` by default. Open `http://127.0.0.1:8000/docs` for
-Swagger UI, or submit one run directly:
+The Industrial AI Agent is the controlled center of the system. It does not freely query PostgreSQL: Factory, Knowledge, and Runtime services apply their server-derived access context and PostgreSQL RLS before returning bounded results. Codex and other authorized AI clients use only the MCP interfaces that their server-side identity permits.
 
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/runs `
-  -ContentType 'application/json' `
-  -Body '{"message":"P4711 failed during production. Investigate what happened and check the current status of the relevant station. Then consult the local technical documentation for the relevant fault and provide a final diagnosis."}'
+## How a Request Is Processed
+
+```mermaid
+flowchart LR
+    Request["User request"] --> API["FastAPI\nserver-side access context"]
+    API --> Access["Classification and\ndeterministic access policies"]
+    Access --> Agent["Bounded agent workflow"]
+    Agent --> Select["Tool selection and\nretrieval ranking"]
+    Select --> MCP["Authorized MCP tools"]
+    MCP --> Data["Factory and knowledge data"]
+    Data --> Agent
+    Agent --> Route["Deterministic model routing"]
+    Route --> Egress["Final classification\nand egress check"]
+    Egress --> Local["Local model"]
+    Egress --> Public["Permitted public model"]
+    Local --> Result["Structured result"]
+    Public --> Result
+
+    API -. "technical metadata" .-> OTel["OpenTelemetry"]
+    OTel --> Stack["Tempo, Loki, Prometheus, Grafana"]
+    OTel -. "allowed model metadata" .-> Langfuse["Langfuse"]
+    Stack --> RCA["Read-only RCA"]
+    Langfuse --> RCA
 ```
 
-`GET /health` reports API process liveness. `POST /api/v1/runs` returns a UUID,
-`success` or `limit_reached` status, the final answer when available, and normalized
-tool calls. `GET /api/v1/runs/{run_id}` reads the persistent `agent_runtime.agent_runs`
-record. The local demo uses the same PostgreSQL instance as factory data but a separate
-runtime schema; records therefore survive API-process recreation. Errors are sanitized:
-unknown IDs return `404`, policy denial returns `403`, and unavailable models or MCP
-services return `503`.
+The loop is intentionally sequential and bounded: one validated tool call per model decision and at most four successfully executed calls per run. Deterministic policy controls the classification, access, selected tools, and permitted model execution; the LLM does not decide those boundaries. Observability and optional RCA are separate from troubleshooting execution, so their failure cannot weaken authorization, model-egress, or approval boundaries.
 
-`POST /api/v1/diagnostics` is a separate read-only INTERNAL diagnostic contract. It
-accepts only `product_id` and `station_id`, validates target visibility under INTERNAL
-RLS, constructs the agent request server-side, and uses the separate INTERNAL MCP
-identity. It exposes no free-form prompt, classification, profile, clearance, model,
-permission, or credential field. Unavailable targets return neutral not-found semantics.
+## Why This Matters in Industrial Production
 
-```powershell
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/diagnostics `
-  -ContentType 'application/json' `
-  -Body '{"product_id":"P4900","station_id":"S02"}'
-```
+| Perspective | Practical value |
+|---|---|
+| **Engineering and development** | Model providers and profiles remain replaceable behind explicit ports and configuration. Versioned evaluations, automated tests, and Architecture Decision Records make changes reviewable and repeatable. |
+| **24/7 operations** | Metadata-only telemetry shows run outcomes, bounded model/tool activity, timing, and failure locations. Optional observability and reasoning components are isolated from normal troubleshooting execution. |
+| **Maintenance and troubleshooting** | Authorized users can combine product history, station status, and relevant documents. RCA keeps observed facts, deterministic derivations, and AI hypotheses distinct; Codex and other AI clients can use approved read-only MCP analysis capabilities. |
 
-The API is local/demo only: it has no authentication, authorization, TLS, rate limiting,
-or streaming. A remotely reachable deployment
-requires those controls in a later slice. See
-[FastAPI Application Boundary](docs/learning/fastapi-application-boundary.md).
+The project does not guarantee the semantic correctness of an LLM response, replace industrial safety systems, or claim high availability, failover, or an SLA.
 
-## Local Observability
+## Try the Demo
 
-The local Compose stack includes OpenTelemetry Collector, Tempo, Prometheus, Loki, and
-Grafana. Start the complete self-hosted demo with `docker compose up --build -d`; Grafana
-is available at `http://localhost:3000` with provisioned datasources and the `Industrial
-AI Agent Overview` dashboard. See [Observability](docs/architecture/observability.md)
-for telemetry security, `run_id`/trace correlation, and the operator RCA workflow.
-The read-only Observability MCP is available at `http://localhost:8003/mcp` after
-`docker compose up --build -d observability-mcp`. It requires the existing Codex or
-Industrial Agent opaque bearer token and exposes only `get_run_trace`, `get_trace_logs`,
-`get_run_metrics`, `get_service_health`, and `investigate_run`. It accepts no arbitrary
-Tempo, Loki, or Prometheus queries. Useful Codex prompts are `Investigate run <run-id>
-and show me the evidence for the failure.`, `Show me the distributed trace for run
-<run-id>.`, `Were there elevated MCP errors around the time this run failed?`, and
-`Explain what telemetry proves about run <run-id>, and what it does not prove.`
+Example request:
 
-## Persistent Factory Demo Data
+> Investigate why product P4711 failed at station S04. Use the available documentation if needed.
 
-ADR-014 makes PostgreSQL the persistent source of truth for structured
-`FACTORY-DEMO-01` data and `document_catalog` metadata. Synthetic records cover P4711's
-S02 positioning warning and S04 `QUALITY-09` rejection, recurring S02 failures, S02
-maintenance, and an explicitly `RESTRICTED` S03 process parameter. The accompanying
-local `demo_factory/` assets are real PDF, DOCX, PPTX, XLSX, and PNG files. Their
-cataloged checksum and classification, rather than folder names, govern ingestion.
+This synthetic `CONFIDENTIAL` scenario demonstrates server-side access decisions, Factory and Knowledge MCP tools, constrained tool selection, source-aware documentation retrieval, traceable execution, and final model-egress enforcement. A public model can receive `CONFIDENTIAL` data only when both the configured model profile and the deterministic policy permit it; the standard troubleshooting route is configured independently. Raw database or observability backends are never exposed as unrestricted AI tools.
 
-Copy `.env.example` to a local unversioned `.env` and replace the PostgreSQL demo
-password placeholders and both distinct opaque MCP token placeholders. Then start the
-persistent services:
+For a `RESTRICTED` example, investigate `P9001` at `S07`: the classification policy permits only approved local models. More reproducible acceptance scenarios are in [Use Cases and Scenarios](docs/demo/use-cases-and-scenarios.md).
 
-```powershell
-docker compose up --build -d factory-db factory-mcp knowledge-mcp
-```
+## Monitoring and Observability
 
-For the local single-instance demo, `factory-mcp` waits for `factory-db` health, runs
-idempotent Alembic migration and deterministic seed bootstrap, drops the admin URL from
-its runtime environment, and only then starts MCP. `knowledge-mcp` waits for the healthy
-Factory service, so it never reads a partial catalog. A multi-replica or production
-deployment should use a separate migration job again. Runtime MCP services use the
-non-superuser `factory_app` database role. Each transaction sets a
-parameterized, transaction-local `app.clearance`, and PostgreSQL Row-Level Security
-filters classified rows independently of Python repository code. Each HTTP MCP request
-receives server-derived clearance: `codex-development` is `INTERNAL` and
-`industrial-agent` is `CONFIDENTIAL`. Opaque bearer tokens are local-demo authentication
-only; a future JWT/OIDC, mTLS, or workload-identity adapter can establish the same
-identity without changing capabilities, repositories, RLS, LangGraph, or HITL.
+OpenTelemetry is the common telemetry boundary. The local Grafana instance provisions four focused dashboards:
 
-Knowledge MCP reads only RLS-eligible catalog rows before Docling parses, chunks,
-embeds, or reranks documents. Classification propagates unchanged from catalog document
-to parsed document, chunk, MCP result, and the run's effective classification. That
-classification may rise but never silently fall; ADR-009 then rejects a public-cloud
-model for confidential or restricted context. MCP network traffic is not model egress.
-Knowledge builds a separately cached pipeline per complete `SecurityContext`; an
-INTERNAL request can never reuse a higher-clearance index. The internal synthetic
-demonstration scenario is `P4900` at `S02`: its product history and current `RUNNING`
-state are INTERNAL and it is supported by existing internal S02 documentation.
-`P4711`, `S04`, their rejection records, and confidential/restricted documents remain
-outside Codex development clearance.
+- **Industrial AI Agent - System Overview:** scrape availability, run outcomes, latency, bounded activity, and metadata-only failure events.
+- **Industrial AI Agent - Cost Analytics:** makes the current cost-data gap explicit; it does not estimate costs from call counts or configured prices.
+- **Industrial AI Agent - Usage Analytics:** shows bounded usage trends by classification, model profile, MCP tool, service, and retrieval strategy.
+- **Industrial AI Agent - Failure Analytics:** separates failed runs from recorded LLM, MCP, and retrieval failure boundaries to avoid double-counting.
 
-The named Hugging Face cache volume is intentionally outside the Knowledge image and is
-writable for an initial local model-cache population. No model artifact, document, query,
-chunk, embedding, or reranker input is baked into or sent outside the service. The
-standard Compose Knowledge service is CPU-capable; host in-process use may select CUDA.
-See [Persistent Factory Data](docs/learning/persistent-factory-data.md).
+Tempo stores traces, Loki stores metadata-only logs, Prometheus stores bounded metrics, and Langfuse receives allowed agent and generation metadata. Provider-reported token or observed-cost data is deliberately not copied into Prometheus labels; configured API cost is not observed run cost. See [Observability](docs/architecture/observability.md) for data allowlists, dashboards, retention bounds, and investigation workflow.
 
-With both MCP containers and local Ollama running, execute the sequential real smoke:
+![Industrial AI Agent Usage Analytics dashboard](docs/assets/Usage-Analytics.png)
+
+*Usage Analytics makes agent runs, data-classification distribution, model-profile activity, MCP-tool use, and retrieval activity inspectable. Provider/model token distributions and observed costs remain metadata-only Langfuse information and are not aggregated by Grafana.*
+
+## Root-Cause Analysis
+
+The read-only RCA service analyzes an authorized completed run from safe runtime and observability projections. It is exposed through `rca_mcp` and can be used by Codex or another authorized AI client without granting unrestricted backend-query access.
+
+| Finding kind | Meaning |
+|---|---|
+| `OBSERVED` | Directly supported by the bounded evidence. |
+| `DERIVED` | Deterministically computed from observed evidence. |
+| `HYPOTHESIS` | A plausible, clearly labelled AI interpretation, not proof. |
+| `CONFIRMED_RUN_CAUSE` | Reserved for an explicit deterministic cause-signature rule or a future recorded human confirmation. The current analyzer emits none. |
+
+The deterministic analyzer remains authoritative. Optional AI reasoning receives only a safe report projection, cannot alter evidence or confidence, and cannot produce a confirmed cause. Details: [ADR-017](docs/decisions/ADR-017-automated-root-cause-analysis.md).
+
+## Technology Stack
+
+| Area | Technologies in use |
+|---|---|
+| Application and AI workflow | Python 3.12+, FastAPI, Pydantic, LangGraph, LangChain Core |
+| Models | Local Ollama profiles; an OpenAI-compatible adapter with an optional configured Groq public profile |
+| Integration | MCP SDK v2 and authenticated Streamable HTTP MCP services |
+| Data and security | PostgreSQL, Alembic, Row-Level Security, server-derived security context |
+| Observability | OpenTelemetry, OTel Collector, Tempo, Loki, Prometheus, Grafana, Langfuse |
+| Deployment and quality | Docker Compose, pytest, Ruff, frontend Node test stack |
+
+## Quick Start
+
+**Required**
+
+- Docker Desktop with Docker Compose
+- Python 3.12+ for the static local frontend server and local development
+- [Ollama](https://ollama.com/) running on the host, with the local models used by the Compose profiles
+- A local `.env` created from `.env.example`; provide the required local Compose values, including a 64-character hexadecimal `LANGFUSE_ENCRYPTION_KEY`, and keep the file unversioned
 
 ```powershell
-python scripts/smoke_test_fastapi.py
-python scripts/smoke_test_persistent_hitl_api.py --decision approve
-python scripts/smoke_test_persistent_hitl_api.py --decision reject
-```
-
-## Local Browser Demo
-
-`frontend/` is a separate static browser client. It only knows the public JSON API; it
-does not import Python code or know LangGraph, MCP, model routing, providers, or
-retrieval. Start it independently of the API:
-
-```powershell
+Copy-Item .env.example .env
+ollama pull qwen3.5:4b
+ollama pull qwen3.5:9b
+ollama pull qwen3-embedding:0.6b
+docker compose up --build -d
 python -m http.server 8080 --directory frontend
 ```
 
-Open `http://localhost:8080`. The local FastAPI entry point explicitly allows only this
-development origin by default. Set `AGENT_FRONTEND_ORIGIN` to the actual browser-client
-origin when the local deployment changes; production requires a separately designed
-origin, authentication, authorization, TLS, and rate-limiting configuration. The UI
-submits `POST /api/v1/runs` and displays the public run ID, status, answer, and
-normalized executed tool calls.
+Open the local browser demo at `http://localhost:8080`, the FastAPI contract at `http://localhost:8000/docs`, Grafana at `http://localhost:3000`, and Langfuse at `http://localhost:3001`.
 
-See [Browser Frontend](docs/learning/browser-frontend.md).
+A valid `GROQ_API_KEY` is optional and needed only when executing the configured `public_fast` profile; a local-only demo can retain an unused nonempty placeholder for that Compose setting. Do not add real credentials to the repository. The frontend is a separate static client and communicates only with the FastAPI JSON API.
 
-## Manual MCP Smoke Test
+For service ports, MCP access, smoke checks, and detailed local setup, use the existing [Architecture Overview](docs/architecture/overview.md), [Observability guide](docs/architecture/observability.md), and the linked evaluation and implementation guides rather than treating this README as an operations manual.
 
-Run the local stdio client and server without an LLM or external service:
+## Documentation
 
-```powershell
-python scripts/smoke_test_factory_mcp.py
-python scripts/smoke_test_knowledge_mcp.py
-python scripts/smoke_test_langgraph.py --confidential-troubleshooting
-```
+- [Architecture Overview](docs/architecture/overview.md): implemented boundaries, orchestration, persistence, MCP, retrieval, and evolution.
+- [Capabilities and Industrial Value](docs/architecture/capabilities-and-industrial-value.md): industrial benefit, limits, and security posture.
+- [Observability](docs/architecture/observability.md): dashboards, telemetry security, bounded observability MCP, and RCA evidence sources.
+- [Use Cases and Scenarios](docs/demo/use-cases-and-scenarios.md): reproducible synthetic demo and acceptance cases.
+- [Architecture Decision Records](docs/decisions/): long-lived architecture decisions, including [model routing](docs/decisions/ADR-008-task-level-model-routing.md), [model egress](docs/decisions/ADR-009-data-classification-and-model-egress-policy.md), [MCP](docs/decisions/ADR-012-mcp-integration-architecture.md), and [RCA](docs/decisions/ADR-017-automated-root-cause-analysis.md).
+- [Tool Selection Evaluation](docs/learning/tool-selection-evaluation.md), [Trajectory Evaluation](docs/learning/trajectory-evaluation.md), and [Evidence Before Action](docs/learning/evidence-before-action-trajectory-evaluation.md): versioned model-quality baselines.
 
-## Codex Project MCP
+## Scope
 
-The versioned project-local `.codex/config.toml` configures Streamable HTTP servers
-named `factory`, `knowledge`, and `observability`. It references the local
-`MCP_CODEX_DEVELOPMENT_TOKEN` environment variable; it contains no token value. Codex
-does not load dotenv files itself, so launch Codex from a shell in which the ignored
-`.env` has supplied that variable:
-
-```powershell
-$line = Get-Content .env | Where-Object { $_ -match '^MCP_CODEX_DEVELOPMENT_TOKEN=' }
-$env:MCP_CODEX_DEVELOPMENT_TOKEN = $line.Split('=', 2)[1]
-codex
-```
-
-The Codex identity is server-side `INTERNAL` and read-only. It may discover and use
-`get_product_history`, `get_machine_status`, `search_documentation`, and the five bounded
-Observability MCP read tools; it cannot
-discover or invoke `create_maintenance_ticket`. Prefer MCP evidence instead of inventing
-factory state. Useful prompts include `Show me the production history of P4900.`,
-`What is the current state of station S02?`, and `Search the factory documentation for
-information relevant to station S02.` Through these MCP servers, P4711/S04 and
-confidential or restricted documentation are intentionally unavailable to this identity.
-This does not restrict Codex' separate repository filesystem access; do not keep real
-classified material in a workspace granted to an external development agent.
-
-If either server is unavailable, start it with `docker compose up -d factory-mcp
-knowledge-mcp`, then check `docker compose ps`. Do not substitute guessed factory state
-or documentation for an unavailable MCP response.
-
-The server smokes print discovery and structured results. The LangGraph smoke uses only
-`local_quality` for its confidential run and verifies
-`get_product_history(P4711) -> get_machine_status(S04) -> search_documentation(...)`.
-
-To run the networked deployment path, build and start both local services:
-
-```powershell
-docker compose up --build -d factory-mcp knowledge-mcp
-python scripts/smoke_test_factory_mcp.py --transport http
-python scripts/smoke_test_knowledge_mcp.py --transport http
-python scripts/smoke_test_langgraph.py --confidential-troubleshooting --mcp-transport http
-```
-
-Factory defaults to `0.0.0.0:8001` and Knowledge to `0.0.0.0:8002`; their SDK-managed
-endpoints are `http://127.0.0.1:8001/mcp` and `http://127.0.0.1:8002/mcp`. Both images
-run as non-root and contain neither `.env` nor secrets. The Knowledge image contains no
-model artifact: Compose uses the host Ollama endpoint for `qwen3-embedding:0.6b`, defaults
-the reranker to CPU, and uses a persistent named Hugging Face cache volume for local
-model artifacts; local in-process execution still selects CUDA when available. Docker deploys processes, while
-MCP provides tool protocol and discovery. HTTP requests require
-`Authorization: Bearer <opaque-token>`; the local smoke scripts load only the Industrial
-Agent token from the ignored `.env` and never print it. Missing, malformed, and unknown
-tokens fail closed. MCP network transport does not authorize model egress: confidential
-troubleshooting uses the local profile under ADR-009, and Knowledge queries, chunks,
-embeddings, and reranker inputs never reach `public_fast` or a public provider.
-
-The current stable `langchain-mcp-adapters` release (`0.3.2`) still requires `mcp<2.0.0`,
-so the temporary project-owned MCP SDK v2 compatibility bridge is intentionally retained.
-
-## Manual Model Profile Smoke Tests
-
-The smoke test is deliberately separate from automated tests. Its default invocation
-calls only the configured local models. Install and start Ollama, make sure both models
-are available, and run:
-
-```powershell
-ollama pull qwen3.5:4b
-ollama pull qwen3.5:9b
-python scripts/smoke_test_ollama.py
-python scripts/smoke_test_ollama.py --profile local_fast
-python scripts/smoke_test_ollama.py --profile local_quality
-python scripts/smoke_test_model_routing.py
-python scripts/smoke_test_langgraph.py --profile local_fast
-python scripts/smoke_test_langgraph.py --profile local_quality
-python scripts/smoke_test_langgraph.py --confidential-troubleshooting
-python scripts/smoke_test_persistent_hitl_api.py --decision approve
-python scripts/smoke_test_persistent_hitl_api.py --decision reject
-```
-
-Without `--profile`, the first script calls `local_fast` and `local_quality` sequentially.
-The explicit invocations test either semantic profile separately and report its
-configured model with the response. The router smoke deterministically verifies a
-cost-focused public selection, a high-quality confidential local selection, and a
-fail-closed confidential selection when only `public_fast` is available. The
-troubleshooting script creates explicit confidential task requirements, currently
-selects the compatible local `local_quality` profile, runs a multi-step request, and
-structurally verifies the sequential calls
-`get_product_history(P4711)` and `get_machine_status(S04)` before a successful final
-answer.
-
-The persistent HITL smoke exercises the FastAPI to MCP production path with a
-confidential local profile and the official PostgreSQL checkpointer. It recreates the
-application before approval, verifies the structured approval request, rejects a
-duplicate approval, and creates exactly one demo ticket.
-
-The `public_fast` profile uses Groq through the same `OpenAICompatibleLLMClient`. Set
-`GROQ_API_KEY` in the unversioned local `.env` file and invoke it only explicitly:
-
-```powershell
-python scripts/smoke_test_ollama.py --profile public_fast
-python scripts/smoke_test_langgraph.py --profile public_fast
-```
-
-Executable entry points load the project-root `.env` explicitly as local runtime
-configuration. Existing process Environment Variables take precedence and are never
-overridden by `.env` values.
-
-This public-cloud smoke path sends only the synthetic prompt
-`Reply exactly with PUBLIC_LLM_OK` and explicitly classifies it as `PUBLIC`. The
-deterministic ADR-009 egress check validates the profile's `PUBLIC_CLOUD` Execution Zone
-before the provider adapter is called. `public_fast` is not selected automatically and
-is not a fallback profile.
-
-## Tool Selection Eval
-
-Run the unchanged versioned tool-selection dataset through the LangGraph MCP path:
-
-```powershell
-python -m evals.run_tool_selection --profile local_quality --mcp-transport stdio
-```
-
-The command prints a structured JSON report with per-case results, Tool Selection
-Accuracy, and Argument Accuracy. See
-[Tool Selection Evaluation Baseline](docs/learning/tool-selection-evaluation.md) for
-metric definitions, interpretation, and optional local result output.
-
-## Trajectory Eval
-
-Run the unchanged versioned multi-step dataset through the LangGraph MCP path:
-
-```powershell
-python -m evals.run_trajectory --profile local_quality --mcp-transport stdio
-```
-
-The JSON report contains per-case expected and actual trajectories, tool-call counts,
-Task Success Rate, Exact Trajectory Accuracy, Tool Call Accuracy, and Termination
-Accuracy. See
-[Troubleshooting Trajectory Evaluation](docs/learning/trajectory-evaluation.md) for the
-exact scoring formulas and interpretation.
-
-## Manual Retrieval Eval
-
-Run the frozen v2 retrieval baseline against its four current local strategies:
-
-```powershell
-python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy bm25
-python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy semantic
-python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy hybrid
-python -m evals.run_retrieval --dataset evals/datasets/knowledge_retrieval_v2.jsonl --strategy reranked
-python scripts/smoke_test_semantic_retrieval.py
-python scripts/smoke_test_reranked_retrieval.py
-```
-
-The JSON report contains Hit@1, Hit@3, Mean Recall@3, per-case expected and actual
-chunk IDs, explicit failure lists, and category-level metrics. The original v1 dataset
-remains available by selecting `knowledge_retrieval_v1.jsonl` explicitly. See
-[Local Knowledge Retrieval Baseline](docs/learning/knowledge-retrieval-baseline.md) for
-the chunking and scoring formulas, v1/v2 comparison, semantic, hybrid, and reranked
-baselines, freeze rule, and known limitations.
-
-The committed model configuration is in `config/model_profiles.toml`. The local Ollama
-profile requires no API key. Authenticated profiles must read credential values from
-environment variables or the ignored local `.env` file; `.env.example` contains no
-secret values.
-
-## Classified Demo Runs
-
-The browser's `User clearance (demo)` select is a closed, server-validated simulation
-of authentication and authorization. The API creates a `SecurityContext` from it and
-uses a server-selected MCP identity to apply PostgreSQL RLS. It never accepts a client
-run classification, model profile, MCP credential, or execution zone.
-
-`User Clearance != Data Classification != Model max_data_classification`. Clearance
-controls which records may be visible; the server classifies the bounded synthetic task
-from its required demo evidence; each Model Profile independently declares its maximum
-permitted classification. An external public deployment is not a `PUBLIC`-data model:
-in this demo its explicit `max_data_classification = CONFIDENTIAL` egress policy permits
-PUBLIC, INTERNAL, and CONFIDENTIAL data. RESTRICTED remains local-only. The final
-pre-provider egress check repeats the profile maximum and execution-zone policy.
-For an allowed run, the server applies the lower of the user clearance and task need as
-the MCP/RLS ceiling, so a RESTRICTED user does not receive RESTRICTED data in a
-CONFIDENTIAL run.
-
-This is a demo-only authentication/authorization simulation and must be replaced by
-real identity-based authentication and authorization before production use.
-
-| Abfrage | Klassifizierung | Erwartetes Ergebnis |
-| --- | --- | --- |
-| What capabilities does the troubleshooting agent provide? | PUBLIC | Public Model; no protected production data. |
-| Explain the general troubleshooting workflow for a failed production step. | PUBLIC | General explanation; Public Model. |
-| What is the purpose of the factory and knowledge tools? | PUBLIC | Public demo architecture information; Public Model. |
-| Summarize the publicly available operating concept of the demo factory. | PUBLIC | PUBLIC Knowledge; Public Model. |
-| Investigate why product P4711 failed at station S04. Use the available documentation if needed. | CONFIDENTIAL | Factory plus optional Knowledge; Public Model preferred. |
-| Show the production history of P4711 and explain the failure at S04. | CONFIDENTIAL | Public Model preferred. |
-| Check whether the S04 failure of P4711 matches a known troubleshooting procedure. | CONFIDENTIAL | Knowledge retrieval plus Factory; Public Model preferred. |
-| Compare the observed P4711/S04 failure with the documented normal station behavior. | CONFIDENTIAL | Public Model preferred. |
-| Investigate why restricted prototype P9001 failed at station S07. | RESTRICTED | RESTRICTED clearance; local model only. |
-| Analyze the restricted engineering diagnostics for P9001/S07 and correlate them with its production history. | RESTRICTED | RESTRICTED clearance; local model only. |
-| Use the restricted commissioning notes to explain the P9001/S07 failure. | RESTRICTED | RESTRICTED clearance; local model only. |
-| Summarize the restricted failure investigation for P9001/S07 and recommend the next diagnostic step. | RESTRICTED | RESTRICTED clearance; local model only. |
-
-The synthetic P4711/S04 history, inspection evidence, and `QUALITY-09` procedure are
-CONFIDENTIAL. P9001/S07 is a separate RESTRICTED prototype commissioning case with
-RESTRICTED product, event, station, inspection, and Knowledge records.
-
-## Development Principles
-
-* Prefer simple explicit code.
-* Use deterministic code for guarantees.
-* Use LLMs for judgment and decision-making.
-* Introduce frameworks only when they solve a concrete problem.
-* Keep tests and documentation close to implementation.
-* Treat this repository as both a learning project and a professional reference project.
-
-## Project Structure
-
-```text
-src/industrial_ai_agent/
-├── agent/
-├── domain/
-├── infrastructure/
-└── tools/
-
-tests/
-├── unit/
-└── integration/
-
-docs/
-├── architecture/
-├── decisions/
-└── learning/
-
-evals/
-├── datasets/
-└── results/
-
-knowledge_base/
-```
-
-## Python
-
-Python 3.12+
-
-## Quality
-
-Development should include:
-
-* type hints
-* Pydantic at system boundaries
-* pytest
-* Ruff
-* focused commits
-* architecture decision records for significant choices
-
-## Persistent Approval Workflow
-
-The browser/API troubleshooting flow uses one durable `run_id == thread_id` across
-FastAPI, LangGraph checkpoints, Factory MCP, Knowledge MCP, and PostgreSQL. Read tools
-run normally. A `create_maintenance_ticket` proposal pauses at native LangGraph
-`interrupt()` before its Factory-MCP side effect. The persisted approval request records
-normalized arguments, summary, classification, model profile, status, and timestamp.
-`POST /api/v1/runs/{run_id}/resume` accepts only `approve` or `reject`.
-
-## Guardrails and Strict Contracts
-
-The productive path validates at each existing boundary. FastAPI public request and
-response models forbid unknown fields. MCP SDK-generated Pydantic input models use
-strict types, domain-aware constraints, and `additionalProperties: false`; the
-LangChain bridge rejects a discovered schema that is not strict. The troubleshooting
-profile binds only its fixed allowlist. Its explicit metadata distinguishes read tools
-from approval-required write tools, so discovery alone never authorizes a capability.
-
-Tool calling is the native structured model-decision interface. The action proposal
-shown to the model contains only station and summary; the required MCP `request_id` is
-injected after approval from the actual model tool-call ID. A retrieved document or tool
-result is always a `ToolMessage` data payload, never a replacement for system policy.
-The synthetic confidential `S02 Service Comment Review` document intentionally contains
-an injection-like sentence and is retrievable only as evidence.
-
-The API projects only a small public response and replaces strings resembling stack
-traces, connection URLs, credentials, local paths, or checkpoint data. PostgreSQL RLS
-remains the primary data-access control; the agent also rejects a read result whose
-classification is absent or exceeds the run clearance before it can become model context.
-See [Guardrails and Boundary Validation](docs/learning/guardrails-and-boundary-validation.md).
-
-## Runtime MCP Operations
-
-`runtime-mcp` is an independent, non-root Docker service at
-`http://localhost:8004/mcp`. It is an operational read adapter over RLS-filtered
-`agent_runtime.agent_runs`, not part of Industrial Agent execution. Stopping it does not
-affect agent-api, Factory MCP, Knowledge MCP, or Observability MCP.
-
-Codex uses the local `[mcp_servers.runtime]` entry in `.codex/config.toml` with its
-server-owned `MCP_CODEX_DEVELOPMENT_TOKEN`. At `INTERNAL` clearance it can use the five
-read-only tools: `get_agent_run`, `get_run_tool_trajectory`, `get_run_approval`,
-`get_run_failure`, and `list_recent_agent_runs`. It receives no resume, approval, reject,
-retry, cancellation, mutation, deletion, prompt, answer, tool payload, exception, or
-checkpoint operation/data. `READ_AGENT_RUNTIME` is verified server-side under ADR-015;
-client headers and trace context do not affect identity, clearance, or permissions.
-
-For RCA, query Runtime MCP for persisted application facts and Observability MCP for
-Tempo/Loki/Prometheus evidence separately, then correlate on `run_id`. Neither MCP
-performs reasoning or calls the other MCP.
+Industrial AI Agent is a public demonstrator and reference architecture. It is not a production industrial-control system. Machine and PLC safety controls remain independent, the implemented maintenance-ticket action is approval-gated and idempotent, and production identity, TLS, rate limiting, retention, high availability, and deployment hardening require their own operational design.

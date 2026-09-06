@@ -198,7 +198,7 @@ The complete synthetic-demo acceptance catalog is
 
 ## Scope and limitations
 
-This repository is a learning project, public demonstrator, and reference architecture.
+This repository is a public demonstrator and reference architecture.
 It is not a production-ready industrial control system.
 
 - It does not guarantee the semantic correctness, completeness, or safety of an LLM answer.
