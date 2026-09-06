@@ -2,10 +2,15 @@
 
 ## Purpose
 
-`frontend/` is a small, dependency-free local demo client for the Industrial AI Agent.
-It is intentionally implemented with HTML5, CSS, and ES modules rather than a JavaScript
-framework or a Node build system. The repository's technical focus remains the agent,
-LangGraph, MCP services, retrieval, and FastAPI.
+`frontend/` is a small local demo client for the Industrial AI Agent. It is intentionally
+implemented with HTML5, CSS, and ES modules rather than a JavaScript framework or a Node
+build system. The repository's technical focus remains the agent, LangGraph, MCP services,
+retrieval, and FastAPI.
+
+The answer renderer uses the locally vendored, pinned `marked` GFM parser and DOMPurify.
+`frontend/package.json` records their versions and the DOM test dependency. The production
+browser never fetches them from a CDN. `npm run vendor:sync` from `frontend/` refreshes the
+checked-in vendor assets after an intentional dependency update.
 
 ## Boundary
 
@@ -35,11 +40,16 @@ frontend/
     css/app.css
     js/api.js
     js/app.js
+    js/markdown.js
+    js/vendor/
+    package.json
 ```
 
 `js/api.js` is the only frontend module that knows the development API base URL, route
 paths, `fetch`, JSON parsing, and HTTP error handling. It provides `createRun(message)`
 and `getRun(runId)`. `js/app.js` owns DOM state and rendering only.
+`js/markdown.js` owns rendering of untrusted agent-answer Markdown only; it neither changes
+the API response nor any agent behavior.
 
 ## Local Development
 
@@ -67,6 +77,14 @@ The browser cannot choose a model, provider, execution zone, data classification
 server, tool allowlist, or egress policy. The API continues to assign `CONFIDENTIAL`
 server-side, and ADR-009 controls model egress independently from MCP network traffic.
 The UI contains no secrets and must be treated as publicly visible client code.
+
+Agent answers are untrusted. The renderer enables GFM features such as tables, permits only
+an attribute-free `<br>` raw-HTML token so compact table cells can use line breaks, escapes
+all other model-provided raw HTML, and sanitizes the generated result with a narrow DOMPurify
+tag and attribute allowlist before it reaches `innerHTML`. Links open in a separate tab with
+`noopener noreferrer`.
+This UI-only presentation step does not change classifications, clearance, API contracts,
+telemetry, model routing, or the agent loop.
 
 When a response is `waiting_for_approval`, the UI renders the action, summary,
 arguments, run ID, and status. It disables both decision buttons before calling the

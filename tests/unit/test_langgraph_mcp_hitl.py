@@ -17,6 +17,7 @@ from industrial_ai_agent.agent.agent_run import (
 )
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     CREATE_MAINTENANCE_TICKET_TOOL_NAME,
+    MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
     LangGraphTroubleshootingAgent,
 )
 from industrial_ai_agent.agent.llm import (
@@ -35,6 +36,22 @@ from industrial_ai_agent.tools.tool_contracts import (
 )
 
 DEFAULT_PROFILE = ModelProfile("local_quality")
+
+
+def test_system_message_requires_compact_investigation_markdown_tables() -> None:
+    message = MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
+
+    assert "`| Step | Action | Findings / Notes |`" in message
+    assert "exactly one physical Markdown line" in message
+    assert "separate multiple items in the same cell with `<br>`" in message
+    assert "continuation rows with an empty Step or Action cell" in message
+    assert "below the table instead" in message
+    assert "`### Investigation Summary`" in message
+    assert "`### Likely Root Cause`" in message
+    assert "`### Recommended Investigation Actions`" in message
+    assert "`### Next Steps`" in message
+    assert "distinguish collected evidence from inference" in message
+    assert "Keep `### Next Steps` concise and actionable" in message
 
 
 @dataclass

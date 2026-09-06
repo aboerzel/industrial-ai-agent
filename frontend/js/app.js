@@ -1,4 +1,5 @@
 import { ApiClientError, createRun, getRun, resumeRun } from "./api.js";
+import { renderAgentAnswer } from "./markdown.js";
 
 const form = document.querySelector("#investigation-form");
 const messageInput = document.querySelector("#message");
@@ -63,7 +64,7 @@ function renderRun(result) {
   runId.textContent = result.run_id;
   runClassification.textContent = result.data_classification;
   setStatus(result.status, statusLabel(result.status));
-  answer.textContent = result.answer ?? "The run finished without a final answer.";
+  renderAgentAnswer(answer, result.answer ?? "The run finished without a final answer.");
   answer.classList.toggle("empty-state", result.answer === null);
   renderToolCalls(result.tool_calls);
   renderApproval(result);

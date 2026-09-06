@@ -61,7 +61,19 @@ MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "evidence steps in order before proposing the action. For broad, underdetermined "
     "requests that identify no product, station, error, or explicit documentation "
     "search, do not call a tool. Give safe general considerations or ask for the "
-    "missing scope."
+    "missing scope. Format final troubleshooting answers in Markdown where applicable. "
+    "Use this structure: `### Investigation Summary`, `### Likely Root Cause`, "
+    "`### Recommended Investigation Actions`, and `### Next Steps`. Under "
+    "`### Investigation Summary`, use one compact table with exactly the header "
+    "`| Step | Action | Findings / Notes |`. Every logical table row must occupy "
+    "exactly one physical Markdown line. Never put a normal Markdown list on separate "
+    "physical lines inside a table cell; separate multiple items in the same cell with "
+    "`<br>`. Do not create continuation rows with an empty Step or Action cell, and "
+    "keep table content concise. Move detail that does not fit compactly in a table cell "
+    "below the table instead. Use a numbered or bulleted list, not a large table, for "
+    "substantial recommended-action detail. Under `### Likely Root Cause`, distinguish "
+    "collected evidence from inference and do not present hypotheses as confirmed causes. "
+    "Keep `### Next Steps` concise and actionable."
 )
 
 

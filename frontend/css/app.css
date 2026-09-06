@@ -243,9 +243,119 @@ dd {
   margin-bottom: 24px;
 }
 
-.answer-section p {
+.agent-answer {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-answer > :first-child {
+  margin-top: 0;
+}
+
+.agent-answer > :last-child {
   margin-bottom: 0;
-  white-space: pre-wrap;
+}
+
+.agent-answer p,
+.agent-answer ul,
+.agent-answer ol,
+.agent-answer blockquote,
+.agent-answer pre,
+.agent-answer .markdown-table-scroll {
+  margin: 0 0 14px;
+}
+
+.agent-answer h1,
+.agent-answer h2,
+.agent-answer h3,
+.agent-answer h4,
+.agent-answer h5,
+.agent-answer h6 {
+  margin: 20px 0 10px;
+  color: #1d332a;
+  line-height: 1.25;
+}
+
+.agent-answer h1 {
+  font-size: 1.25rem;
+}
+
+.agent-answer h2 {
+  font-size: 1.15rem;
+}
+
+.agent-answer h3,
+.agent-answer h4,
+.agent-answer h5,
+.agent-answer h6 {
+  font-size: 1rem;
+}
+
+.agent-answer ul,
+.agent-answer ol {
+  padding-left: 24px;
+}
+
+.agent-answer li + li {
+  margin-top: 4px;
+}
+
+.agent-answer blockquote {
+  border-left: 3px solid #d4e2db;
+  padding-left: 12px;
+  color: #4b5a55;
+}
+
+.agent-answer :not(pre) > code {
+  border-radius: 3px;
+  padding: 1px 4px;
+  color: #1d332a;
+  background: #edf3f0;
+  font-family: "Courier New", monospace;
+  font-size: 0.9em;
+}
+
+.agent-answer pre {
+  overflow-x: auto;
+  border-left: 3px solid #d4e2db;
+  padding: 10px 12px;
+  background: #f6f8f7;
+  white-space: pre;
+}
+
+.agent-answer pre code {
+  font-family: "Courier New", monospace;
+  font-size: 0.82rem;
+}
+
+.markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.agent-answer table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.agent-answer th,
+.agent-answer td {
+  border: 1px solid #cbd6d1;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-answer th {
+  color: #1d332a;
+  background: #edf3f0;
+}
+
+.agent-answer a {
+  color: #155f3b;
+}
 }
 
 .empty-state {

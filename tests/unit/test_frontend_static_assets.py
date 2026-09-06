@@ -8,12 +8,19 @@ def test_frontend_static_assets_are_present_and_use_es_modules() -> None:
     index = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
     css = FRONTEND_ROOT / "css" / "app.css"
     api = FRONTEND_ROOT / "js" / "api.js"
+    markdown = FRONTEND_ROOT / "js" / "markdown.js"
+    marked = FRONTEND_ROOT / "js" / "vendor" / "marked.esm.js"
+    dompurify = FRONTEND_ROOT / "js" / "vendor" / "purify.es.mjs"
     app = (FRONTEND_ROOT / "js" / "app.js").read_text(encoding="utf-8")
 
     assert css.is_file()
     assert api.is_file()
+    assert markdown.is_file()
+    assert marked.is_file()
+    assert dompurify.is_file()
     assert '<script type="module" src="js/app.js"></script>' in index
     assert 'from "./api.js"' in app
+    assert 'from "./markdown.js"' in app
 
 
 def test_frontend_http_transport_is_isolated_to_api_module() -> None:

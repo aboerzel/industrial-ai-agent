@@ -1,0 +1,16 @@
+{
+  "name": "industrial-ai-agent-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test ../tests/frontend/*.test.mjs",
+    "vendor:sync": "node scripts/sync-vendor-assets.mjs"
+  },
+  "dependencies": {
+    "dompurify": "3.4.15",
+    "marked": "18.0.11"
+  },
+  "devDependencies": {
+    "jsdom": "29.0.1"
+  }
+}
