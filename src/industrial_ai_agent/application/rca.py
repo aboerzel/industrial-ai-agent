@@ -67,6 +67,8 @@ class RcaLimitationCode(StrEnum):
     COST_UNAVAILABLE = "cost_unavailable"
     CLASSIFICATION_UNKNOWN = "classification_unknown"
     NO_PERFORMANCE_BASELINE = "no_performance_baseline"
+    OBSERVATION_LIMIT_REACHED = "observation_limit_reached"
+    CORRELATION_MISMATCH = "correlation_mismatch"
 
 
 class RcaFindingKind(StrEnum):
@@ -152,6 +154,8 @@ class RcaSafeAttributeName(StrEnum):
     MCP_OPERATION = "mcp.operation"
     MCP_SERVER = "mcp.server"
     MCP_TOOL = "mcp.tool"
+    MODEL_NAME = "model.name"
+    MODEL_PROVIDER = "model.provider"
     MODEL_PROFILE = "model.profile"
     OPERATION_STATUS = "operation.status"
     OPERATION_TYPE = "operation.type"
@@ -204,6 +208,7 @@ class RcaMeasurementName(StrEnum):
     TOTAL_TOKENS = "total_tokens"
     API_COST_USD = "api_cost_usd"
     APPROVAL_WAIT_MS = "approval_wait_ms"
+    GENERATION_COUNT = "generation_count"
 
 
 class RcaMeasurementUnit(StrEnum):
@@ -306,10 +311,11 @@ class RcaMetricEvidence(_RcaModel):
 
 class RcaLlmEvidence(_RcaModel):
     evidence_ref: EvidenceReference
-    provider: SafeName
-    model_name: SafeName
+    provider: SafeName | None = None
+    model_name: SafeName | None = None
     model_profile: SafeName | None = None
     status: RcaOperationStatus
+    started_at: datetime
     duration_ms: float = Field(ge=0, le=86_400_000)
 
 
@@ -383,6 +389,8 @@ class RcaEvidenceBundle(_RcaModel):
     run_id: UUID
     trace_id: TraceIdentifier | None = None
     trace_truncated: bool = False
+    langfuse_trace_id_consistent: bool | None = None
+    langfuse_truncated: bool = False
     data_classification: DataClassification | None = None
     source_availability: tuple[RcaSourceAvailability, ...]
     runtime: RcaRuntimeEvidence | None = None
@@ -528,8 +536,12 @@ class RcaAnalysisReport(_RcaModel):
             raise ValueError(
                 "complete RCA reports cannot have incomplete evidence sources"
             )
-        has_incomplete_evidence = expected_incomplete or (
-            RcaLimitationCode.TRACE_INCOMPLETE in self.overall_limitations
+        has_incomplete_evidence = expected_incomplete or any(
+            limitation in self.overall_limitations
+            for limitation in (
+                RcaLimitationCode.TRACE_INCOMPLETE,
+                RcaLimitationCode.OBSERVATION_LIMIT_REACHED,
+            )
         )
         if (
             self.analysis_status is RcaAnalysisStatus.PARTIAL

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
+from datetime import datetime
 from math import isfinite
+from typing import Protocol
 from uuid import UUID
 
 from industrial_ai_agent.application.rca import (
@@ -20,7 +23,10 @@ from industrial_ai_agent.application.rca import (
 from industrial_ai_agent.application.rca_evidence import (
     RcaEvidenceMalformedError,
     RcaEvidenceMissingError,
+    RcaEvidenceNotAuthorizedError,
     RcaEvidenceUnavailableError,
+    RcaLlmGenerationObservation,
+    RcaLlmTraceObservation,
     RcaLogObservation,
     RcaMetricObservation,
     RcaRunNotAccessibleError,
@@ -46,6 +52,203 @@ from industrial_ai_agent.infrastructure.observability_backends import (
     TraceLogEvent,
     TraceSpan,
 )
+
+_LANGFUSE_FIELDS = "core,basic,model,usage,metadata"
+_LANGFUSE_ALLOWED_TYPES = {"AGENT", "GENERATION"}
+_LANGFUSE_MAX_OBSERVATIONS = 50
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,159}$")
+
+
+class LangfuseObservationsClient(Protocol):
+    """Small Infrastructure-only view of the SDK's generated observations client."""
+
+    def get_many(self, **kwargs: object) -> object:
+        """Read one bounded page from Langfuse Observations API v2."""
+
+
+class LangfuseRcaEvidenceAdapter:
+    """Project one bounded Langfuse v2 response through a metadata-only allowlist."""
+
+    def __init__(
+        self,
+        observations: LangfuseObservationsClient,
+        *,
+        max_observations: int = _LANGFUSE_MAX_OBSERVATIONS,
+        timeout_seconds: int = 2,
+    ) -> None:
+        if not 1 <= max_observations <= _LANGFUSE_MAX_OBSERVATIONS:
+            raise ValueError("Langfuse observation limit must be within the RCA bound")
+        if timeout_seconds < 1:
+            raise ValueError("Langfuse timeout must be positive")
+        self._observations = observations
+        self._max_observations = max_observations
+        self._timeout_seconds = timeout_seconds
+
+    def get_trace_llm_evidence(
+        self,
+        trace_id: str,
+        *,
+        from_time: datetime,
+        to_time: datetime,
+    ) -> RcaLlmTraceObservation:
+        if from_time > to_time:
+            raise RcaEvidenceMalformedError("Langfuse time window is invalid")
+        try:
+            response = self._observations.get_many(
+                trace_id=trace_id,
+                fields=_LANGFUSE_FIELDS,
+                limit=self._max_observations,
+                from_start_time=from_time,
+                to_start_time=to_time,
+                request_options={
+                    "timeout_in_seconds": self._timeout_seconds,
+                    "max_retries": 0,
+                },
+            )
+        except PermissionError as error:
+            raise RcaEvidenceNotAuthorizedError(
+                "Langfuse evidence access was not authorized"
+            ) from error
+        except (OSError, TimeoutError) as error:
+            raise RcaEvidenceUnavailableError(
+                "Langfuse evidence is unavailable"
+            ) from error
+        except Exception as error:
+            if _backend_status_code(error) in {401, 403}:
+                raise RcaEvidenceNotAuthorizedError(
+                    "Langfuse evidence access was not authorized"
+                ) from error
+            raise RcaEvidenceUnavailableError(
+                "Langfuse evidence is unavailable"
+            ) from error
+        return _langfuse_trace_observation(response, trace_id)
+
+
+def _langfuse_trace_observation(
+    response: object, expected_trace_id: str
+) -> RcaLlmTraceObservation:
+    try:
+        rows = tuple(response.data)
+        meta = response.meta
+        truncated = bool(getattr(meta, "cursor", None))
+    except (AttributeError, TypeError) as error:
+        raise RcaEvidenceMalformedError("Langfuse response is malformed") from error
+
+    generations: list[RcaLlmGenerationObservation] = []
+    trace_id_consistent = True
+    malformed_generation = False
+    for row in rows:
+        row_type = getattr(row, "type", None)
+        name = getattr(row, "name", None)
+        if row_type not in _LANGFUSE_ALLOWED_TYPES:
+            continue
+        if (row_type, name) not in {("AGENT", "agent.run"), ("GENERATION", "llm.call")}:
+            continue
+        if getattr(row, "trace_id", None) != expected_trace_id:
+            trace_id_consistent = False
+            continue
+        if row_type == "AGENT":
+            continue
+        try:
+            generations.append(_langfuse_generation_observation(row))
+        except (TypeError, ValueError):
+            malformed_generation = True
+    if malformed_generation and not generations:
+        raise RcaEvidenceMalformedError("Langfuse generation data is malformed")
+    return RcaLlmTraceObservation(
+        trace_id_consistent=trace_id_consistent,
+        generations=tuple(generations),
+        truncated=truncated,
+    )
+
+
+def _langfuse_generation_observation(row: object) -> RcaLlmGenerationObservation:
+    started_at = row.start_time
+    ended_at = row.end_time
+    if not isinstance(started_at, datetime) or not isinstance(ended_at, datetime):
+        raise TypeError("Langfuse generation requires start and end times")
+    duration_ms = (ended_at - started_at).total_seconds() * 1_000
+    if not isfinite(duration_ms) or not 0 <= duration_ms <= 86_400_000:
+        raise ValueError("Langfuse generation duration is invalid")
+    metadata = getattr(row, "metadata", None)
+    if metadata is not None and not isinstance(metadata, dict):
+        raise ValueError("Langfuse metadata must be an object")
+    metadata = metadata or {}
+    cost_status = metadata.get("cost_status")
+    configured_cost = (
+        _finite_nonnegative_float(metadata.get("attributes.cost.api_usd"))
+        if cost_status == "configured_api_cost"
+        else None
+    )
+    observed_cost = (
+        _finite_nonnegative_float(getattr(row, "total_cost", None))
+        if cost_status == "observed_run_cost"
+        else None
+    )
+    return RcaLlmGenerationObservation(
+        model_name=_safe_name(
+            getattr(row, "provided_model_name", None)
+            or metadata.get("attributes.model.name")
+        ),
+        provider=_safe_name(metadata.get("provider")),
+        model_profile=_safe_name(metadata.get("model_profile")),
+        status=_langfuse_status(metadata.get("success")),
+        started_at=started_at,
+        duration_ms=duration_ms,
+        input_tokens=_usage_value(getattr(row, "usage_details", None), "input"),
+        output_tokens=_usage_value(getattr(row, "usage_details", None), "output"),
+        total_tokens=_usage_value(getattr(row, "usage_details", None), "total"),
+        observed_cost_usd=observed_cost,
+        configured_api_cost_usd=configured_cost,
+    )
+
+
+def _safe_name(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or _SAFE_NAME.fullmatch(value) is None:
+        raise ValueError("Langfuse safe metadata value is invalid")
+    return value
+
+
+def _usage_value(value: object, key: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError("Langfuse usage details must be an object")
+    item = value.get(key)
+    if item is None:
+        return None
+    if isinstance(item, bool) or not isinstance(item, int) or not 0 <= item <= 10**12:
+        raise ValueError("Langfuse token usage is invalid")
+    return item
+
+
+def _finite_nonnegative_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError("Langfuse numeric value is invalid")
+    normalized = float(value)
+    if not isfinite(normalized) or normalized < 0:
+        raise ValueError("Langfuse numeric value is invalid")
+    return normalized
+
+
+def _langfuse_status(value: object) -> RcaOperationStatus:
+    if value in (True, "true"):
+        return RcaOperationStatus.OK
+    if value in (False, "false"):
+        return RcaOperationStatus.ERROR
+    return RcaOperationStatus.UNSET
+
+
+def _backend_status_code(error: Exception) -> int | None:
+    try:
+        value = error.status_code  # type: ignore[attr-defined]
+    except AttributeError:
+        return None
+    return value if isinstance(value, int) else None
 
 
 class StoreBackedRuntimeRcaEvidenceAdapter:

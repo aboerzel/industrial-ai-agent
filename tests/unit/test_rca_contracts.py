@@ -212,6 +212,7 @@ def _bundle(
                 provider="ollama",
                 model_name="qwen3.5:9b",
                 status=RcaOperationStatus.OK,
+                started_at=NOW,
                 duration_ms=25,
             ),
         ),

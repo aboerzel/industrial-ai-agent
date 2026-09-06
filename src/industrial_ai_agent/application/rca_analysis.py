@@ -25,6 +25,7 @@ from industrial_ai_agent.application.rca import (
     RcaFindingCategory,
     RcaFindingKind,
     RcaLimitationCode,
+    RcaLlmEvidence,
     RcaLogEvidence,
     RcaMcpToolEvidence,
     RcaMeasurement,
@@ -44,10 +45,14 @@ from industrial_ai_agent.application.rca import (
     RcaTraceSpanEvidence,
 )
 from industrial_ai_agent.application.rca_evidence import (
+    LlmEvidencePort,
     LogRcaEvidencePort,
     MetricRcaEvidencePort,
     RcaEvidenceMissingError,
+    RcaEvidenceNotAuthorizedError,
     RcaEvidenceUnavailableError,
+    RcaLlmGenerationObservation,
+    RcaLlmTraceObservation,
     RcaMetricObservation,
     RcaRunNotAccessibleError,
     RcaRuntimeObservation,
@@ -97,11 +102,13 @@ class RcaEvidenceCollector:
         trace: TraceRcaEvidencePort,
         logs: LogRcaEvidencePort,
         metrics: MetricRcaEvidencePort,
+        llm: LlmEvidencePort | None = None,
     ) -> None:
         self._runtime = runtime
         self._trace = trace
         self._logs = logs
         self._metrics = metrics
+        self._llm = llm
 
     async def collect(
         self, run_id: UUID, security_context: SecurityContext
@@ -146,6 +153,7 @@ class RcaEvidenceCollector:
 
         logs = ()
         metrics = ()
+        llm_observation: RcaLlmTraceObservation | None = None
         if trace is None:
             source_status[RcaEvidenceSource.LOKI] = _source_availability(
                 RcaEvidenceSource.LOKI,
@@ -188,12 +196,59 @@ class RcaEvidenceCollector:
                 source_status[RcaEvidenceSource.PROMETHEUS] = (
                     _source_availability_from_error(RcaEvidenceSource.PROMETHEUS, error)
                 )
+            if self._llm is None:
+                source_status[RcaEvidenceSource.LANGFUSE] = _source_availability(
+                    RcaEvidenceSource.LANGFUSE,
+                    RcaEvidenceSourceStatus.NOT_APPLICABLE,
+                    RcaLimitationCode.SOURCE_NOT_APPLICABLE,
+                )
+            else:
+                try:
+                    llm_observation = self._llm.get_trace_llm_evidence(
+                        trace.trace_id,
+                        from_time=_langfuse_from_time(runtime, trace),
+                        to_time=_langfuse_to_time(runtime, trace),
+                    )
+                    if llm_observation.generations:
+                        source_status[RcaEvidenceSource.LANGFUSE] = (
+                            _source_availability(
+                                RcaEvidenceSource.LANGFUSE,
+                                RcaEvidenceSourceStatus.AVAILABLE,
+                                (
+                                    RcaLimitationCode.OBSERVATION_LIMIT_REACHED
+                                    if llm_observation.truncated
+                                    else None
+                                ),
+                            )
+                        )
+                    else:
+                        source_status[RcaEvidenceSource.LANGFUSE] = (
+                            _source_availability(
+                                RcaEvidenceSource.LANGFUSE,
+                                RcaEvidenceSourceStatus.MISSING,
+                                RcaLimitationCode.DATA_NOT_RECORDED,
+                            )
+                        )
+                except Exception as error:  # noqa: BLE001 - preserve source isolation.
+                    source_status[RcaEvidenceSource.LANGFUSE] = (
+                        _source_availability_from_error(
+                            RcaEvidenceSource.LANGFUSE, error
+                        )
+                    )
 
         trace_spans = _trace_spans(trace.spans if trace is not None else ())
         return RcaEvidenceBundle(
             run_id=runtime.run_id,
             trace_id=trace.trace_id if trace is not None else None,
             trace_truncated=trace.truncated if trace is not None else False,
+            langfuse_trace_id_consistent=(
+                llm_observation.trace_id_consistent
+                if llm_observation is not None
+                else None
+            ),
+            langfuse_truncated=(
+                llm_observation.truncated if llm_observation is not None else False
+            ),
             data_classification=runtime.data_classification,
             source_availability=tuple(
                 source_status[source] for source in _SOURCE_ORDER
@@ -232,7 +287,15 @@ class RcaEvidenceCollector:
                 for index, item in enumerate(logs, start=1)
             ),
             metrics=_metric_evidence(metrics),
-            measurements=_run_duration_measurement(trace_spans),
+            llm_models=_llm_evidence(
+                llm_observation.generations if llm_observation is not None else ()
+            ),
+            measurements=(
+                *_run_duration_measurement(trace_spans),
+                *_llm_measurements(
+                    llm_observation.generations if llm_observation is not None else ()
+                ),
+            ),
             failures=_failure_evidence(trace_spans),
             approval=RcaApprovalEvidence(
                 evidence_ref="EV-APPROVAL-001",
@@ -331,6 +394,8 @@ class DefaultDeterministicRcaAnalyzer:
         findings.extend(
             _source_limitations(evidence.source_availability, len(findings))
         )
+        findings.extend(_llm_findings(evidence, len(findings)))
+        findings.extend(_langfuse_consistency_findings(evidence, len(findings)))
         if evidence.trace_truncated:
             findings.append(
                 _finding(
@@ -440,6 +505,12 @@ def _source_availability_from_error(
             RcaEvidenceSourceStatus.MISSING,
             RcaLimitationCode.DATA_NOT_RECORDED,
         )
+    if isinstance(error, RcaEvidenceNotAuthorizedError):
+        return _source_availability(
+            source,
+            RcaEvidenceSourceStatus.NOT_AUTHORIZED,
+            RcaLimitationCode.ACCESS_NOT_AUTHORIZED,
+        )
     return _source_availability(
         source,
         RcaEvidenceSourceStatus.MALFORMED,
@@ -499,6 +570,110 @@ def _metric_evidence(
         )
         for index, metric in enumerate(observations, start=1)
     )
+
+
+def _llm_evidence(
+    observations: Iterable[RcaLlmGenerationObservation],
+) -> tuple[RcaLlmEvidence, ...]:
+    return tuple(
+        RcaLlmEvidence(
+            evidence_ref=f"EV-LLM-{index:03}",
+            provider=observation.provider,
+            model_name=observation.model_name,
+            model_profile=observation.model_profile,
+            status=observation.status,
+            started_at=observation.started_at,
+            duration_ms=observation.duration_ms,
+        )
+        for index, observation in enumerate(observations, start=1)
+    )
+
+
+def _llm_measurements(
+    observations: Iterable[RcaLlmGenerationObservation],
+) -> tuple[RcaMeasurement, ...]:
+    values = tuple(observations)
+    if not values:
+        return ()
+    measurements: list[RcaMeasurement] = [
+        RcaMeasurement(
+            evidence_ref="EV-GENERATION-001",
+            name=RcaMeasurementName.GENERATION_COUNT,
+            value=float(len(values)),
+            unit=RcaMeasurementUnit.COUNT,
+            provenance=RcaMeasurementProvenance.OBSERVED,
+            scope=RcaMeasurementScope.RUN,
+        )
+    ]
+    for observation in values:
+        for name, value in (
+            (RcaMeasurementName.INPUT_TOKENS, observation.input_tokens),
+            (RcaMeasurementName.OUTPUT_TOKENS, observation.output_tokens),
+            (RcaMeasurementName.TOTAL_TOKENS, observation.total_tokens),
+        ):
+            if value is None:
+                continue
+            measurements.append(
+                RcaMeasurement(
+                    evidence_ref=f"EV-USAGE-{len(measurements) + 1:03}",
+                    name=name,
+                    value=float(value),
+                    unit=RcaMeasurementUnit.COUNT,
+                    provenance=RcaMeasurementProvenance.OBSERVED,
+                    scope=RcaMeasurementScope.RUN,
+                )
+            )
+        if observation.observed_cost_usd is not None:
+            measurements.append(
+                RcaMeasurement(
+                    evidence_ref=f"EV-COST-{len(measurements) + 1:03}",
+                    name=RcaMeasurementName.API_COST_USD,
+                    value=observation.observed_cost_usd,
+                    unit=RcaMeasurementUnit.USD,
+                    provenance=RcaMeasurementProvenance.OBSERVED,
+                    scope=RcaMeasurementScope.RUN,
+                )
+            )
+        if observation.configured_api_cost_usd is not None:
+            measurements.append(
+                RcaMeasurement(
+                    evidence_ref=f"EV-CONFIG-{len(measurements) + 1:03}",
+                    name=RcaMeasurementName.API_COST_USD,
+                    value=observation.configured_api_cost_usd,
+                    unit=RcaMeasurementUnit.USD,
+                    provenance=RcaMeasurementProvenance.CONFIGURED,
+                    scope=RcaMeasurementScope.MODEL_CONFIGURATION,
+                )
+            )
+    return tuple(measurements)
+
+
+def _langfuse_from_time(
+    runtime: RcaRuntimeObservation, trace: RcaTraceObservation
+) -> datetime:
+    candidates = [
+        value
+        for value in (runtime.created_at, *(span.started_at for span in trace.spans))
+        if value is not None
+    ]
+    return min(candidates) - timedelta(minutes=5)
+
+
+def _langfuse_to_time(
+    runtime: RcaRuntimeObservation, trace: RcaTraceObservation
+) -> datetime:
+    candidates = [
+        value
+        for value in (
+            runtime.updated_at,
+            *(
+                span.started_at + timedelta(milliseconds=span.duration_ms)
+                for span in trace.spans
+            ),
+        )
+        if value is not None
+    ]
+    return max(candidates) + timedelta(minutes=5)
 
 
 def _run_duration_measurement(
@@ -666,6 +841,7 @@ def _source_limitations(
             RcaEvidenceSourceStatus.MISSING,
             RcaEvidenceSourceStatus.UNAVAILABLE,
             RcaEvidenceSourceStatus.MALFORMED,
+            RcaEvidenceSourceStatus.NOT_AUTHORIZED,
         }
     )
     return tuple(
@@ -682,6 +858,240 @@ def _source_limitations(
             limitations=source.limitations,
         )
         for index, source in enumerate(limited, start=1)
+    )
+
+
+def _llm_findings(
+    evidence: RcaEvidenceBundle, start_index: int
+) -> tuple[RcaFinding, ...]:
+    if not _source_is_available(evidence, RcaEvidenceSource.LANGFUSE):
+        return ()
+    models = evidence.llm_models
+    if not models:
+        return ()
+    findings: list[RcaFinding] = []
+    generation_count = next(
+        measurement
+        for measurement in evidence.measurements
+        if measurement.name is RcaMeasurementName.GENERATION_COUNT
+    )
+    findings.append(
+        _finding(
+            "LLM",
+            start_index + 1,
+            kind=RcaFindingKind.OBSERVED,
+            category_value=RcaFindingCategory.LLM,
+            severity=RcaSeverity.INFO,
+            component=RcaComponent.LLM,
+            statement=f"Langfuse recorded {len(models)} LLM generation(s).",
+            confidence=RcaConfidence.HIGH,
+            evidence_refs=tuple(item.evidence_ref for item in models[:20]),
+            measurements=(generation_count,),
+        )
+    )
+    model_pairs = sorted(
+        {
+            (item.provider, item.model_name)
+            for item in models
+            if item.provider is not None or item.model_name is not None
+        }
+    )
+    if model_pairs:
+        labels = ", ".join(
+            f"{provider or 'unknown provider'} / {model or 'unknown model'}"
+            for provider, model in model_pairs
+        )
+        findings.append(
+            _finding(
+                "LLM",
+                start_index + len(findings) + 1,
+                kind=RcaFindingKind.OBSERVED,
+                category_value=RcaFindingCategory.LLM,
+                severity=RcaSeverity.INFO,
+                component=RcaComponent.LLM,
+                statement=f"Langfuse recorded model/provider metadata: {labels}.",
+                confidence=RcaConfidence.HIGH,
+                evidence_refs=tuple(item.evidence_ref for item in models[:20]),
+            )
+        )
+    token_measurements = tuple(
+        item
+        for item in evidence.measurements
+        if item.name
+        in {
+            RcaMeasurementName.INPUT_TOKENS,
+            RcaMeasurementName.OUTPUT_TOKENS,
+            RcaMeasurementName.TOTAL_TOKENS,
+        }
+        and item.provenance is RcaMeasurementProvenance.OBSERVED
+    )
+    if token_measurements:
+        findings.append(
+            _finding(
+                "TOKEN",
+                start_index + len(findings) + 1,
+                kind=RcaFindingKind.OBSERVED,
+                category_value=RcaFindingCategory.TOKEN_USAGE,
+                severity=RcaSeverity.INFO,
+                component=RcaComponent.LLM,
+                statement="Langfuse recorded provider-reported token usage.",
+                confidence=RcaConfidence.HIGH,
+                evidence_refs=(
+                    _source_reference(evidence, RcaEvidenceSource.LANGFUSE),
+                ),
+                measurements=token_measurements[:10],
+            )
+        )
+    observed_costs = tuple(
+        item
+        for item in evidence.measurements
+        if item.name is RcaMeasurementName.API_COST_USD
+        and item.provenance is RcaMeasurementProvenance.OBSERVED
+    )
+    if observed_costs:
+        findings.append(
+            _finding(
+                "COST",
+                start_index + len(findings) + 1,
+                kind=RcaFindingKind.OBSERVED,
+                category_value=RcaFindingCategory.COST,
+                severity=RcaSeverity.INFO,
+                component=RcaComponent.LLM,
+                statement="Langfuse explicitly reported observed generation cost.",
+                confidence=RcaConfidence.HIGH,
+                evidence_refs=(
+                    _source_reference(evidence, RcaEvidenceSource.LANGFUSE),
+                ),
+                measurements=observed_costs[:10],
+            )
+        )
+    return tuple(findings)
+
+
+def _langfuse_consistency_findings(
+    evidence: RcaEvidenceBundle, start_index: int
+) -> tuple[RcaFinding, ...]:
+    if not (
+        _source_is_available(evidence, RcaEvidenceSource.TEMPO)
+        and _source_is_available(evidence, RcaEvidenceSource.LANGFUSE)
+    ):
+        return ()
+    findings: list[RcaFinding] = []
+    references = (
+        _source_reference(evidence, RcaEvidenceSource.TEMPO),
+        _source_reference(evidence, RcaEvidenceSource.LANGFUSE),
+    )
+    if evidence.langfuse_trace_id_consistent is False:
+        findings.append(
+            _finding(
+                "CORRELATION",
+                start_index + len(findings) + 1,
+                kind=RcaFindingKind.DERIVED,
+                category_value=RcaFindingCategory.TELEMETRY,
+                severity=RcaSeverity.WARNING,
+                component=RcaComponent.TELEMETRY,
+                statement="Tempo and Langfuse did not return a consistently correlated trace.",
+                confidence=RcaConfidence.HIGH,
+                evidence_refs=references,
+                limitations=(RcaLimitationCode.CORRELATION_MISMATCH,),
+            )
+        )
+    tempo_llm = tuple(
+        span for span in evidence.trace_spans if span.operation is RcaOperation.LLM_CALL
+    )
+    if len(tempo_llm) != len(evidence.llm_models):
+        findings.append(
+            _finding(
+                "CORRELATION",
+                start_index + len(findings) + 1,
+                kind=RcaFindingKind.DERIVED,
+                category_value=RcaFindingCategory.TELEMETRY,
+                severity=RcaSeverity.WARNING,
+                component=RcaComponent.TELEMETRY,
+                statement=(
+                    "Tempo and Langfuse recorded different LLM generation counts "
+                    f"({len(tempo_llm)} and {len(evidence.llm_models)})."
+                ),
+                confidence=RcaConfidence.HIGH,
+                evidence_refs=references,
+                limitations=(RcaLimitationCode.CORRELATION_MISMATCH,),
+            )
+        )
+        return tuple(findings)
+    if tempo_llm and not _generation_timing_is_plausible(
+        tempo_llm, evidence.llm_models
+    ):
+        findings.append(
+            _finding(
+                "CORRELATION",
+                start_index + len(findings) + 1,
+                kind=RcaFindingKind.DERIVED,
+                category_value=RcaFindingCategory.TELEMETRY,
+                severity=RcaSeverity.WARNING,
+                component=RcaComponent.TELEMETRY,
+                statement="Tempo and Langfuse generation timings were not plausibly aligned.",
+                confidence=RcaConfidence.HIGH,
+                evidence_refs=references,
+                limitations=(RcaLimitationCode.CORRELATION_MISMATCH,),
+            )
+        )
+    if _model_provider_sets_disagree(tempo_llm, evidence.llm_models):
+        findings.append(
+            _finding(
+                "CORRELATION",
+                start_index + len(findings) + 1,
+                kind=RcaFindingKind.DERIVED,
+                category_value=RcaFindingCategory.TELEMETRY,
+                severity=RcaSeverity.WARNING,
+                component=RcaComponent.TELEMETRY,
+                statement="Tempo and Langfuse model/provider metadata did not agree.",
+                confidence=RcaConfidence.HIGH,
+                evidence_refs=references,
+                limitations=(RcaLimitationCode.CORRELATION_MISMATCH,),
+            )
+        )
+    return tuple(findings)
+
+
+def _generation_timing_is_plausible(
+    tempo: tuple[RcaTraceSpanEvidence, ...], langfuse: tuple[RcaLlmEvidence, ...]
+) -> bool:
+    for generation in langfuse:
+        generation_end = generation.started_at + timedelta(
+            milliseconds=generation.duration_ms
+        )
+        if not any(
+            generation.started_at
+            <= span.started_at + timedelta(milliseconds=span.duration_ms)
+            and span.started_at <= generation_end
+            for span in tempo
+        ):
+            return False
+    return True
+
+
+def _model_provider_sets_disagree(
+    tempo: tuple[RcaTraceSpanEvidence, ...], langfuse: tuple[RcaLlmEvidence, ...]
+) -> bool:
+    def values(spans: tuple[RcaTraceSpanEvidence, ...], name: str) -> set[str]:
+        return {
+            str(attribute.value)
+            for span in spans
+            for attribute in span.safe_attributes
+            if attribute.name.value == name
+        }
+
+    tempo_models = values(tempo, "model.name")
+    tempo_providers = values(tempo, "model.provider")
+    langfuse_models = {item.model_name for item in langfuse if item.model_name}
+    langfuse_providers = {item.provider for item in langfuse if item.provider}
+    return bool(
+        (tempo_models and langfuse_models and tempo_models != langfuse_models)
+        or (
+            tempo_providers
+            and langfuse_providers
+            and tempo_providers != langfuse_providers
+        )
     )
 
 
@@ -899,6 +1309,6 @@ def _analysis_status(
         and not runtime_failure
     ):
         return RcaAnalysisStatus.INSUFFICIENT_EVIDENCE
-    if incomplete or evidence.trace_truncated:
+    if incomplete or evidence.trace_truncated or evidence.langfuse_truncated:
         return RcaAnalysisStatus.PARTIAL
     return RcaAnalysisStatus.COMPLETE

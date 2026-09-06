@@ -245,6 +245,37 @@ measurements, and deterministic `OBSERVED`/`DERIVED` findings. Timing contributi
 non-overlapping category-owned intervals, so nested MCP and retrieval spans are not
 double-counted. No finding currently has `HYPOTHESIS` or `CONFIRMED_RUN_CAUSE` status.
 
-Langfuse RCA evidence access, RCA MCP, optional LLM reasoning, Codex/UI integration,
-run comparison, and performance policies remain planned. Runtime MCP and Observability
-MCP remain the independent read-only evidence interfaces described above.
+## Langfuse RCA Evidence
+
+RCA can optionally use Langfuse Observations API v2 as a bounded, metadata-only LLM
+evidence source. It does not query Langfuse databases or expose a Langfuse transport
+through Application contracts. The request path is strictly ordered:
+
+```text
+SecurityContext -> RLS-authorized runtime run -> Tempo trace_id -> Langfuse v2 lookup
+```
+
+The adapter requests one trace-filtered page with a fixed time window, maximum 50
+observations, a two-second timeout, and no retries. It accepts only `agent.run`/`AGENT`
+and `llm.call`/`GENERATION`. Its response projection retains model/provider/profile,
+safe status, generation timestamps/duration, individual provider-reported token fields,
+and provenance-aware cost fields. It does not include prompts, outputs, tool data,
+documents, raw metadata, user/session IDs, tags, URLs, headers, credentials, or raw
+Langfuse JSON in `RcaAnalysisReport`.
+
+Tokens are observed only when Langfuse reports the respective field. A configured model
+price, including local Ollama's configured API price of USD 0, is kept only as
+`CONFIGURED/MODEL_CONFIGURATION`; it is not observed run cost. `OBSERVED/RUN` cost is
+accepted only when Langfuse explicitly marks it as observed run/generation cost. Derived
+cost is out of scope. Langfuse failure, missing data, malformed data, backend denial, or
+bounded-page truncation produces explicit partial evidence and cannot fail the rest of
+RCA.
+
+The deterministic analyzer compares Tempo and Langfuse when both exist. It reports trace
+correlation, generation-count, timing-overlap, and known model/provider mismatches as
+telemetry limitations rather than selecting a backend as truth. The resulting LLM facts
+remain `OBSERVED` or `DERIVED`; no Langfuse record can create a root-cause finding.
+
+RCA MCP, optional LLM reasoning, Codex/UI integration, run comparison, and performance
+policies remain planned. Runtime MCP and Observability MCP remain the independent
+read-only evidence interfaces described above.

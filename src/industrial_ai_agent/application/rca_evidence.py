@@ -36,6 +36,10 @@ class RcaEvidenceMissingError(RuntimeError):
     """A bounded source answered successfully but has no evidence for the run."""
 
 
+class RcaEvidenceNotAuthorizedError(PermissionError):
+    """A non-runtime evidence backend rejected its own service credentials."""
+
+
 class RcaEvidenceMalformedError(RuntimeError):
     """A bounded source returned a response outside its safe expected projection."""
 
@@ -103,6 +107,32 @@ class RcaMetricObservation:
     window_end: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class RcaLlmGenerationObservation:
+    """Safe metadata from one Langfuse generation; no input, output, or raw metadata."""
+
+    model_name: str | None
+    provider: str | None
+    model_profile: str | None
+    status: RcaOperationStatus
+    started_at: datetime
+    duration_ms: float
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    observed_cost_usd: float | None
+    configured_api_cost_usd: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class RcaLlmTraceObservation:
+    """Bounded Langfuse projection for one already-authorized trace correlation."""
+
+    trace_id_consistent: bool
+    generations: tuple[RcaLlmGenerationObservation, ...]
+    truncated: bool
+
+
 class RuntimeRcaEvidencePort(Protocol):
     """RLS-gated runtime facts, queried before any telemetry correlation."""
 
@@ -140,3 +170,16 @@ class MetricRcaEvidencePort(Protocol):
         self, trace: RcaTraceObservation
     ) -> tuple[RcaMetricObservation, ...]:
         """Return fixed metric-context projections without query language input."""
+
+
+class LlmEvidencePort(Protocol):
+    """Bounded LLM metadata after Runtime RLS and trace correlation have succeeded."""
+
+    def get_trace_llm_evidence(
+        self,
+        trace_id: str,
+        *,
+        from_time: datetime,
+        to_time: datetime,
+    ) -> RcaLlmTraceObservation:
+        """Return safe Langfuse generation metadata for one authorized trace only."""
