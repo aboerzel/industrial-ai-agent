@@ -1,0 +1,186 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "description": "Current operational state from bounded Prometheus metrics and metadata-only Loki events. The scrape state applies only to the OTel Collector metrics endpoint.",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Metrics Collection",
+      "description": "Availability of Prometheus scraping the OpenTelemetry Collector metrics endpoint. It does not prove application or backend business health.",
+      "type": "stat",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "min(up{job=\"otel-collector\"})", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"noValue": "NO SCRAPE DATA", "mappings": [{"type": "value", "options": {"0": {"text": "UNAVAILABLE", "color": "red"}, "1": {"text": "AVAILABLE", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}, "color": {"mode": "thresholds"}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "background_solid", "graphMode": "none", "justifyMode": "auto"},
+      "gridPos": {"h": 6, "w": 4, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "title": "Agent Runs",
+      "description": "Completed agent runs recorded during the selected time range.",
+      "type": "stat",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum(increase(agent_runs_total[$__range]))", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "NO RUN DATA"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "gridPos": {"h": 6, "w": 4, "x": 4, "y": 0}
+    },
+    {
+      "id": 3,
+      "title": "Successful Runs",
+      "description": "Runs recorded with the success status during the selected time range.",
+      "type": "stat",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum(increase(agent_runs_total{operation_status=\"success\"}[$__range]))", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "NO RUN DATA", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "gridPos": {"h": 6, "w": 4, "x": 8, "y": 0}
+    },
+    {
+      "id": 4,
+      "title": "Failed Runs",
+      "description": "Runs recorded with the failure status during the selected time range.",
+      "type": "stat",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum(increase(agent_runs_total{operation_status=\"failure\"}[$__range]))", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "NO RUN DATA", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "gridPos": {"h": 6, "w": 4, "x": 12, "y": 0}
+    },
+    {
+      "id": 5,
+      "title": "LLM Calls",
+      "description": "Instrumented LLM calls during the selected time range.",
+      "type": "stat",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum(increase(llm_calls_total[$__range]))", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "NO LLM DATA"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "gridPos": {"h": 6, "w": 4, "x": 16, "y": 0}
+    },
+    {
+      "id": 6,
+      "title": "MCP Tool Operations",
+      "description": "Instrumented MCP client and server tool-operation boundaries during the selected time range; this is not a unique end-user request count.",
+      "type": "stat",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum(increase(mcp_tool_calls_total[$__range]))", "instant": true, "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "NO MCP DATA"}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "gridPos": {"h": 6, "w": 4, "x": 20, "y": 0}
+    },
+    {
+      "id": 7,
+      "title": "Run Outcomes",
+      "description": "Status distribution for runs completed during the selected time range. The selected period is 100%.",
+      "type": "piechart",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum by (operation_status) (increase(agent_runs_total[$__range]))", "instant": true, "legendFormat": "{{operation_status}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "NO RUN DATA"}, "overrides": []},
+      "options": {"pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "legend": {"displayMode": "table", "placement": "right", "values": ["value", "percent"]}, "tooltip": {"mode": "single", "sort": "none"}},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 6}
+    },
+    {
+      "id": 8,
+      "title": "Agent Run Rate",
+      "description": "Completed agent runs per second over the selected time range.",
+      "type": "timeseries",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum(rate(agent_runs_total[$__rate_interval]))", "legendFormat": "runs", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "noValue": "NO RUN DATA"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "single", "sort": "none"}},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 6}
+    },
+    {
+      "id": 9,
+      "title": "Agent Run Latency (p95)",
+      "description": "95th-percentile duration of completed agent runs, calculated from the existing histogram.",
+      "type": "timeseries",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(agent_run_duration_seconds_bucket[$__rate_interval]))) * 1000", "legendFormat": "p95", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ms", "decimals": 0, "noValue": "NO LATENCY DATA"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "single", "sort": "none"}},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 6}
+    },
+    {
+      "id": 10,
+      "title": "LLM Activity by Model Profile",
+      "description": "Instrumented LLM call rate by bounded semantic model profile.",
+      "type": "timeseries",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum by (model_profile) (rate(llm_calls_total[$__rate_interval]))", "legendFormat": "{{model_profile}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "noValue": "NO LLM DATA"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14}
+    },
+    {
+      "id": 11,
+      "title": "MCP Tool Activity",
+      "description": "Rate of instrumented MCP tool-operation boundaries by tool. Client and server boundaries may both contribute.",
+      "type": "timeseries",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum by (mcp_tool) (rate(mcp_tool_calls_total[$__rate_interval]))", "legendFormat": "{{mcp_tool}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "noValue": "NO MCP DATA"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14}
+    },
+    {
+      "id": 12,
+      "title": "Retrieval Activity",
+      "description": "Rate of recorded API-side and Knowledge MCP retrieval boundaries by strategy.",
+      "type": "timeseries",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "sum by (retrieval_strategy) (rate(retrieval_calls_total[$__rate_interval]))", "legendFormat": "{{retrieval_strategy}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "noValue": "NO RETRIEVAL DATA"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 22}
+    },
+    {
+      "id": 13,
+      "title": "LLM Call Latency (p95)",
+      "description": "95th-percentile instrumented LLM call duration.",
+      "type": "timeseries",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(llm_call_duration_seconds_bucket[$__rate_interval]))) * 1000", "legendFormat": "p95", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ms", "decimals": 0, "noValue": "NO LATENCY DATA"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "single", "sort": "none"}},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 22}
+    },
+    {
+      "id": 14,
+      "title": "MCP Tool Latency (p95)",
+      "description": "95th-percentile instrumented MCP tool-operation duration. This represents observed boundaries, not a deduplicated user request duration.",
+      "type": "timeseries",
+      "datasource": {"uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(mcp_tool_duration_seconds_bucket[$__rate_interval]))) * 1000", "legendFormat": "p95", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ms", "decimals": 0, "noValue": "NO LATENCY DATA"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "single", "sort": "none"}},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 22}
+    },
+    {
+      "id": 15,
+      "title": "Recent Failure Events",
+      "description": "Metadata-only error events from Loki. Event location is observed; it is not a root-cause determination.",
+      "type": "logs",
+      "datasource": {"uid": "loki"},
+      "targets": [{"expr": "{event_name=~\".*failed\"}", "refId": "A"}],
+      "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyJSON": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 30}
+    },
+    {
+      "id": 16,
+      "title": "Current Active Runs",
+      "type": "text",
+      "options": {"mode": "markdown", "content": "A current-active-run gauge is not emitted. Existing telemetry records terminal run outcomes and durations, so this dashboard deliberately does not infer `RUNNING` from service availability or recent activity."},
+      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 40}
+    }
+  ],
+  "schemaVersion": 41,
+  "tags": ["industrial-ai-agent", "observability", "system"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Industrial AI Agent - System Overview",
+  "uid": "industrial-ai-agent-system-overview",
+  "version": 1
+}

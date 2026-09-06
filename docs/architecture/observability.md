@@ -31,11 +31,47 @@ flowchart LR
     OTel --> Langfuse["Langfuse\nagent + generation only"]
 ```
 
-Grafana provisions Prometheus, Tempo, and Loki datasources and the `Industrial AI Agent
-Overview` dashboard from repository files. No dashboard setup through the UI is required.
-The dashboard contains run/error, MCP, LLM, execution-zone, retrieval, approval,
-run-rate, HTTP-latency, recent-error, and service-health panels. Its cost panel
-deliberately remains separate from Langfuse model API cost.
+Grafana provisions Prometheus, Tempo, and Loki datasources and the dashboard set from
+repository files. No dashboard setup through the UI is required.
+
+## Grafana Dashboard Set
+
+The provisioned dashboards keep operational questions separate and use the selected
+Grafana time range for every historical total, rate, and distribution. Pie/donut panels
+use that selected range as their complete 100% population and show both absolute values
+and percentages in their legend where Grafana supports it.
+
+* `Industrial AI Agent - System Overview` answers whether the Prometheus scrape target is
+  available and what happened recently: run outcomes, run rate and latency, LLM/MCP/
+  retrieval activity, and metadata-only Loki failure events. The `AVAILABLE` state applies
+  only to Prometheus scraping the OTel Collector metrics endpoint; it is not a claim that
+  every application service or backend is healthy. Current active runs are deliberately
+  not inferred because no active-run gauge exists.
+* `Industrial AI Agent - Cost Analytics` records the current Grafana data gap. Observed
+  model API cost exists only when Langfuse explicitly reports `OBSERVED/RUN` cost, but no
+  Langfuse datasource is provisioned for Grafana. No cost total, distribution, or trend
+  is estimated from Prometheus call counts, model configuration, electricity, hardware,
+  or TCO. Configured local Ollama API cost of USD 0 remains
+  `CONFIGURED/MODEL_CONFIGURATION`, not observed run cost.
+* `Industrial AI Agent - Usage Analytics` shows bounded Prometheus usage by run
+  classification, model profile, MCP tool, agent-side MCP service, and retrieval strategy,
+  plus their trends. Provider/model and provider-reported token distributions remain
+  Langfuse-only metadata and are shown as an explicit Grafana data gap rather than being
+  copied into Prometheus labels.
+* `Industrial AI Agent - Failure Analytics` shows the non-overlapping failed-agent-run
+  total/rate and observed LLM, MCP, and retrieval failure boundaries. Component panels
+  identify where a failure was recorded, not its root cause. Nested operational boundaries
+  are not summed into a platform-wide failure total because that would double-count a
+  failed run.
+
+The former broad overview dashboard has been removed after its useful operational views
+were migrated to the four focused dashboards.
+
+Prometheus serves bounded counters, histograms, rates, distributions, and scrape state;
+Loki serves metadata-only recent failure events; Tempo remains the trace-exploration
+source through Explore and the provisioned trace-to-logs/metrics links. Langfuse remains
+the local evidence source for allowed LLM usage, token, and cost metadata, but is not
+duplicated into Prometheus merely for dashboard coverage.
 
 ## Langfuse LLM Observability
 

@@ -1,0 +1,21 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "description": "Cost dashboard with explicit provenance boundaries. No cost is estimated and configured local API cost is not treated as observed run cost or TCO.",
+  "panels": [
+    {"id": 1, "title": "Observed Model API Cost", "type": "text", "options": {"mode": "markdown", "content": "## Unavailable in Grafana\n\nObserved model API cost is currently available only in Langfuse when it explicitly marks a generation/run cost as observed. Grafana has no provisioned Langfuse datasource, so no total is displayed for the selected range."}, "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0}},
+    {"id": 2, "title": "Cost by Provider, Model, and Model Profile", "type": "text", "options": {"mode": "markdown", "content": "## No safe distribution source\n\nProvider, model, profile, and cost provenance are metadata-only Langfuse fields. They are deliberately absent from Prometheus labels. Donut charts are deferred until a governed Langfuse-to-Grafana datasource exists."}, "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0}},
+    {"id": 3, "title": "Cost over Time", "type": "text", "options": {"mode": "markdown", "content": "## No safe time series source\n\nNo Prometheus cost metric exists. This dashboard does not synthesize a cost time series from call counts, configured prices, electricity, hardware, or depreciation."}, "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0}},
+    {"id": 4, "title": "Cost Provenance", "type": "text", "options": {"mode": "markdown", "content": "Only `OBSERVED/RUN` Langfuse cost may contribute to an observed-cost total. `CONFIGURED/MODEL_CONFIGURATION`, including local Ollama API cost of USD 0, is configuration metadata only: it is neither observed spend nor TCO. Missing cost remains unavailable."}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}},
+    {"id": 5, "title": "Tool-Specific Monetary Cost", "type": "text", "options": {"mode": "markdown", "content": "Tool-specific monetary cost is not observed by the current bounded telemetry. No `Cost by Tool` chart is shown."}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}},
+    {"id": 6, "title": "Selected Time Range", "type": "text", "options": {"mode": "markdown", "content": "All future observed-cost totals, distributions, and time series must use the selected Grafana time range as their population. This dashboard currently has no safe Grafana query path to the Langfuse evidence needed to populate them."}, "gridPos": {"h": 6, "w": 24, "x": 0, "y": 16}}
+  ],
+  "schemaVersion": 41,
+  "tags": ["industrial-ai-agent", "observability", "cost", "data-gap"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Industrial AI Agent - Cost Analytics",
+  "uid": "industrial-ai-agent-cost-analytics",
+  "version": 1
+}
