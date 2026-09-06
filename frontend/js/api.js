@@ -9,10 +9,10 @@ export class ApiClientError extends Error {
   }
 }
 
-export async function createRun(message) {
+export async function createRun(message, userClearance) {
   return request("/api/v1/runs", {
     method: "POST",
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, user_clearance: userClearance }),
   });
 }
 
@@ -52,7 +52,7 @@ async function request(path, options = {}) {
     throw new ApiClientError(
       response.status,
       publicError?.code ?? "request_failed",
-      errorMessageFor(response.status, publicError?.message),
+      errorMessageFor(response.status, publicError?.code, publicError?.message),
     );
   }
   if (!isRunResponse(payload)) {
@@ -73,9 +73,10 @@ async function request(path, options = {}) {
 function isRunResponse(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "status", "answer", "tool_calls", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "status", "data_classification", "answer", "tool_calls", "approval_request"]) &&
     isUuid(value.run_id) &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
+    ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
     (value.answer === undefined || value.answer === null || isBoundedString(value.answer, 8_000)) &&
     (value.tool_calls === undefined ||
       (Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall))) &&
@@ -157,7 +158,10 @@ function isUuid(value) {
   );
 }
 
-function errorMessageFor(status, publicMessage) {
+function errorMessageFor(status, code, publicMessage) {
+  if (code === "requested_data_unavailable") {
+    return "The requested data is not available with the selected access level.";
+  }
   const defaults = {
     403: "This request is not permitted by the server security policy.",
     404: "The requested run was not found.",

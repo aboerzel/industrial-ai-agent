@@ -7,7 +7,7 @@ from pathlib import Path
 
 import uvicorn
 
-from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
+from industrial_ai_agent.domain.security import DEMO_RUNTIME_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.observed_run_store import (
     ObservedAgentRunStore,
@@ -70,7 +70,7 @@ def create_default_app():
         observed_run_service(run_service, telemetry),
         run_store=ObservedAgentRunStore(
             PostgreSqlAgentRunStore(
-                PostgreSqlSessionFactory(database_url), DEMO_ENGINEER_SECURITY_CONTEXT
+                PostgreSqlSessionFactory(database_url), DEMO_RUNTIME_SECURITY_CONTEXT
             ),
             telemetry,
         ),

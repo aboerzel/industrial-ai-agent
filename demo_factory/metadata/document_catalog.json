@@ -72,6 +72,25 @@
     "checksum": "4b20d4440df750d95d5aa8fa523b84ec5bbc5a9420483d81aa37e91d01e5567a"
   },
   {
+    "document_id": "doc-s04quality09procedure",
+    "title": "S04 QUALITY-09 Troubleshooting Procedure",
+    "classification": "CONFIDENTIAL",
+    "mime_type": "text/markdown",
+    "source_system": "FACTORY-DEMO-01-DOCUMENTS",
+    "factory_code": "FACTORY-DEMO-01",
+    "station_code": "S04",
+    "version": "1.0",
+    "valid_from": "2026-01-15",
+    "tags": [
+      "P4711",
+      "S04",
+      "QUALITY-09",
+      "TROUBLESHOOTING"
+    ],
+    "file_path": "documents/confidential/S04_Quality_09_Troubleshooting.md",
+    "checksum": "0a13eac654921f5f190ceb4a82b78ba70bdaf390e957c33ccf53ae28865f675b"
+  },
+  {
     "document_id": "doc-e435d31cc10c44cf",
     "title": "Positioning Error Troubleshooting",
     "classification": "CONFIDENTIAL",
@@ -146,6 +165,25 @@
     ],
     "file_path": "documents/confidential/Failure_Analysis_S02.pptx",
     "checksum": "e61b61dfaffc79cfab988b7f13f2c92b46aafcfef1c62b3ee3873dd6813735a5"
+  },
+  {
+    "document_id": "doc-p9001s07commission",
+    "title": "P9001 S07 Restricted Commissioning Notes",
+    "classification": "RESTRICTED",
+    "mime_type": "text/markdown",
+    "source_system": "FACTORY-DEMO-01-DOCUMENTS",
+    "factory_code": "FACTORY-DEMO-01",
+    "station_code": "S07",
+    "version": "1.0",
+    "valid_from": "2026-02-02",
+    "tags": [
+      "P9001",
+      "S07",
+      "PROTO-COMM-07",
+      "COMMISSIONING"
+    ],
+    "file_path": "documents/restricted/P9001_S07_Commissioning_Notes.md",
+    "checksum": "b54eb78fcba74693c8a9c61bbcb965b17aef327a13e2bb761a725c1908f5599d"
   },
   {
     "document_id": "doc-956f1822fbbac958",

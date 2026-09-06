@@ -41,6 +41,9 @@ class FixedRunService:
         del message
         return _result()
 
+    async def run_with_policy(self, message: str, **_: object) -> AgentRunResult:
+        return await self.run(message)
+
 
 def _context(clearance: DataClassification) -> SecurityContext:
     return SecurityContext(
@@ -137,7 +140,9 @@ def test_agent_runtime_rls_and_framework_checkpoint_schema_exist() -> None:
     assert bypass_rls is False
 
 
-def test_internal_diagnostic_preflight_uses_internal_rls_before_agent_execution() -> None:
+def test_internal_diagnostic_preflight_uses_internal_rls_before_agent_execution() -> (
+    None
+):
     assert DATABASE_URL is not None
     factory = PostgreSqlSessionFactory(DATABASE_URL)
     validator = PostgreSqlInternalDiagnosticScopeValidator(factory)
@@ -207,7 +212,11 @@ def test_fastapi_run_survives_application_recreation() -> None:
             ),
         )
         created = TestClient(first_app).post(
-            "/api/v1/runs", json={"message": "Investigate P4711."}
+            "/api/v1/runs",
+            json={
+                "message": "Investigate P4711.",
+                "user_clearance": "CONFIDENTIAL",
+            },
         )
     finally:
         first_factory.dispose()

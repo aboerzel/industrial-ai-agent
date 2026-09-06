@@ -154,7 +154,7 @@ def create_demo_mcp_access_control(
         "MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN"
     )
     codex_token = _required_environment_value("MCP_CODEX_DEVELOPMENT_TOKEN")
-    registrations = (
+    registrations = [
         _registration(
             token=industrial_token,
             client_id="industrial-agent",
@@ -174,10 +174,7 @@ def create_demo_mcp_access_control(
             client_id="industrial-agent-internal",
             clearance=DataClassification.INTERNAL,
             permissions=frozenset(
-                {
-                    McpPermission.READ_FACTORY,
-                    McpPermission.READ_KNOWLEDGE,
-                }
+                {McpPermission.READ_FACTORY, McpPermission.READ_KNOWLEDGE}
             ),
         ),
         _registration(
@@ -194,12 +191,50 @@ def create_demo_mcp_access_control(
                 }
             ),
         ),
+    ]
+    registrations.extend(
+        registration
+        for registration in (
+            _optional_agent_registration(
+                token_name="MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN",
+                client_id="industrial-agent-public",
+                clearance=DataClassification.PUBLIC,
+            ),
+            _optional_agent_registration(
+                token_name="MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN",
+                client_id="industrial-agent-restricted",
+                clearance=DataClassification.RESTRICTED,
+            ),
+        )
+        if registration is not None
     )
     return McpHttpAccessControl(
-        authenticator=DemoBearerTokenAuthenticator(registrations),
-        resolver=RegisteredMcpClientContextResolver(registrations),
+        authenticator=DemoBearerTokenAuthenticator(tuple(registrations)),
+        resolver=RegisteredMcpClientContextResolver(tuple(registrations)),
         tools=tools,
         required_permission=required_permission,
+    )
+
+
+def _optional_agent_registration(
+    *, token_name: str, client_id: str, clearance: DataClassification
+) -> DemoMcpClientRegistration | None:
+    token = os.getenv(token_name)
+    if token is None or not token.strip():
+        return None
+    return _registration(
+        token=token,
+        client_id=client_id,
+        clearance=clearance,
+        permissions=frozenset(
+            {
+                McpPermission.READ_FACTORY,
+                McpPermission.READ_KNOWLEDGE,
+                McpPermission.READ_OBSERVABILITY,
+                McpPermission.READ_AGENT_RUNTIME,
+                McpPermission.CREATE_MAINTENANCE_TICKET,
+            }
+        ),
     )
 
 

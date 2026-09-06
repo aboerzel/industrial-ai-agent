@@ -112,6 +112,7 @@ def test_rejects_api_key_value_in_model_configuration() -> None:
                         "temperature": 0,
                         "authentication": "none",
                         "execution_zone": "LOCAL",
+                        "max_data_classification": "RESTRICTED",
                         "capabilities": ["TEXT", "TOOL_CALLING"],
                         "quality_class": "HIGH",
                         "cost_class": "LOW",
@@ -134,6 +135,7 @@ def test_requires_environment_variable_name_for_api_key_authentication() -> None
                         "temperature": 0,
                         "authentication": "api_key",
                         "execution_zone": "PUBLIC_CLOUD",
+                        "max_data_classification": "CONFIDENTIAL",
                         "capabilities": ["TEXT"],
                         "quality_class": "HIGH",
                         "cost_class": "LOW",
@@ -155,6 +157,7 @@ def test_rejects_environment_variable_name_for_no_authentication() -> None:
                         "temperature": 0,
                         "authentication": "none",
                         "execution_zone": "LOCAL",
+                        "max_data_classification": "RESTRICTED",
                         "capabilities": ["TEXT", "TOOL_CALLING"],
                         "quality_class": "HIGH",
                         "cost_class": "LOW",
@@ -176,6 +179,49 @@ def test_requires_explicit_execution_zone() -> None:
                         "base_url": "http://localhost:11434/v1",
                         "temperature": 0,
                         "authentication": "none",
+                        "capabilities": ["TEXT", "TOOL_CALLING"],
+                        "quality_class": "HIGH",
+                        "cost_class": "LOW",
+                    }
+                }
+            }
+        )
+
+
+def test_requires_explicit_maximum_data_classification() -> None:
+    with pytest.raises(ValidationError, match="max_data_classification"):
+        LLMConfiguration.model_validate(
+            {
+                "profiles": {
+                    "local_quality": {
+                        "provider": "ollama",
+                        "model": "qwen3.5:9b",
+                        "base_url": "http://localhost:11434/v1",
+                        "temperature": 0,
+                        "authentication": "none",
+                        "execution_zone": "LOCAL",
+                        "capabilities": ["TEXT", "TOOL_CALLING"],
+                        "quality_class": "HIGH",
+                        "cost_class": "LOW",
+                    }
+                }
+            }
+        )
+
+
+def test_rejects_invalid_maximum_data_classification() -> None:
+    with pytest.raises(ValidationError, match="maximum data classification"):
+        LLMConfiguration.model_validate(
+            {
+                "profiles": {
+                    "local_quality": {
+                        "provider": "ollama",
+                        "model": "qwen3.5:9b",
+                        "base_url": "http://localhost:11434/v1",
+                        "temperature": 0,
+                        "authentication": "none",
+                        "execution_zone": "LOCAL",
+                        "max_data_classification": "TOP_SECRET",
                         "capabilities": ["TEXT", "TOOL_CALLING"],
                         "quality_class": "HIGH",
                         "cost_class": "LOW",

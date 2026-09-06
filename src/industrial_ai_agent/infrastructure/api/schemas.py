@@ -22,6 +22,24 @@ class RunStatus(StrEnum):
     FAILED = "failed"
 
 
+class DemoUserClearance(StrEnum):
+    """Closed UI contract for the local demo authn/authz simulation."""
+
+    PUBLIC = "PUBLIC"
+    INTERNAL = "INTERNAL"
+    CONFIDENTIAL = "CONFIDENTIAL"
+    RESTRICTED = "RESTRICTED"
+
+
+class DataClassificationLabel(StrEnum):
+    """Public projection of a server-resolved run classification."""
+
+    PUBLIC = "PUBLIC"
+    INTERNAL = "INTERNAL"
+    CONFIDENTIAL = "CONFIDENTIAL"
+    RESTRICTED = "RESTRICTED"
+
+
 class HealthResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -33,6 +51,10 @@ class CreateRunRequest(BaseModel):
 
     message: Annotated[str, StringConstraints(min_length=1, max_length=4_000)] = Field(
         description="Troubleshooting request for the industrial agent."
+    )
+    user_clearance: DemoUserClearance = Field(
+        default=DemoUserClearance.PUBLIC,
+        description="Demo-only simulated user clearance; it never sets run classification.",
     )
 
     @field_validator("message")
@@ -49,12 +71,8 @@ class InternalDiagnosticRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    product_id: Annotated[
-        str, StringConstraints(pattern=r"^P[0-9]{4}$", strict=True)
-    ]
-    station_id: Annotated[
-        str, StringConstraints(pattern=r"^S[0-9]{2}$", strict=True)
-    ]
+    product_id: Annotated[str, StringConstraints(pattern=r"^P[0-9]{4}$", strict=True)]
+    station_id: Annotated[str, StringConstraints(pattern=r"^S[0-9]{2}$", strict=True)]
 
 
 class PublicToolName(StrEnum):
@@ -99,6 +117,7 @@ class RunResponse(BaseModel):
 
     run_id: UUID
     status: RunStatus
+    data_classification: DataClassificationLabel
     answer: Annotated[str, StringConstraints(max_length=8_000)] | None = None
     tool_calls: tuple[ToolCallResponse, ...] = ()
     approval_request: ApprovalRequestResponse | None = None

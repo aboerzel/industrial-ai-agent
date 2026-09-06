@@ -29,12 +29,16 @@ class DataClassificationBoundaryError(RuntimeError):
 class ModelExecutionZoneResolver(Protocol):
     def get_execution_zone(self, profile_name: str) -> object | None: ...
 
+    def get_max_data_classification(self, profile_name: str) -> object | None: ...
+
 
 class ModelEgressPolicy:
     _ALLOWED_COMBINATIONS = frozenset(
         {
             (DataClassification.PUBLIC, ExecutionZone.LOCAL),
             (DataClassification.PUBLIC, ExecutionZone.PUBLIC_CLOUD),
+            (DataClassification.INTERNAL, ExecutionZone.PUBLIC_CLOUD),
+            (DataClassification.CONFIDENTIAL, ExecutionZone.PUBLIC_CLOUD),
             (DataClassification.INTERNAL, ExecutionZone.LOCAL),
             (DataClassification.CONFIDENTIAL, ExecutionZone.LOCAL),
             (DataClassification.RESTRICTED, ExecutionZone.LOCAL),
@@ -45,19 +49,28 @@ class ModelEgressPolicy:
         self,
         data_classification: object | None,
         execution_zone: object | None,
+        max_data_classification: object | None,
     ) -> bool:
         if not isinstance(data_classification, DataClassification):
             return False
         if not isinstance(execution_zone, ExecutionZone):
             return False
-        return (data_classification, execution_zone) in self._ALLOWED_COMBINATIONS
+        if not isinstance(max_data_classification, DataClassification):
+            return False
+        return (
+            (data_classification, execution_zone) in self._ALLOWED_COMBINATIONS
+            and data_classification <= max_data_classification
+        )
 
     def require_allowed(
         self,
         data_classification: object | None,
         execution_zone: object | None,
+        max_data_classification: object | None,
     ) -> None:
-        if not self.is_allowed(data_classification, execution_zone):
+        if not self.is_allowed(
+            data_classification, execution_zone, max_data_classification
+        ):
             raise ModelEgressDeniedError("Model egress denied by policy")
 
 
@@ -77,9 +90,13 @@ class EgressCheckedLLMClient:
 
     def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
         execution_zone = self._execution_zone_resolver.get_execution_zone(profile.name)
+        max_data_classification = (
+            self._execution_zone_resolver.get_max_data_classification(profile.name)
+        )
         self._policy.require_allowed(
             self._request_classification,
             execution_zone,
+            max_data_classification,
         )
         return self._delegate.chat(profile, request)
 

@@ -4,7 +4,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from industrial_ai_agent.agent.llm import ModelProfile
 from industrial_ai_agent.agent.model_egress import ExecutionZone
@@ -14,6 +21,7 @@ from industrial_ai_agent.agent.model_routing import (
     ModelProfileMetadata,
     QualityClass,
 )
+from industrial_ai_agent.domain.security import DataClassification
 
 
 class AuthenticationMode(StrEnum):
@@ -30,6 +38,7 @@ class ModelProfileConfig(BaseModel):
     temperature: float = Field(ge=0, le=2)
     authentication: AuthenticationMode
     execution_zone: ExecutionZone
+    max_data_classification: DataClassification
     capabilities: frozenset[LLMCapability] = Field(min_length=1)
     quality_class: QualityClass
     cost_class: CostClass
@@ -37,6 +46,18 @@ class ModelProfileConfig(BaseModel):
     supports_reasoning_effort: bool = False
     api_cost_usd: Decimal | None = Field(default=None, ge=0)
     api_key_env: str | None = Field(default=None, min_length=1)
+
+    @field_validator("max_data_classification", mode="before")
+    @classmethod
+    def parse_max_data_classification(cls, value: object) -> DataClassification:
+        if isinstance(value, DataClassification):
+            return value
+        if isinstance(value, str):
+            try:
+                return DataClassification[value]
+            except KeyError as error:
+                raise ValueError("Unknown maximum data classification") from error
+        raise ValueError("Unknown maximum data classification")
 
     @model_validator(mode="after")
     def validate_authentication(self) -> Self:
@@ -63,6 +84,9 @@ class LLMConfiguration(BaseModel):
     def get_execution_zone(self, profile_name: str) -> ExecutionZone:
         return self.get_profile(profile_name).execution_zone
 
+    def get_max_data_classification(self, profile_name: str) -> DataClassification:
+        return self.get_profile(profile_name).max_data_classification
+
     def get_routing_profiles(self) -> tuple[ModelProfileMetadata, ...]:
         return tuple(
             ModelProfileMetadata(
@@ -71,6 +95,7 @@ class LLMConfiguration(BaseModel):
                 quality_class=profile.quality_class,
                 cost_class=profile.cost_class,
                 execution_zone=profile.execution_zone,
+                max_data_classification=profile.max_data_classification,
             )
             for profile_name, profile in sorted(self.profiles.items())
         )

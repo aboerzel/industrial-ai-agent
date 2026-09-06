@@ -34,6 +34,7 @@ STATIONS = {
     "S03": "00000000-0000-0000-0000-000000000103",
     "S04": "00000000-0000-0000-0000-000000000104",
     "S05": "00000000-0000-0000-0000-000000000105",
+    "S07": "00000000-0000-0000-0000-000000000107",
 }
 PRODUCTS = {
     "P4711": "00000000-0000-0000-0000-000000004711",
@@ -42,6 +43,7 @@ PRODUCTS = {
     "P4805": "00000000-0000-0000-0000-000000004805",
     "P4811": "00000000-0000-0000-0000-000000004811",
     "P4900": "00000000-0000-0000-0000-000000004900",
+    "P9001": "00000000-0000-0000-0000-000000009001",
 }
 
 
@@ -73,6 +75,7 @@ def _seed_factory(session: Session) -> None:
         ("S03", "Robot Assembly"),
         ("S04", "Quality Inspection"),
         ("S05", "Packaging"),
+        ("S07", "Prototype Commissioning"),
     ):
         session.merge(
             StationRecord(
@@ -89,7 +92,7 @@ def _seed_factory(session: Session) -> None:
                 id=_uuid(identifier),
                 factory_id=_uuid(FACTORY_ID),
                 product_code=code,
-                classification=1 if code == "P4900" else 2,
+                classification=3 if code == "P9001" else 1 if code == "P4900" else 2,
             )
         )
 
@@ -106,6 +109,8 @@ def _seed_product_events(session: Session) -> None:
         ("P4811", "S02", "2026-01-16T08:33:00+00:00", "WARNING", "POSITION-ENC-02"),
         ("P4900", "S01", "2026-01-20T08:00:00+00:00", "COMPLETED", None),
         ("P4900", "S02", "2026-01-20T08:04:00+00:00", "WARNING", "POSITION-ENC-02"),
+        ("P9001", "S07", "2026-02-02T10:00:00+00:00", "COMPLETED", None),
+        ("P9001", "S07", "2026-02-02T10:06:00+00:00", "FAILED", "PROTO-COMM-07"),
     )
     for index, (product_code, station_code, event_at, status, error_code) in enumerate(
         events, start=1
@@ -118,7 +123,13 @@ def _seed_product_events(session: Session) -> None:
                 event_at=datetime.fromisoformat(event_at),
                 status=status,
                 error_code=error_code,
-                classification=1 if product_code == "P4900" else 2,
+                classification=(
+                    3
+                    if product_code == "P9001"
+                    else 1
+                    if product_code == "P4900"
+                    else 2
+                ),
             )
         )
 
@@ -132,11 +143,20 @@ def _seed_operational_records(session: Session) -> None:
             classification=2,
         )
     )
+    session.merge(
+        ProductionOrderRecord(
+            id=_uuid("00000000-0000-0000-0000-000000000502"),
+            factory_id=_uuid(FACTORY_ID),
+            order_code="PO-P9001-PROTOTYPE",
+            classification=3,
+        )
+    )
     for index, (station, observed_at, state, error_code) in enumerate(
         (
             ("S02", "2026-01-16T09:00:00+00:00", "FAULTED", "POSITION-ENC-02"),
             ("S04", "2026-01-15T08:10:00+00:00", "FAULTED", "QUALITY-09"),
             ("S02", "2026-01-20T08:05:00+00:00", "RUNNING", None),
+            ("S07", "2026-02-02T10:07:00+00:00", "FAULTED", "PROTO-COMM-07"),
         ),
         start=201,
     ):
@@ -147,7 +167,13 @@ def _seed_operational_records(session: Session) -> None:
                 observed_at=datetime.fromisoformat(observed_at),
                 state=state,
                 active_error_code=error_code,
-                classification=1 if observed_at == "2026-01-20T08:05:00+00:00" else 2,
+                classification=(
+                    3
+                    if station == "S07"
+                    else 1
+                    if observed_at == "2026-01-20T08:05:00+00:00"
+                    else 2
+                ),
             )
         )
     session.merge(
@@ -169,6 +195,17 @@ def _seed_operational_records(session: Session) -> None:
             result="REJECTED",
             defect_code="QUALITY-09",
             classification=2,
+        )
+    )
+    session.merge(
+        QualityInspectionRecord(
+            id=_uuid("00000000-0000-0000-0000-000000000702"),
+            product_id=_uuid(PRODUCTS["P9001"]),
+            station_id=_uuid(STATIONS["S07"]),
+            inspected_at=datetime(2026, 2, 2, 10, 6, tzinfo=UTC),
+            result="REJECTED",
+            defect_code="PROTO-COMM-07",
+            classification=3,
         )
     )
     for index, action in enumerate(

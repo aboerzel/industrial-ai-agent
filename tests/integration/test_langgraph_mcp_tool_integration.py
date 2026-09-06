@@ -69,10 +69,15 @@ class FakeLLMClient:
 @dataclass(frozen=True)
 class StaticExecutionZoneResolver:
     zone: ExecutionZone
+    max_data_classification: DataClassification = DataClassification.PUBLIC
 
     def get_execution_zone(self, profile_name: str) -> ExecutionZone:
         del profile_name
         return self.zone
+
+    def get_max_data_classification(self, profile_name: str) -> DataClassification:
+        del profile_name
+        return self.max_data_classification
 
 
 def _tool_response(

@@ -38,10 +38,15 @@ class RecordingLLMClient:
 @dataclass(frozen=True)
 class FixedExecutionZoneResolver:
     execution_zone: object | None
+    max_data_classification: object | None = DataClassification.RESTRICTED
 
     def get_execution_zone(self, profile_name: str) -> object | None:
         del profile_name
         return self.execution_zone
+
+    def get_max_data_classification(self, profile_name: str) -> object | None:
+        del profile_name
+        return self.max_data_classification
 
 
 def create_request(content: str = "synthetic request") -> LLMRequest:
@@ -99,9 +104,9 @@ def test_effective_classification_requires_known_input() -> None:
         (DataClassification.PUBLIC, ExecutionZone.LOCAL, True),
         (DataClassification.PUBLIC, ExecutionZone.PUBLIC_CLOUD, True),
         (DataClassification.INTERNAL, ExecutionZone.LOCAL, True),
-        (DataClassification.INTERNAL, ExecutionZone.PUBLIC_CLOUD, False),
+        (DataClassification.INTERNAL, ExecutionZone.PUBLIC_CLOUD, True),
         (DataClassification.CONFIDENTIAL, ExecutionZone.LOCAL, True),
-        (DataClassification.CONFIDENTIAL, ExecutionZone.PUBLIC_CLOUD, False),
+        (DataClassification.CONFIDENTIAL, ExecutionZone.PUBLIC_CLOUD, True),
         (DataClassification.RESTRICTED, ExecutionZone.LOCAL, True),
         (DataClassification.RESTRICTED, ExecutionZone.PUBLIC_CLOUD, False),
     ],
@@ -111,7 +116,18 @@ def test_initial_egress_matrix(
     zone: ExecutionZone,
     expected: bool,
 ) -> None:
-    assert ModelEgressPolicy().is_allowed(classification, zone) is expected
+    assert (
+        ModelEgressPolicy().is_allowed(
+            classification,
+            zone,
+            (
+                DataClassification.RESTRICTED
+                if zone is ExecutionZone.LOCAL
+                else DataClassification.CONFIDENTIAL
+            ),
+        )
+        is expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -127,7 +143,12 @@ def test_egress_policy_denies_missing_or_unknown_values(
     classification: object | None,
     zone: object | None,
 ) -> None:
-    assert ModelEgressPolicy().is_allowed(classification, zone) is False
+    assert (
+        ModelEgressPolicy().is_allowed(
+            classification, zone, DataClassification.CONFIDENTIAL
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -159,7 +180,9 @@ def test_denied_public_cloud_request_never_reaches_adapter() -> None:
     adapter = RecordingLLMClient()
     client = EgressCheckedLLMClient(
         adapter,
-        FixedExecutionZoneResolver(ExecutionZone.PUBLIC_CLOUD),
+        FixedExecutionZoneResolver(
+            ExecutionZone.PUBLIC_CLOUD, DataClassification.PUBLIC
+        ),
         DataClassification.CONFIDENTIAL,
     )
 

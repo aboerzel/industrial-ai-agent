@@ -42,6 +42,7 @@ def make_profile(
     quality: QualityClass = QualityClass.STANDARD,
     cost: CostClass = CostClass.LOW,
     zone: ExecutionZone = ExecutionZone.LOCAL,
+    max_data_classification: DataClassification = DataClassification.RESTRICTED,
 ) -> ModelProfileMetadata:
     return ModelProfileMetadata(
         profile=ModelProfile(name),
@@ -49,6 +50,7 @@ def make_profile(
         quality_class=quality,
         cost_class=cost,
         execution_zone=zone,
+        max_data_classification=max_data_classification,
     )
 
 
@@ -84,13 +86,7 @@ def test_public_task_sees_local_and_public_cloud_profiles() -> None:
     assert profile_names(eligible) == ("local", "public")
 
 
-@pytest.mark.parametrize(
-    "classification",
-    [DataClassification.CONFIDENTIAL, DataClassification.RESTRICTED],
-)
-def test_sensitive_task_never_sees_public_fast(
-    classification: DataClassification,
-) -> None:
+def test_confidential_task_sees_public_profile_with_sufficient_maximum() -> None:
     candidates = (
         make_profile("local_quality", quality=QualityClass.HIGH),
         make_profile(
@@ -101,14 +97,32 @@ def test_sensitive_task_never_sees_public_fast(
     )
 
     eligible = DeterministicModelRouter().eligible_profiles(
-        requirements(classification=classification),
+        requirements(classification=DataClassification.CONFIDENTIAL),
         candidates,
+    )
+
+    assert profile_names(eligible) == ("local_quality", "public_fast")
+
+
+def test_restricted_task_excludes_public_profile_below_its_maximum() -> None:
+    candidates = (
+        make_profile("local_quality", quality=QualityClass.HIGH),
+        make_profile(
+            "public_fast",
+            quality=QualityClass.HIGH,
+            zone=ExecutionZone.PUBLIC_CLOUD,
+            max_data_classification=DataClassification.CONFIDENTIAL,
+        ),
+    )
+
+    eligible = DeterministicModelRouter().eligible_profiles(
+        requirements(classification=DataClassification.RESTRICTED), candidates
     )
 
     assert profile_names(eligible) == ("local_quality",)
 
 
-def test_cost_preference_cannot_override_security_rejection() -> None:
+def test_public_deployment_is_preferred_after_security_eligibility() -> None:
     candidates = (
         make_profile("local_expensive", cost=CostClass.HIGH),
         make_profile("public_cheap", zone=ExecutionZone.PUBLIC_CLOUD),
@@ -122,7 +136,7 @@ def test_cost_preference_cannot_override_security_rejection() -> None:
         candidates,
     )
 
-    assert selected == ModelProfile("local_expensive")
+    assert selected == ModelProfile("public_cheap")
 
 
 def test_profile_without_required_tool_calling_is_excluded() -> None:
@@ -232,18 +246,24 @@ def test_profile_id_breaks_complete_tie_independently_of_input_order() -> None:
 
 def test_no_eligible_profile_raises_structured_error() -> None:
     task = requirements(
-        classification=DataClassification.CONFIDENTIAL,
+        classification=DataClassification.RESTRICTED,
         task_role=TaskRole.TROUBLESHOOTING,
     )
 
     with pytest.raises(NoEligibleModelError) as captured_error:
         DeterministicModelRouter().route(
             task,
-            (make_profile("public_fast", zone=ExecutionZone.PUBLIC_CLOUD),),
+            (
+                make_profile(
+                    "public_fast",
+                    zone=ExecutionZone.PUBLIC_CLOUD,
+                    max_data_classification=DataClassification.CONFIDENTIAL,
+                ),
+            ),
         )
 
     assert captured_error.value.task_role is TaskRole.TROUBLESHOOTING
-    assert captured_error.value.data_classification is DataClassification.CONFIDENTIAL
+    assert captured_error.value.data_classification is DataClassification.RESTRICTED
 
 
 def test_invalid_core_metadata_fails_closed() -> None:
@@ -272,6 +292,7 @@ def test_selected_profile_is_always_egress_eligible(
     assert policy.is_allowed(
         classification,
         configuration.get_execution_zone(selected.name),
+        configuration.get_max_data_classification(selected.name),
     )
 
 

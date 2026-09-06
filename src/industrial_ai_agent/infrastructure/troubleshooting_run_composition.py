@@ -142,7 +142,9 @@ def create_default_troubleshooting_run_service(
         "KNOWLEDGE_MCP_URL", DEFAULT_KNOWLEDGE_MCP_URL
     )
 
-    def mcp_tool_provider_factory(policy: ResolvedRunPolicy) -> McpLangChainToolProvider:
+    def mcp_tool_provider_factory(
+        policy: ResolvedRunPolicy,
+    ) -> McpLangChainToolProvider:
         return McpLangChainToolProvider(
             _mcp_server_configurations(
                 mcp_transport=transport,
@@ -155,6 +157,7 @@ def create_default_troubleshooting_run_service(
             data_classification=policy.data_classification.name,
             run_profile=policy.run_profile.value,
         )
+
     return TroubleshootingRunService(
         router=DeterministicModelRouter(policy),
         profiles=configuration.get_routing_profiles(),
@@ -209,34 +212,49 @@ def _mcp_server_configurations(
     else:
         raise ValueError("AGENT_MCP_TRANSPORT must be either 'http' or 'stdio'")
 
-    return (
-        McpServerConfiguration(
-            server_id="factory",
-            transport=factory_transport,
-            allowed_tool_names=frozenset(
+    candidates = (
+        (
+            "factory",
+            factory_transport,
+            frozenset(
                 tool
                 for tool in DEFAULT_ALLOWED_FACTORY_TOOLS
                 if tool in run_policy.allowed_tool_names
             ),
         ),
-        McpServerConfiguration(
-            server_id="knowledge",
-            transport=knowledge_transport,
-            allowed_tool_names=frozenset(
+        (
+            "knowledge",
+            knowledge_transport,
+            frozenset(
                 tool
                 for tool in DEFAULT_ALLOWED_KNOWLEDGE_TOOLS
                 if tool in run_policy.allowed_tool_names
             ),
         ),
     )
+    # Do not establish an MCP session for a server that has no capability in this
+    # server-resolved run scope. This preserves the policy boundary before discovery.
+    return tuple(
+        McpServerConfiguration(
+            server_id=server_id,
+            transport=transport,
+            allowed_tool_names=allowed_tool_names,
+        )
+        for server_id, transport, allowed_tool_names in candidates
+        if allowed_tool_names
+    )
 
 
 def _required_mcp_bearer_token(client_identity: str) -> str:
     token_name = (
-        MCP_INDUSTRIAL_AGENT_TOKEN_ENV
+        "MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN"
+        if client_identity == "industrial-agent-public"
+        else MCP_INDUSTRIAL_AGENT_TOKEN_ENV
         if client_identity == "industrial-agent"
         else "MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN"
         if client_identity == "industrial-agent-internal"
+        else "MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN"
+        if client_identity == "industrial-agent-restricted"
         else None
     )
     if token_name is None:

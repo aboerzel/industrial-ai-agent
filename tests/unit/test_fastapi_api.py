@@ -67,6 +67,8 @@ class FakeRunService:
     ) -> AgentRunResult:
         self.messages.append(message)
         self.policies.append(run_policy)
+        if self._error is not None:
+            raise self._error
         assert self._result is not None
         return self._result
 
@@ -140,7 +142,10 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
 
     response = client.post(
         "/api/v1/runs",
-        json={"message": "  Investigate product P4711.  "},
+        json={
+            "message": "  Investigate product P4711.  ",
+            "user_clearance": "CONFIDENTIAL",
+        },
     )
 
     assert response.status_code == 200
@@ -148,12 +153,14 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
     assert set(payload) == {
         "run_id",
         "status",
+        "data_classification",
         "answer",
         "tool_calls",
         "approval_request",
     }
     assert RunResponse.model_validate(payload).model_dump(mode="json") == payload
     assert payload["status"] == "success"
+    assert payload["data_classification"] == "CONFIDENTIAL"
     assert payload["answer"] == "P4711 failed at S04."
     assert payload["tool_calls"] == [
         {"tool": "get_product_history", "arguments": {"product_id": "P4711"}}
@@ -197,6 +204,91 @@ def test_create_run_rejects_all_client_controlled_security_fields(field: str) ->
     )
 
     assert response.status_code == 422
+
+
+def test_demo_clearance_is_server_mapped_and_cannot_raise_run_classification() -> None:
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "What capabilities does the troubleshooting agent provide?",
+            "user_clearance": "RESTRICTED",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data_classification"] == "PUBLIC"
+    assert service.policies[0].data_classification is DataClassification.PUBLIC
+    assert service.policies[0].mcp_clearance_ceiling is DataClassification.PUBLIC
+    assert service.policies[0].mcp_client_identity == "industrial-agent-public"
+
+
+@pytest.mark.parametrize("clearance", ("PUBLIC", "INTERNAL"))
+def test_insufficient_demo_clearance_cannot_start_confidential_case_or_invoke_a_model(
+    clearance: str,
+) -> None:
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P4711 at S04.", "user_clearance": clearance},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "requested_data_unavailable"
+    assert service.messages == []
+
+
+@pytest.mark.parametrize("clearance", ("CONFIDENTIAL", "RESTRICTED"))
+def test_sufficient_demo_clearance_keeps_confidential_case_at_confidential_ceiling(
+    clearance: str,
+) -> None:
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P4711 at S04.", "user_clearance": clearance},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data_classification"] == "CONFIDENTIAL"
+    assert service.policies[0].data_classification is DataClassification.CONFIDENTIAL
+    assert service.policies[0].mcp_clearance_ceiling is DataClassification.CONFIDENTIAL
+    assert service.policies[0].mcp_client_identity == "industrial-agent"
+
+
+def test_confidential_demo_user_cannot_start_restricted_case_or_invoke_a_model() -> (
+    None
+):
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P9001 at S07.", "user_clearance": "CONFIDENTIAL"},
+    )
+
+    assert response.status_code == 404
+    assert service.messages == []
+
+
+def test_restricted_demo_user_runs_restricted_case_with_restricted_policy() -> None:
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P9001 at S07.", "user_clearance": "RESTRICTED"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data_classification"] == "RESTRICTED"
+    assert service.policies[0].data_classification is DataClassification.RESTRICTED
+    assert service.policies[0].mcp_client_identity == "industrial-agent-restricted"
 
 
 def test_structured_internal_diagnostic_uses_only_server_resolved_policy() -> None:
@@ -256,7 +348,7 @@ def test_successful_public_response_sanitizes_diagnostic_text() -> None:
     )
     client = TestClient(create_app(FakeRunService(result=result)))
 
-    response = client.post("/api/v1/runs", json={"message": "Investigate P4711."})
+    response = client.post("/api/v1/runs", json=_confidential_request())
 
     assert response.status_code == 200
     assert response.json()["answer"] == (
@@ -286,7 +378,7 @@ def test_no_eligible_model_maps_to_service_unavailable() -> None:
         )
     )
 
-    response = client.post("/api/v1/runs", json={"message": "Investigate P4711."})
+    response = client.post("/api/v1/runs", json=_confidential_request())
 
     assert response.status_code == 503
     assert response.json()["code"] == "no_eligible_model"
@@ -297,7 +389,7 @@ def test_model_egress_denial_fails_closed() -> None:
         create_app(FakeRunService(error=ModelEgressDeniedError("denied")))
     )
 
-    response = client.post("/api/v1/runs", json={"message": "Investigate P4711."})
+    response = client.post("/api/v1/runs", json=_confidential_request())
 
     assert response.status_code == 403
     assert response.json() == {
@@ -311,7 +403,7 @@ def test_mcp_unavailability_maps_to_service_unavailable() -> None:
         create_app(FakeRunService(error=McpServiceUnavailableError("unavailable")))
     )
 
-    response = client.post("/api/v1/runs", json={"message": "Investigate P4711."})
+    response = client.post("/api/v1/runs", json=_confidential_request())
 
     assert response.status_code == 503
     assert response.json() == {
@@ -330,7 +422,7 @@ def test_streamable_http_connection_failure_maps_to_service_unavailable(
     )
     client = TestClient(create_app(service))
 
-    response = client.post("/api/v1/runs", json={"message": "Investigate P4711."})
+    response = client.post("/api/v1/runs", json=_confidential_request())
 
     assert response.status_code == 503
     assert response.json()["code"] == "mcp_service_unavailable"
@@ -349,7 +441,7 @@ def test_streamable_http_connection_failure_maps_to_service_unavailable(
 def test_unexpected_failure_does_not_expose_internal_details(error: Exception) -> None:
     client = TestClient(create_app(FakeRunService(error=error)))
 
-    response = client.post("/api/v1/runs", json={"message": "Investigate P4711."})
+    response = client.post("/api/v1/runs", json=_confidential_request())
 
     assert response.status_code == 500
     assert response.json() == {
@@ -384,3 +476,7 @@ def _success_result() -> AgentRunResult:
             ),
         ),
     )
+
+
+def _confidential_request() -> dict[str, str]:
+    return {"message": "Investigate P4711.", "user_clearance": "CONFIDENTIAL"}

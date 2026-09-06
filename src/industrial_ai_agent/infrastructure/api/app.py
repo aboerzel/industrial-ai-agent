@@ -16,9 +16,10 @@ from industrial_ai_agent.agent.model_egress import (
 from industrial_ai_agent.agent.model_routing import NoEligibleModelError
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
-    AgentRunProfile,
     InternalDiagnosticTarget,
     ResolvedRunPolicy,
+    RunClearanceDeniedError,
+    resolve_demo_run_profile,
 )
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
@@ -26,6 +27,9 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpServiceUnavailableError,
     RunExecution,
     internal_diagnostic_message,
+)
+from industrial_ai_agent.infrastructure.api.demo_security import (
+    DemoSecurityContextResolver,
 )
 from industrial_ai_agent.infrastructure.api.output_sanitization import (
     sanitize_public_text,
@@ -39,6 +43,7 @@ from industrial_ai_agent.infrastructure.api.schemas import (
     ApiErrorResponse,
     ApprovalRequestResponse,
     CreateRunRequest,
+    DataClassificationLabel,
     HealthResponse,
     InternalDiagnosticRequest,
     PublicToolName,
@@ -77,6 +82,7 @@ def create_app(
     app.state.run_service = run_service
     app.state.run_store = run_store
     app.state.classification_policy = AgentRunClassificationPolicy()
+    app.state.demo_security_context_resolver = DemoSecurityContextResolver()
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
     if allowed_origins:
         # noinspection PyTypeChecker
@@ -106,12 +112,23 @@ def create_app(
             status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ApiErrorResponse},
             status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ApiErrorResponse},
         },
-        summary="Start one confidential troubleshooting run",
+        summary="Start one server-classified troubleshooting run",
     )
     async def create_run(payload: CreateRunRequest, request: Request) -> RunResponse:
-        policy = _classification_policy(request).resolve(
-            AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+        security_context = _demo_security_context(request).resolve(
+            payload.user_clearance
         )
+        try:
+            policy = _classification_policy(request).resolve(
+                resolve_demo_run_profile(payload.message),
+                security_context=security_context,
+            )
+        except RunClearanceDeniedError:
+            _raise_api_run_error(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="requested_data_unavailable",
+                message="The requested data is unavailable.",
+            )
         return await _start_run(request, message=payload.message, policy=policy)
 
     @runs.post(
@@ -255,6 +272,10 @@ def _classification_policy(request: Request) -> AgentRunClassificationPolicy:
     return request.app.state.classification_policy
 
 
+def _demo_security_context(request: Request) -> DemoSecurityContextResolver:
+    return request.app.state.demo_security_context_resolver
+
+
 def _persistent_hitl_enabled(service: AgentRunService) -> bool:
     """Allow an Infrastructure observability decorator around the application service."""
     return bool(getattr(service, "persistent_hitl_enabled", False))
@@ -284,10 +305,7 @@ async def _start_run(
                 model_profile=profile.name,
             )
             return _to_run_response(await _persist_execution(store, run_id, execution))
-        if policy.run_profile is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING:
-            result = await service.run(message)
-        else:
-            result = await service.run_with_policy(message, run_policy=policy)
+        result = await service.run_with_policy(message, run_policy=policy)
     except NoEligibleModelError:
         await store.fail(run_id, "no_eligible_model")
         _raise_api_run_error(
@@ -331,6 +349,7 @@ def _to_run_response(record: StoredAgentRun) -> RunResponse:
     return RunResponse(
         run_id=record.run_id,
         status=record.status,
+        data_classification=DataClassificationLabel[record.data_classification.name],
         answer=sanitize_public_text(result.final_answer)
         if result is not None
         else None,

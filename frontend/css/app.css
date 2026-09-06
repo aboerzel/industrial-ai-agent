@@ -16,7 +16,8 @@ body {
 }
 
 button,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -121,6 +122,22 @@ textarea {
   padding: 12px;
   color: #17211f;
   background: #fbfdfc;
+}
+
+select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #93a59d;
+  border-radius: 4px;
+  padding: 8px 10px;
+  color: #17211f;
+  background: #fbfdfc;
+}
+
+select:focus {
+  outline: 3px solid #b9d8ca;
+  outline-offset: 1px;
+  border-color: #267554;
 }
 
 textarea:focus {

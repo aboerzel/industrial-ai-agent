@@ -106,7 +106,9 @@ def test_unknown_classification_prevents_llm_invocation() -> None:
 
 def test_no_eligible_egress_profile_is_not_allowed_without_provider_call() -> None:
     client = _RecordingClient(_valid_output())
-    public_only = _profile("public", ExecutionZone.PUBLIC_CLOUD)
+    public_only = _profile(
+        "public", ExecutionZone.PUBLIC_CLOUD, DataClassification.PUBLIC
+    )
     reasoner = LlmRcaReasoner(
         router=DeterministicModelRouter(),
         profiles=(public_only,),
@@ -123,7 +125,7 @@ def test_final_egress_check_still_blocks_provider_after_routing() -> None:
     delegate = _RecordingClient(_valid_output())
     checked = EgressCheckedLLMClient(
         delegate,
-        _FixedZoneResolver(ExecutionZone.PUBLIC_CLOUD),
+        _FixedZoneResolver(ExecutionZone.PUBLIC_CLOUD, DataClassification.PUBLIC),
         DataClassification.INTERNAL,
     )
     reasoner = LlmRcaReasoner(
@@ -233,7 +235,11 @@ def _reasoner(client: LLMClient) -> LlmRcaReasoner:
     )
 
 
-def _profile(name: str, zone: ExecutionZone) -> ModelProfileMetadata:
+def _profile(
+    name: str,
+    zone: ExecutionZone,
+    max_data_classification: DataClassification = DataClassification.RESTRICTED,
+) -> ModelProfileMetadata:
     from industrial_ai_agent.agent.llm import ModelProfile
 
     return ModelProfileMetadata(
@@ -242,6 +248,7 @@ def _profile(name: str, zone: ExecutionZone) -> ModelProfileMetadata:
         quality_class=QualityClass.STANDARD,
         cost_class=CostClass.LOW,
         execution_zone=zone,
+        max_data_classification=max_data_classification,
     )
 
 
@@ -372,7 +379,12 @@ class _BlockingClient(LLMClient):
 @dataclass(frozen=True)
 class _FixedZoneResolver:
     zone: ExecutionZone
+    max_data_classification: DataClassification = DataClassification.RESTRICTED
 
     def get_execution_zone(self, profile_name: str) -> ExecutionZone:
         del profile_name
         return self.zone
+
+    def get_max_data_classification(self, profile_name: str) -> DataClassification:
+        del profile_name
+        return self.max_data_classification

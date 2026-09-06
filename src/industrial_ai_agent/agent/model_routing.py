@@ -104,6 +104,7 @@ class ModelProfileMetadata:
     quality_class: QualityClass
     cost_class: CostClass
     execution_zone: ExecutionZone
+    max_data_classification: DataClassification
 
     def __post_init__(self) -> None:
         if not isinstance(self.profile, ModelProfile):
@@ -121,6 +122,8 @@ class ModelProfileMetadata:
             raise TypeError("Unknown model cost class")
         if not isinstance(self.execution_zone, ExecutionZone):
             raise TypeError("Unknown model execution zone")
+        if not isinstance(self.max_data_classification, DataClassification):
+            raise TypeError("Unknown model maximum data classification")
 
 
 class NoEligibleModelError(RuntimeError):
@@ -147,6 +150,7 @@ class DeterministicModelRouter:
             if self._egress_policy.is_allowed(
                 requirements.data_classification,
                 profile.execution_zone,
+                profile.max_data_classification,
             )
         )
         capability_eligible = (
@@ -169,4 +173,24 @@ class DeterministicModelRouter:
         eligible_profiles = self.eligible_profiles(requirements, profiles)
         if not eligible_profiles:
             raise NoEligibleModelError(requirements)
-        return min(eligible_profiles, key=requirements.cost_preference.sort_key).profile
+        return min(
+            eligible_profiles,
+            key=lambda profile: (
+                _deployment_preference(requirements, profile),
+                *requirements.cost_preference.sort_key(profile),
+            ),
+        ).profile
+
+
+def _deployment_preference(
+    requirements: TaskRequirements, profile: ModelProfileMetadata
+) -> int:
+    """Prefer an eligible public deployment for normal demo tasks.
+
+    Security eligibility has already excluded profiles that cannot process the
+    effective classification. This is therefore an availability/selection preference,
+    not an egress authorization rule.
+    """
+    if requirements.data_classification is DataClassification.RESTRICTED:
+        return 0
+    return 0 if profile.execution_zone is ExecutionZone.PUBLIC_CLOUD else 1

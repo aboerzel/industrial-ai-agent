@@ -192,6 +192,38 @@ def test_unavailable_langfuse_initialization_does_not_block_llm_execution(
         telemetry.shutdown()
 
 
+def test_langfuse_v4_uses_the_required_ingestion_header(monkeypatch) -> None:
+    received: dict[str, object] = {}
+
+    class _CapturingLangfuse:
+        def __init__(self, **kwargs: object) -> None:
+            received.update(kwargs)
+
+        def flush(self) -> None:
+            return None
+
+        def shutdown(self) -> None:
+            return None
+
+    monkeypatch.setitem(
+        sys.modules, "langfuse", SimpleNamespace(Langfuse=_CapturingLangfuse)
+    )
+    telemetry = configure_telemetry(
+        TelemetryConfiguration(
+            enabled=True,
+            langfuse_enabled=True,
+            langfuse_public_key="pk-lf-test",
+            langfuse_secret_key="sk-lf-test",
+        )
+    )
+
+    try:
+        assert telemetry.langfuse_enabled
+        assert received["additional_headers"] == {"x-langfuse-ingestion-version": "4"}
+    finally:
+        telemetry.shutdown()
+
+
 def _recording_langfuse_telemetry() -> tuple[Telemetry, InMemorySpanExporter]:
     exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
@@ -218,6 +250,7 @@ def _configuration(*, api_cost_usd: int | None) -> LLMConfiguration:
                     "temperature": 0,
                     "authentication": "none",
                     "execution_zone": "LOCAL",
+                    "max_data_classification": "RESTRICTED",
                     "capabilities": ["TEXT"],
                     "quality_class": "HIGH",
                     "cost_class": "LOW",

@@ -57,3 +57,12 @@ DEMO_ENGINEER_SECURITY_CONTEXT = SecurityContext(
     clearance=DataClassification.CONFIDENTIAL,
     authenticated=False,
 )
+
+# Runtime persistence is a server-owned application concern, not the simulated UI user.
+# Factory and Knowledge access still use the server-selected MCP identity for each run.
+DEMO_RUNTIME_SECURITY_CONTEXT = SecurityContext(
+    subject_id="demo-runtime-service",
+    roles=("runtime-service",),
+    clearance=DataClassification.RESTRICTED,
+    authenticated=True,
+)

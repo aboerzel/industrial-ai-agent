@@ -13,7 +13,7 @@
   <body>
     <main class="shell">
       <header class="site-header">
-        <p class="eyebrow">LOCAL DEMO / CONFIDENTIAL</p>
+        <p class="eyebrow">LOCAL DEMO / CLASSIFIED DATA</p>
         <h1>Industrial AI Agent</h1>
         <p class="subtitle">
           Troubleshooting assistant using LangGraph and MCP-based industrial services.
@@ -30,9 +30,17 @@
             <span class="connection-indicator" aria-hidden="true"></span>
           </div>
 
+          <label for="user-clearance">User clearance (demo)</label>
+          <select id="user-clearance" name="user-clearance">
+            <option value="PUBLIC" selected>PUBLIC</option>
+            <option value="INTERNAL">INTERNAL</option>
+            <option value="CONFIDENTIAL">CONFIDENTIAL</option>
+            <option value="RESTRICTED">RESTRICTED</option>
+          </select>
+          <p class="field-note">Demo-only security simulation. The server determines the run classification.</p>
+
           <label for="message">Troubleshooting request</label>
           <textarea id="message" name="message" required rows="8">Investigate why product P4711 failed at station S04. Use the available documentation if needed.</textarea>
-          <p class="field-note">Requests are classified as confidential by the server.</p>
           <button id="run-button" type="submit">Run Investigation</button>
         </form>
 
@@ -49,6 +57,10 @@
             <div>
               <dt>Run ID</dt>
               <dd id="run-id">Not started</dd>
+            </div>
+            <div>
+              <dt>Classification</dt>
+              <dd id="run-classification">Not started</dd>
             </div>
           </dl>
 

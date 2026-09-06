@@ -10,14 +10,16 @@ from industrial_ai_agent.agent.model_routing import (
     TaskRequirements,
     TaskRole,
 )
-from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 
 
 class AgentRunProfile(StrEnum):
     """Fixed server-side execution contracts; clients never submit these values."""
 
+    PUBLIC_INFORMATION = "PUBLIC_INFORMATION"
     INTERNAL_DIAGNOSTIC = "INTERNAL_DIAGNOSTIC"
     CONFIDENTIAL_TROUBLESHOOTING = "CONFIDENTIAL_TROUBLESHOOTING"
+    RESTRICTED_TROUBLESHOOTING = "RESTRICTED_TROUBLESHOOTING"
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,7 @@ class InternalDiagnosticTarget:
 INTERNAL_DIAGNOSTIC_TOOLS = frozenset(
     {"get_product_history", "get_machine_status", "search_documentation"}
 )
+PUBLIC_INFORMATION_TOOLS = frozenset({"search_documentation"})
 CONFIDENTIAL_TROUBLESHOOTING_TOOLS = frozenset(
     {
         "get_product_history",
@@ -39,6 +42,10 @@ CONFIDENTIAL_TROUBLESHOOTING_TOOLS = frozenset(
         "create_maintenance_ticket",
     }
 )
+
+
+class RunClearanceDeniedError(PermissionError):
+    """The authenticated demo user cannot access the server-resolved run scope."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,8 +60,8 @@ class ResolvedRunPolicy:
     mcp_client_identity: str
 
     def __post_init__(self) -> None:
-        if self.data_classification is not self.mcp_clearance_ceiling:
-            raise ValueError("Run classification must match its immutable RLS ceiling")
+        if self.mcp_clearance_ceiling < self.data_classification:
+            raise ValueError("RLS clearance cannot be lower than run classification")
         if self.task_requirements.data_classification is not self.data_classification:
             raise ValueError("Task requirements must match the resolved classification")
         if not self.allowed_tool_names:
@@ -66,24 +73,54 @@ class ResolvedRunPolicy:
 class AgentRunClassificationPolicy:
     """Map known server-side profiles to non-downgradable execution scopes."""
 
-    def resolve(self, profile: AgentRunProfile) -> ResolvedRunPolicy:
+    def resolve(
+        self,
+        profile: AgentRunProfile,
+        *,
+        security_context: SecurityContext | None = None,
+    ) -> ResolvedRunPolicy:
+        classification = _profile_classification(profile)
+        clearance = security_context.clearance if security_context else classification
+        if clearance < classification:
+            raise RunClearanceDeniedError("Requested demo data is unavailable")
+        # A higher user clearance authorizes the case but cannot broaden a lower-classified
+        # run's MCP/RLS data view. The run requirement is the least-privilege ceiling.
+        rls_clearance = classification
+        if profile is AgentRunProfile.PUBLIC_INFORMATION:
+            return ResolvedRunPolicy(
+                run_profile=profile,
+                data_classification=classification,
+                mcp_clearance_ceiling=rls_clearance,
+                task_requirements=_requirements(classification),
+                allowed_tool_names=PUBLIC_INFORMATION_TOOLS,
+                mcp_client_identity=_mcp_identity_for(rls_clearance),
+            )
         if profile is AgentRunProfile.INTERNAL_DIAGNOSTIC:
             return ResolvedRunPolicy(
                 run_profile=profile,
-                data_classification=DataClassification.INTERNAL,
-                mcp_clearance_ceiling=DataClassification.INTERNAL,
-                task_requirements=_requirements(DataClassification.INTERNAL),
+                data_classification=classification,
+                mcp_clearance_ceiling=rls_clearance,
+                task_requirements=_requirements(classification),
                 allowed_tool_names=INTERNAL_DIAGNOSTIC_TOOLS,
-                mcp_client_identity="industrial-agent-internal",
+                mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
         if profile is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING:
             return ResolvedRunPolicy(
                 run_profile=profile,
-                data_classification=DataClassification.CONFIDENTIAL,
-                mcp_clearance_ceiling=DataClassification.CONFIDENTIAL,
-                task_requirements=_requirements(DataClassification.CONFIDENTIAL),
+                data_classification=classification,
+                mcp_clearance_ceiling=rls_clearance,
+                task_requirements=_requirements(classification),
                 allowed_tool_names=CONFIDENTIAL_TROUBLESHOOTING_TOOLS,
-                mcp_client_identity="industrial-agent",
+                mcp_client_identity=_mcp_identity_for(rls_clearance),
+            )
+        if profile is AgentRunProfile.RESTRICTED_TROUBLESHOOTING:
+            return ResolvedRunPolicy(
+                run_profile=profile,
+                data_classification=classification,
+                mcp_clearance_ceiling=rls_clearance,
+                task_requirements=_requirements(classification),
+                allowed_tool_names=CONFIDENTIAL_TROUBLESHOOTING_TOOLS,
+                mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
         raise ValueError("Unknown agent run profile")
 
@@ -109,3 +146,37 @@ def _requirements(classification: DataClassification) -> TaskRequirements:
         cost_preference=CostPreference.PREFER_QUALITY,
         data_classification=classification,
     )
+
+
+def _profile_classification(profile: AgentRunProfile) -> DataClassification:
+    return {
+        AgentRunProfile.PUBLIC_INFORMATION: DataClassification.PUBLIC,
+        AgentRunProfile.INTERNAL_DIAGNOSTIC: DataClassification.INTERNAL,
+        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING: DataClassification.CONFIDENTIAL,
+        AgentRunProfile.RESTRICTED_TROUBLESHOOTING: DataClassification.RESTRICTED,
+    }[profile]
+
+
+def _mcp_identity_for(clearance: DataClassification) -> str:
+    return {
+        DataClassification.PUBLIC: "industrial-agent-public",
+        DataClassification.INTERNAL: "industrial-agent-internal",
+        DataClassification.CONFIDENTIAL: "industrial-agent",
+        DataClassification.RESTRICTED: "industrial-agent-restricted",
+    }[clearance]
+
+
+def resolve_demo_run_profile(message: str) -> AgentRunProfile:
+    """Classify the bounded synthetic demo cases without accepting a client label.
+
+    This narrow resolver deliberately recognizes only the documented scenarios. It is
+    an outer-demo convenience, not a general data-classification engine.
+    """
+    normalized = message.upper()
+    if "P9001" in normalized or "S07" in normalized:
+        return AgentRunProfile.RESTRICTED_TROUBLESHOOTING
+    if "P4711" in normalized or "S04" in normalized:
+        return AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    if "P4900" in normalized or "S02" in normalized:
+        return AgentRunProfile.INTERNAL_DIAGNOSTIC
+    return AgentRunProfile.PUBLIC_INFORMATION

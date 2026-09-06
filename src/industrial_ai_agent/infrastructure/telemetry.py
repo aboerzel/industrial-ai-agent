@@ -450,6 +450,7 @@ def _configure_langfuse(
             release=configuration.langfuse_release,
             tracer_provider=tracer_provider,
             should_export_span=_should_export_to_langfuse,
+            additional_headers={"x-langfuse-ingestion-version": "4"},
         )
     except Exception:  # noqa: BLE001 - observability must fail open.
         return None

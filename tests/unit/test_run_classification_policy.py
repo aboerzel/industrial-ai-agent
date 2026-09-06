@@ -8,7 +8,7 @@ from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
     AgentRunProfile,
 )
-from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
 
 
@@ -20,6 +20,24 @@ def test_internal_diagnostic_policy_is_internal_and_strictly_read_only() -> None
     assert policy.allowed_tool_names == INTERNAL_DIAGNOSTIC_TOOLS
     assert "create_maintenance_ticket" not in policy.allowed_tool_names
     assert policy.mcp_client_identity == "industrial-agent-internal"
+
+
+def test_restricted_user_keeps_confidential_run_at_confidential_data_ceiling() -> None:
+    restricted_user = SecurityContext(
+        subject_id="restricted-demo-user",
+        roles=("demo-engineer",),
+        clearance=DataClassification.RESTRICTED,
+        authenticated=True,
+    )
+
+    policy = AgentRunClassificationPolicy().resolve(
+        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+        security_context=restricted_user,
+    )
+
+    assert policy.data_classification is DataClassification.CONFIDENTIAL
+    assert policy.mcp_clearance_ceiling is DataClassification.CONFIDENTIAL
+    assert policy.mcp_client_identity == "industrial-agent"
 
 
 def test_persisted_policy_rejects_classification_mismatch() -> None:

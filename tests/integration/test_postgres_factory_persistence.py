@@ -7,6 +7,10 @@ from zipfile import ZipFile
 import pytest
 from sqlalchemy import select, text
 
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunClassificationPolicy,
+    AgentRunProfile,
+)
 from industrial_ai_agent.domain.machine_status import MachineState
 from industrial_ai_agent.domain.product_history import (
     ProductId,
@@ -130,7 +134,7 @@ def test_schema_seed_and_repository_mapping_are_available_to_application_role() 
     assert history.classification is DataClassification.CONFIDENTIAL
     assert history.steps[1].status is ProductionStepStatus.WARNING
     assert history.steps[-1].error_code == "QUALITY-09"
-    assert len(documents) == 11
+    assert len(documents) == 12
     assert all(
         document.classification <= DataClassification.CONFIDENTIAL
         for document in documents
@@ -200,6 +204,64 @@ def test_rls_clearance_does_not_leak_between_repository_requests() -> None:
         session_factory.dispose()
 
 
+def test_restricted_demo_case_is_visible_only_at_restricted_clearance() -> None:
+    assert DATABASE_URL is not None
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    confidential = PostgreSqlProductHistoryRepository(
+        session_factory, _context(DataClassification.CONFIDENTIAL)
+    )
+    restricted = PostgreSqlProductHistoryRepository(
+        session_factory, _context(DataClassification.RESTRICTED)
+    )
+    try:
+        assert confidential.get_product_history(ProductId("P9001")) is None
+        history = restricted.get_product_history(ProductId("P9001"))
+        status = PostgreSqlMachineStatusRepository(
+            session_factory, _context(DataClassification.RESTRICTED)
+        ).get_machine_status(StationId("S07"))
+        documents = PostgreSqlDocumentCatalogRepository(
+            session_factory, _context(DataClassification.RESTRICTED)
+        ).list_documents()
+    finally:
+        session_factory.dispose()
+
+    assert history is not None
+    assert history.classification is DataClassification.RESTRICTED
+    assert history.steps[-1].error_code == "PROTO-COMM-07"
+    assert status is not None
+    assert status.classification is DataClassification.RESTRICTED
+    assert "P9001 S07 Restricted Commissioning Notes" in {
+        document.title for document in documents
+    }
+
+
+def test_restricted_user_confidential_run_keeps_confidential_rls_ceiling() -> None:
+    assert DATABASE_URL is not None
+    policy = AgentRunClassificationPolicy().resolve(
+        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+        security_context=_context(DataClassification.RESTRICTED),
+    )
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    confidential_run_context = _context(policy.mcp_clearance_ceiling)
+    try:
+        hidden_history = PostgreSqlProductHistoryRepository(
+            session_factory, confidential_run_context
+        ).get_product_history(ProductId("P9001"))
+        documents = PostgreSqlDocumentCatalogRepository(
+            session_factory, confidential_run_context
+        ).list_documents()
+    finally:
+        session_factory.dispose()
+
+    assert policy.data_classification is DataClassification.CONFIDENTIAL
+    assert policy.mcp_clearance_ceiling is DataClassification.CONFIDENTIAL
+    assert hidden_history is None
+    assert all(
+        document.classification <= DataClassification.CONFIDENTIAL
+        for document in documents
+    )
+
+
 def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
     """Guard the data links that make the portfolio documents operationally useful."""
     assert DATABASE_URL is not None
@@ -212,7 +274,15 @@ def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
                 session.scalars(
                     select(ProductRecord.product_code).where(
                         ProductRecord.product_code.in_(
-                            ("P4711", "P4801", "P4802", "P4805", "P4811", "P4900")
+                            (
+                                "P4711",
+                                "P4801",
+                                "P4802",
+                                "P4805",
+                                "P4811",
+                                "P4900",
+                                "P9001",
+                            )
                         )
                     )
                 )
@@ -236,7 +306,15 @@ def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
         session_factory.dispose()
 
     asset_text = _demo_asset_text()
-    assert product_codes == {"P4711", "P4801", "P4802", "P4805", "P4811", "P4900"}
+    assert product_codes == {
+        "P4711",
+        "P4801",
+        "P4802",
+        "P4805",
+        "P4811",
+        "P4900",
+        "P9001",
+    }
     assert len(positioning_events) == 6
     assert maintenance_actions == {
         "encoder replacement",
@@ -255,6 +333,9 @@ def test_orm_seed_and_catalog_tell_one_synthetic_factory_story() -> None:
         "QUALITY-09",
         "MT-S02-20260117",
         "robot_trajectory_limit",
+        "P9001",
+        "S07",
+        "PROTO-COMM-07",
     ):
         assert identifier in asset_text
 
@@ -264,6 +345,9 @@ def _demo_asset_text() -> str:
     pdf_text = (
         root / "confidential" / "Positioning_Error_Troubleshooting.pdf"
     ).read_text(encoding="latin-1")
+    markdown_text = (
+        root / "restricted" / "P9001_S07_Commissioning_Notes.md"
+    ).read_text(encoding="utf-8")
     zipped_text = ""
     for path in (
         root / "confidential" / "Maintenance_Report_S02.docx",
@@ -276,4 +360,4 @@ def _demo_asset_text() -> str:
                 for name in archive.namelist()
                 if name.endswith(".xml")
             )
-    return pdf_text + zipped_text
+    return pdf_text + markdown_text + zipped_text

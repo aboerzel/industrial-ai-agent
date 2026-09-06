@@ -381,6 +381,46 @@ profile requires no API key. Authenticated profiles must read credential values 
 environment variables or the ignored local `.env` file; `.env.example` contains no
 secret values.
 
+## Classified Demo Runs
+
+The browser's `User clearance (demo)` select is a closed, server-validated simulation
+of authentication and authorization. The API creates a `SecurityContext` from it and
+uses a server-selected MCP identity to apply PostgreSQL RLS. It never accepts a client
+run classification, model profile, MCP credential, or execution zone.
+
+`User Clearance != Data Classification != Model max_data_classification`. Clearance
+controls which records may be visible; the server classifies the bounded synthetic task
+from its required demo evidence; each Model Profile independently declares its maximum
+permitted classification. An external public deployment is not a `PUBLIC`-data model:
+in this demo its explicit `max_data_classification = CONFIDENTIAL` egress policy permits
+PUBLIC, INTERNAL, and CONFIDENTIAL data. RESTRICTED remains local-only. The final
+pre-provider egress check repeats the profile maximum and execution-zone policy.
+For an allowed run, the server applies the lower of the user clearance and task need as
+the MCP/RLS ceiling, so a RESTRICTED user does not receive RESTRICTED data in a
+CONFIDENTIAL run.
+
+This is a demo-only authentication/authorization simulation and must be replaced by
+real identity-based authentication and authorization before production use.
+
+| Abfrage | Klassifizierung | Erwartetes Ergebnis |
+| --- | --- | --- |
+| What capabilities does the troubleshooting agent provide? | PUBLIC | Public Model; no protected production data. |
+| Explain the general troubleshooting workflow for a failed production step. | PUBLIC | General explanation; Public Model. |
+| What is the purpose of the factory and knowledge tools? | PUBLIC | Public demo architecture information; Public Model. |
+| Summarize the publicly available operating concept of the demo factory. | PUBLIC | PUBLIC Knowledge; Public Model. |
+| Investigate why product P4711 failed at station S04. Use the available documentation if needed. | CONFIDENTIAL | Factory plus optional Knowledge; Public Model preferred. |
+| Show the production history of P4711 and explain the failure at S04. | CONFIDENTIAL | Public Model preferred. |
+| Check whether the S04 failure of P4711 matches a known troubleshooting procedure. | CONFIDENTIAL | Knowledge retrieval plus Factory; Public Model preferred. |
+| Compare the observed P4711/S04 failure with the documented normal station behavior. | CONFIDENTIAL | Public Model preferred. |
+| Investigate why restricted prototype P9001 failed at station S07. | RESTRICTED | RESTRICTED clearance; local model only. |
+| Analyze the restricted engineering diagnostics for P9001/S07 and correlate them with its production history. | RESTRICTED | RESTRICTED clearance; local model only. |
+| Use the restricted commissioning notes to explain the P9001/S07 failure. | RESTRICTED | RESTRICTED clearance; local model only. |
+| Summarize the restricted failure investigation for P9001/S07 and recommend the next diagnostic step. | RESTRICTED | RESTRICTED clearance; local model only. |
+
+The synthetic P4711/S04 history, inspection evidence, and `QUALITY-09` procedure are
+CONFIDENTIAL. P9001/S07 is a separate RESTRICTED prototype commissioning case with
+RESTRICTED product, event, station, inspection, and Knowledge records.
+
 ## Development Principles
 
 * Prefer simple explicit code.

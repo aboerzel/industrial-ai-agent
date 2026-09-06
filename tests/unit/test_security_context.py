@@ -41,6 +41,10 @@ class _PublicCloudResolver:
         del profile_name
         return ExecutionZone.PUBLIC_CLOUD
 
+    def get_max_data_classification(self, profile_name: str) -> DataClassification:
+        del profile_name
+        return DataClassification.PUBLIC
+
 
 def _request() -> LLMRequest:
     return LLMRequest(

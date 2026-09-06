@@ -93,17 +93,35 @@ The initial policy explicitly allows only these combinations:
 | Data Classification | `LOCAL` | `PUBLIC_CLOUD` |
 |---------------------|---------|----------------|
 | `PUBLIC`            | Allow   | Allow          |
-| `INTERNAL`          | Allow   | Deny           |
-| `CONFIDENTIAL`      | Allow   | Deny           |
+| `INTERNAL`          | Allow   | Allow with an eligible profile maximum |
+| `CONFIDENTIAL`      | Allow   | Allow with an eligible profile maximum |
 | `RESTRICTED`        | Allow   | Deny           |
 
-Every unlisted combination is denied. An unknown classification, unknown zone, or
-incomplete Model Profile is denied. Public-cloud models must not process `INTERNAL`,
-`CONFIDENTIAL`, or `RESTRICTED` context under this initial policy.
+Every unlisted combination is denied. An unknown classification, unknown zone, missing
+profile maximum, or incomplete Model Profile is denied. Public-cloud models may process
+`INTERNAL` or `CONFIDENTIAL` context only when the selected deployment explicitly
+permits that classification; they must never process `RESTRICTED` context.
 
 An `Allow` entry is necessary but not sufficient for a model call: capability,
 authentication, availability, task requirements, and other deterministic checks still
 apply. This matrix controls model-data egress only.
+
+### Profile Maximum Classification Refinement
+
+Every configured deployment-level Model Profile carries a required, validated
+`max_data_classification`. It is deny-by-default: a missing, malformed, or unknown value
+rejects the profile configuration and is not treated as a permissive default. Router
+eligibility and the final pre-provider egress boundary both require:
+
+```text
+effective_classification <= profile.max_data_classification
+```
+
+For the local demo, public-cloud profiles explicitly permit up to `CONFIDENTIAL` and
+local profiles explicitly permit up to `RESTRICTED`. The execution-zone matrix remains
+an independent restriction; profile maximums do not replace it. Routing applies security
+eligibility first and then deterministically prefers an eligible public-cloud profile
+for non-RESTRICTED normal agent tasks. `RESTRICTED` has no eligible public-cloud profile.
 
 ### Classification Propagation
 

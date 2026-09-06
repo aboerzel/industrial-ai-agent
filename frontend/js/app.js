@@ -2,9 +2,11 @@ import { ApiClientError, createRun, getRun, resumeRun } from "./api.js";
 
 const form = document.querySelector("#investigation-form");
 const messageInput = document.querySelector("#message");
+const userClearance = document.querySelector("#user-clearance");
 const runButton = document.querySelector("#run-button");
 const runStatus = document.querySelector("#run-status");
 const runId = document.querySelector("#run-id");
+const runClassification = document.querySelector("#run-classification");
 const answer = document.querySelector("#answer");
 const toolCalls = document.querySelector("#tool-calls");
 const errorMessage = document.querySelector("#error-message");
@@ -26,7 +28,7 @@ form.addEventListener("submit", async (event) => {
 
   setRunning();
   try {
-    const result = await createRun(message);
+    const result = await createRun(message, userClearance.value);
     renderRun(result);
   } catch (error) {
     showError(
@@ -50,6 +52,7 @@ function setRunning() {
   hideError();
   setStatus("running", "Running");
   runId.textContent = "Assigned by the API after completion";
+  runClassification.textContent = "Resolved by the server";
   answer.textContent = "The agent is investigating through the configured services.";
   answer.classList.add("empty-state");
   toolCalls.replaceChildren(createEmptyToolCall("Tool execution is in progress."));
@@ -58,6 +61,7 @@ function setRunning() {
 function renderRun(result) {
   hideError();
   runId.textContent = result.run_id;
+  runClassification.textContent = result.data_classification;
   setStatus(result.status, statusLabel(result.status));
   answer.textContent = result.answer ?? "The run finished without a final answer.";
   answer.classList.toggle("empty-state", result.answer === null);
