@@ -167,6 +167,43 @@ services:
       otel-collector:
         condition: service_healthy
 
+  rca-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.rca-mcp
+    environment:
+      AGENT_RUNTIME_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
+      MODEL_CONFIGURATION_PATH: /app/config/model_profiles.docker.toml
+      RCA_REASONING_TIMEOUT_SECONDS: "90"
+      TEMPO_URL: http://tempo:3200
+      LOKI_URL: http://loki:3100
+      PROMETHEUS_URL: http://prometheus:9090
+      OBSERVABILITY_BACKEND_TIMEOUT_SECONDS: "2"
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?Set LANGFUSE_PUBLIC_KEY in .env}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?Set LANGFUSE_SECRET_KEY in .env}
+      MCP_INDUSTRIAL_AGENT_TOKEN: ${MCP_INDUSTRIAL_AGENT_TOKEN:?Set MCP_INDUSTRIAL_AGENT_TOKEN in .env}
+      MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN: ${MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN:?Set MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN in .env}
+      MCP_CODEX_DEVELOPMENT_TOKEN: ${MCP_CODEX_DEVELOPMENT_TOKEN:?Set MCP_CODEX_DEVELOPMENT_TOKEN in .env}
+      OTEL_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SERVICE_NAME: rca-mcp
+      LANGFUSE_ENABLED: "true"
+      LANGFUSE_ENVIRONMENT: local
+    ports:
+      - "8005:8005"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8005), 2).close()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    depends_on:
+      factory-db:
+        condition: service_healthy
+
   langfuse-worker:
     image: docker.langfuse.com/langfuse/langfuse-worker:4
     restart: unless-stopped

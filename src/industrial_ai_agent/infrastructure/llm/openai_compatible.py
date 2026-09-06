@@ -64,6 +64,20 @@ class OpenAICompatibleLLMClient:
             ]
             # The bounded ADR-004 loop accepts exactly one next tool decision.
             parameters["parallel_tool_calls"] = False
+        if request.response_format is not None:
+            if not profile_config.supports_structured_output:
+                raise ValueError(
+                    "Model profile does not support structured response output"
+                )
+            parameters["response_format"] = request.response_format.model_dump(
+                mode="json", by_alias=True
+            )
+        if request.reasoning_effort is not None:
+            if not profile_config.supports_reasoning_effort:
+                raise ValueError(
+                    "Model profile does not support reasoning-effort control"
+                )
+            parameters["reasoning_effort"] = request.reasoning_effort.value
 
         completion = client.chat.completions.create(**parameters)
         if not completion.choices:

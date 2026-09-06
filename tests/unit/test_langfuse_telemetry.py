@@ -70,6 +70,44 @@ def test_langfuse_generation_contains_only_allowlisted_metadata() -> None:
     assert "private model response" not in str(generation_attributes)
 
 
+def test_rca_reasoning_generation_keeps_metadata_only_context() -> None:
+    telemetry, exporter = _recording_langfuse_telemetry()
+    client = ObservedLLMClient(
+        _ResponseClient(),
+        configuration=_configuration(api_cost_usd=0),
+        data_classification=DataClassification.INTERNAL,
+        telemetry=telemetry,
+        operation_type="rca.reasoning",
+        rca_focus="overview",
+    )
+
+    with telemetry.span(
+        "rca.reasoning", {"run.id": "run-123", "rca.focus": "overview"}
+    ):
+        client.chat(
+            ModelProfile("local_quality"),
+            LLMRequest(
+                messages=(LLMMessage(role=MessageRole.USER, content="private RCA"),)
+            ),
+        )
+
+    generation = next(
+        span for span in exporter.get_finished_spans() if span.name == "llm.call"
+    )
+    assert generation.attributes["langfuse.observation.type"] == "generation"
+    assert (
+        generation.attributes["langfuse.observation.metadata.operation"]
+        == "rca.reasoning"
+    )
+    assert (
+        generation.attributes["langfuse.observation.metadata.rca_focus"] == "overview"
+    )
+    assert generation.attributes["gen_ai.usage.total_tokens"] == 18
+    rendered = str(generation.attributes)
+    assert "private RCA" not in rendered
+    assert "private model response" not in rendered
+
+
 def test_langfuse_filter_rejects_infrastructure_spans() -> None:
     # The SDK asks at span start, before Langfuse attributes are attached.
     assert _should_export_to_langfuse(SimpleNamespace(name="llm.call", attributes={}))

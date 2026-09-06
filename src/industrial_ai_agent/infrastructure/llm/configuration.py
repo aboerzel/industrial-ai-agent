@@ -33,6 +33,8 @@ class ModelProfileConfig(BaseModel):
     capabilities: frozenset[LLMCapability] = Field(min_length=1)
     quality_class: QualityClass
     cost_class: CostClass
+    supports_structured_output: bool = False
+    supports_reasoning_effort: bool = False
     api_cost_usd: Decimal | None = Field(default=None, ge=0)
     api_key_env: str | None = Field(default=None, min_length=1)
 

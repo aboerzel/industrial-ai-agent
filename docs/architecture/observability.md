@@ -208,6 +208,33 @@ and unknown attributes even if a backend contains them. `investigate_run` determ
 combines trace, logs, and metric context, identifies the first recorded error location,
 and explicitly states that this does not prove the underlying cause.
 
+## Read-only RCA MCP
+
+`rca_mcp` is an independent service at `http://localhost:8005/mcp`. It uses the same
+ADR-015 bearer-token context resolution as the other MCP services, but its sole
+`analyze_run` tool requires dedicated `READ_RCA` and is available in the local demo only
+to `codex-development`. It composes the existing `RcaAnalysisService` directly with
+RLS-authorized runtime evidence and bounded Tempo, Loki, Prometheus, and Langfuse
+adapters; it does not proxy Runtime MCP or Observability MCP.
+
+The stable projection exposes only report status/completeness, source states,
+deterministic findings including their exact epistemic kind, provenance-aware
+measurements, and limitations. `overview`, `failure`, and `performance` filter that one
+report after collection. `reasoning="none"` preserves deterministic operation;
+`reasoning="explain"` appends a bounded optional explanation status, assessment,
+explicit hypotheses with existing evidence references, next checks, and limitations. It
+never changes deterministic fields or creates `CONFIRMED_RUN_CAUSE`.
+
+The Reasoner receives only a separate safe projection of the authorized report and derives
+classification, routing requirements, and egress zone server-side. Unknown
+classification, no eligible route, or final egress denial prevents the provider call.
+Malformed or unavailable reasoning is an explicit status and never fails the deterministic
+report. Neither the MCP response nor the model input contains raw evidence, query text,
+backend URLs, trace IDs, prompts, model output, tool/document payloads, SQL, credentials,
+or arbitrary Langfuse metadata. Its telemetry uses `rca.mcp.tool`, `rca.analysis`, and
+`rca.reasoning` with safe trace correlation only; report text and identifiers are never
+metric labels.
+
 ## Runtime and Observability RCA Split
 
 The bounded read-only Runtime MCP is implemented alongside Observability MCP. Runtime
@@ -276,6 +303,6 @@ correlation, generation-count, timing-overlap, and known model/provider mismatch
 telemetry limitations rather than selecting a backend as truth. The resulting LLM facts
 remain `OBSERVED` or `DERIVED`; no Langfuse record can create a root-cause finding.
 
-RCA MCP, optional LLM reasoning, Codex/UI integration, run comparison, and performance
-policies remain planned. Runtime MCP and Observability MCP remain the independent
-read-only evidence interfaces described above.
+RCA MCP and optional bounded LLM reasoning are implemented. Codex/UI integration, run
+comparison, and performance policies remain planned. Runtime MCP and Observability MCP
+remain the independent read-only evidence interfaces described above.

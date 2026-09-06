@@ -47,7 +47,7 @@ invoking the provider adapter. LangGraph and LangChain Core are used narrowly fo
 orchestration. The runtime uses LangGraph's official PostgreSQL async checkpointer for
 durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
 dynamic tool registry, LangSmith integration, or general evaluation framework.
-Four MCP services expose bounded capabilities through the official MCP SDK v2.
+Five MCP services expose bounded capabilities through the official MCP SDK v2.
 `factory_mcp` provides product history, machine status, and the approval-gated
 maintenance-ticket action; `knowledge_mcp` provides documentation search; and the
 read-only `observability_mcp` provides safe RCA evidence over Tempo, Loki, and
@@ -75,6 +75,15 @@ flowchart LR
 Codex or another consumer may correlate returned evidence by `run_id`; neither MCP
 performs LLM reasoning, RCA orchestration, or cross-MCP calls.
 
+`rca_mcp` is a separate read-only consumer-facing RCA composition, not a new agent
+path. It directly wires `RcaAnalysisService` to the request-scoped RLS runtime adapter
+and the existing bounded Tempo, Loki, Prometheus, and Langfuse adapters. The service
+does not call Runtime MCP or Observability MCP and `agent-api` does not depend on it.
+Its only tool, `analyze_run`, is guarded by the dedicated `READ_RCA` permission and
+returns a stable bounded projection of one deterministic report. Codex should use it
+first for general run analysis, reserving low-level Runtime or Observability tools for
+focused follow-up.
+
 ## Automated RCA Foundation
 
 Slices A and B implement provider-independent RCA contracts, evidence ports, a bounded
@@ -90,8 +99,9 @@ partial or insufficient report while retaining usable evidence.
 projections and report-local evidence references. The analyzer emits `OBSERVED` and
 `DERIVED` findings only: terminal run failure, error spans, bounded MCP/retrieval
 failures, repeated tool names, telemetry limitations, and non-overlapping timing shares.
-There are no cause signatures, hypotheses, LLM reasoning, performance classifications,
-or run comparison in the current implementation.
+There are no cause signatures, deterministic hypotheses, performance classifications, or
+run comparison in the current implementation. Optional LLM explanation is a separate
+post-analysis branch; it cannot create deterministic findings or confirmed causes.
 
 ```mermaid
 flowchart LR
@@ -100,15 +110,20 @@ flowchart LR
     Collector --> Bundle["Implemented contracts\nRcaEvidenceBundle"]
     Bundle --> Analyzer["Implemented Deterministic RCA Analyzer"]
     Analyzer --> Report["Implemented\nRcaAnalysisReport"]
-    Report --> Mcp["Planned RCA MCP"]
-    Report --> Reasoner["Planned optional LLM Reasoner"]
+    Report --> Mcp["Implemented RCA MCP"]
+    Report --> Reasoner["Implemented optional\negress-checked LLM Reasoner"]
 ```
 
-The reusable `RcaAnalysisService` remains independent of MCP transport. It will serve an
-RCA MCP/Codex and, after an authenticated HTTP authorization boundary exists, the
-FastAPI/UI path. Runtime MCP and Observability MCP remain evidence interfaces, not RCA
-reasoning services. The contracts expose no raw telemetry or application payloads;
-`run_id` and `trace_id` remain correlation identifiers only.
+The reusable `RcaAnalysisService` remains independent of MCP transport. It serves RCA
+MCP/Codex and may later serve an authenticated FastAPI/UI path. Runtime MCP and
+Observability MCP remain evidence interfaces, not RCA reasoning services. The optional
+Reasoner receives an explicit safe projection of an already authorized report, routes a
+text-only task server-side, and uses the final ADR-009 egress guard before its existing
+provider-independent `LLMClient` call. It returns a bounded explanation only; its
+`HYPOTHESIS` entries are distinct from immutable deterministic findings. Routing,
+provider, timeout, or parsing failure leaves the deterministic report usable. The
+contracts expose no raw telemetry or application payloads; `run_id` and `trace_id` remain
+correlation identifiers only.
 
 ADR-014 adds persistent classified factory data. PostgreSQL is the source of truth for
 structured factory records and document-catalog metadata. Local PDF, DOCX, PPTX, XLSX,

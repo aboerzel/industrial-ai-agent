@@ -21,3 +21,8 @@ enabled_tools = ["get_run_trace", "get_trace_logs", "get_run_metrics", "get_serv
 url = "http://localhost:8004/mcp"
 bearer_token_env_var = "MCP_CODEX_DEVELOPMENT_TOKEN"
 enabled_tools = ["get_agent_run", "get_run_tool_trajectory", "get_run_approval", "get_run_failure", "list_recent_agent_runs"]
+
+[mcp_servers.rca]
+url = "http://localhost:8005/mcp"
+bearer_token_env_var = "MCP_CODEX_DEVELOPMENT_TOKEN"
+enabled_tools = ["analyze_run"]

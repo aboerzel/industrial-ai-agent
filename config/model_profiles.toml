@@ -8,6 +8,8 @@ execution_zone = "LOCAL"
 capabilities = ["TEXT", "TOOL_CALLING"]
 quality_class = "STANDARD"
 cost_class = "LOW"
+supports_structured_output = true
+supports_reasoning_effort = true
 api_cost_usd = 0
 
 [profiles.local_quality]
@@ -20,6 +22,8 @@ execution_zone = "LOCAL"
 capabilities = ["TEXT", "TOOL_CALLING"]
 quality_class = "HIGH"
 cost_class = "LOW"
+supports_structured_output = true
+supports_reasoning_effort = true
 api_cost_usd = 0
 
 [profiles.public_fast]

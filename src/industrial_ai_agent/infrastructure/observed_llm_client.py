@@ -23,11 +23,15 @@ class ObservedLLMClient:
         configuration: LLMConfiguration,
         data_classification: DataClassification,
         telemetry: Telemetry,
+        operation_type: str | None = None,
+        rca_focus: str | None = None,
     ) -> None:
         self._delegate = delegate
         self._configuration = configuration
         self._data_classification = data_classification
         self._telemetry = telemetry
+        self._operation_type = operation_type
+        self._rca_focus = rca_focus
 
     def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
         profile_config = self._configuration.get_profile(profile.name)
@@ -38,6 +42,10 @@ class ObservedLLMClient:
             "execution.zone": profile_config.execution_zone.value,
             "data.classification": self._data_classification.name,
         }
+        if self._operation_type is not None:
+            attributes["operation.type"] = self._operation_type
+        if self._rca_focus is not None:
+            attributes["rca.focus"] = self._rca_focus
         started = perf_counter()
         status = "success"
         try:

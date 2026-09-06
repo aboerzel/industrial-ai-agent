@@ -19,7 +19,8 @@ Identity, clearance, and permission answer different questions:
 * Clearance: which data classification that identity may read, for example `INTERNAL`
   or `CONFIDENTIAL`.
 * Permission: which MCP operation it may use, for example `READ_FACTORY`,
-  `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, or `CREATE_MAINTENANCE_TICKET`.
+  `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_RCA`, or
+  `CREATE_MAINTENANCE_TICKET`.
 
 ## Decision
 
@@ -51,7 +52,7 @@ The demo registrations are:
 |---|---|---|
 | `industrial-agent` | `CONFIDENTIAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME`, `CREATE_MAINTENANCE_TICKET` |
 | `industrial-agent-internal` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE` |
-| `codex-development` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME` |
+| `codex-development` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME`, `READ_RCA` |
 
 MCP permission authorizes a client to invoke a tool. It does not replace the Industrial
 Agent's `ToolPolicy` or LangGraph approval interrupt: maintenance-ticket execution still
@@ -122,3 +123,14 @@ The `industrial-agent-internal` identity is selected only by the server-resolved
 `INTERNAL_DIAGNOSTIC` run policy. It has a separate opaque environment credential,
 INTERNAL RLS clearance, and no `CREATE_MAINTENANCE_TICKET` permission. A client cannot
 select this identity, its clearance, or its credential through API or trace headers.
+
+## RCA MCP Refinement
+
+`READ_RCA` is a dedicated server-side permission for the read-only `rca_mcp` tool
+`analyze_run`; it is not implied by Runtime, Observability, Factory, or Knowledge read
+permissions. In the local demo it is granted only to `codex-development`. The
+`industrial-agent` and `industrial-agent-internal` identities do not receive it.
+Every request still resolves identity, clearance, and immutable permissions from the
+authenticated bearer token. A `run_id`, trace context, or any client header does not
+establish RCA access. Runtime RLS remains the first evidence gate, so inaccessible and
+missing runs remain a neutral unavailable result.

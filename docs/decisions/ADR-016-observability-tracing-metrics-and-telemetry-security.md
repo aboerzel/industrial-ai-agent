@@ -217,3 +217,23 @@ uses the resolved run classification and bounded `run.profile` attribute rather 
 hard-coded confidential value. The attribute is allowlisted for traces and bounded
 metrics. It never changes identity, clearance, authorization, egress, or payload
 capture, and `run_id` remains excluded from metric labels.
+
+## RCA MCP Telemetry Refinement
+
+`rca_mcp` is independently instrumented at the owned `rca.mcp.tool` and `rca.analysis`
+boundaries. `run.id` is a trace correlation attribute for the target run only and is
+never a metric label. Metrics use only the existing bounded MCP operation/status
+dimensions. No report text, finding statement, prompt, response, evidence payload,
+trace ID, backend URL, or authorization data is exported. RCA's own request telemetry
+may be observed operationally, but `analyze_run` never analyzes its own MCP trace.
+
+## RCA Reasoning Telemetry Refinement
+
+The optional RCA Reasoner uses an owned `rca.reasoning` span around the already authorized
+target report and the existing nested `llm.call` generation boundary. It records only
+bounded operation/focus, profile/provider/model, classification, status, and
+provider-reported token usage metadata. `run.id` remains a trace-only correlation
+attribute and is never a metric label. Langfuse may receive the `llm.call` generation with
+metadata `operation=rca.reasoning`; it receives no safe projection, report text,
+hypotheses, prompt, provider response, raw evidence, or credentials. The RCA trace is
+observable but is never a target for recursive RCA analysis.

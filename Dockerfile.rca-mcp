@@ -1,0 +1,37 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN groupadd --system app && useradd --system --gid app --create-home app
+
+COPY pyproject.toml ./
+COPY config ./config
+COPY src ./src
+
+# RCA composes existing bounded evidence adapters directly; it has no agent dependency.
+RUN pip install --no-cache-dir \
+        "httpx>=0.28,<1.0" \
+        "langfuse>=4.15,<5.0" \
+        "mcp>=2.0,<3.0" \
+        "openai>=2.29,<3.0" \
+        "opentelemetry-api>=1.44.0,<1.45" \
+        "opentelemetry-exporter-otlp-proto-grpc>=1.44.0,<1.45" \
+        "opentelemetry-instrumentation-asgi>=0.65b0,<0.66" \
+        "opentelemetry-sdk>=1.44.0,<1.45" \
+        "pydantic>=2.0" \
+        "psycopg[binary]>=3.3.5,<3.4" \
+        "sqlalchemy>=2.0.52,<2.1" \
+        "uvicorn>=0.52.4,<0.53" \
+    && pip install --no-cache-dir --no-deps .
+
+USER app
+
+EXPOSE 8005
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD python -c "import socket; socket.create_connection(('127.0.0.1', 8005), 2).close()"
+
+CMD ["python", "-m", "industrial_ai_agent.infrastructure.rca_mcp_server", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8005"]

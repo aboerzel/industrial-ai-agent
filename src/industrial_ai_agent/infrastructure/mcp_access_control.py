@@ -190,6 +190,7 @@ def create_demo_mcp_access_control(
                     McpPermission.READ_KNOWLEDGE,
                     McpPermission.READ_OBSERVABILITY,
                     McpPermission.READ_AGENT_RUNTIME,
+                    McpPermission.READ_RCA,
                 }
             ),
         ),

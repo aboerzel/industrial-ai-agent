@@ -121,7 +121,7 @@ approval wait, and MCP; unowned time remains unmeasured. Therefore category tota
 not inflate nested span time and may be below total run duration. Measurements do not
 classify a run as slow or abnormal without a future policy or baseline.
 
-An optional future LLM reasoner receives only `RcaAnalysisReport` and produces a
+The optional LLM reasoner receives only `RcaAnalysisReport` and produces a
 human-readable explanation. It is subject to the existing classification and final
 model-egress controls. It does not receive raw backend responses and does not change the
 report's evidence, kinds, confidence, or confirmed-cause status.
@@ -142,10 +142,10 @@ identity, clearance, permissions, RLS, model routing, model egress, or HITL.
 * A partial RCA is a successful supported result; source absence is explicit rather than
   represented as an empty successful result.
 * Future evidence adapters preserve existing privacy allowlists and ADR-015 access
-  boundaries. A future RCA MCP remains read-only and must not accept arbitrary backend
-  query languages.
-* RCA MCP, an optional LLM reasoner, authenticated FastAPI/UI integration, comparison,
-  and performance policies remain planned.
+  boundaries. RCA MCP remains read-only and does not accept arbitrary backend query
+  languages.
+* Slice E implements the optional LLM reasoner; authenticated FastAPI/UI integration,
+  comparison, and performance policies remain planned.
 
 ## Alternatives Considered
 
@@ -170,3 +170,90 @@ ADR-010 and ADR-011 retain the sole troubleshooting loop and HITL semantics. ADR
 retains MCP as a transport boundary. ADR-015 retains server-derived identity, clearance,
 and permissions. ADR-016 remains the telemetry privacy, availability, and bounded-query
 authority. This ADR complements, and does not supersede, those decisions.
+
+## RCA MCP Slice D
+
+Slice D adds `rca_mcp` as an independent, authenticated, strictly read-only Streamable
+HTTP service. Its sole `analyze_run(run_id, focus="overview")` tool composes
+`RcaAnalysisService` directly from the RLS-scoped runtime store, bounded Tempo/Loki/
+Prometheus adapters, and the metadata-only Langfuse adapter. It does not call Runtime
+MCP or Observability MCP over MCP or HTTP, and contains no RCA heuristic or LLM
+reasoning.
+
+`READ_RCA` is a dedicated ADR-015 permission. The tool accepts only a canonical lowercase
+UUID and the closed `overview`, `failure`, or `performance` focus enum, rejects extra
+properties, and is marked `read_only_hint=true`. Identity, `SecurityContext`, clearance,
+and permissions remain server-resolved. Runtime RLS runs before telemetry correlation;
+knowledge of a run or trace identifier therefore confers no access.
+
+Focus is a post-analysis projection over one unchanged deterministic report. All output
+contains analysis status, source statuses, completeness, bounded findings,
+provenance-aware measurements, limitations, and whether a
+`CONFIRMED_RUN_CAUSE` exists. It never exposes raw evidence, backend payloads, prompts,
+responses, tool data, documents, SQL, URLs, credentials, arbitrary Langfuse metadata,
+or trace IDs. `failure` selects existing failure-related findings; `performance` selects
+existing timing, LLM, token, and cost facts. Neither focus collects different evidence,
+changes authorization, introduces thresholds, promotes finding kinds, or treats
+configured cost as observed cost.
+
+An inaccessible run is a neutral unavailable MCP error and halts before telemetry
+queries. Runtime-store failure is bounded to RCA. Missing, malformed, or unavailable
+non-runtime sources produce the existing partial/insufficient report whenever possible.
+The service has no dependency from `agent-api`, Factory MCP, Knowledge MCP, Runtime MCP,
+or Observability MCP, so its outage cannot disrupt normal troubleshooting execution.
+
+For general requests such as "Analyze run <run-id> and explain what happened", Codex
+should call `rca.analyze_run` first. Runtime and Observability MCP remain available for
+targeted follow-up inspection only.
+
+## Optional RCA Reasoner Slice E
+
+Slice E implements the optional explanation branch shown in the decision diagram. Its
+dependency direction is `RcaAnalysisReport -> RcaReasoner -> provider-independent
+LLMClient`; Infrastructure composes the routed profile, final `EgressCheckedLLMClient`,
+provider adapter, and metadata-only telemetry. The deterministic analyzer and report
+remain authoritative. The Reasoner neither collects evidence nor modifies a finding,
+confidence, limitation, source status, or confirmed-cause state.
+
+`analyze_run` now accepts the closed `reasoning="none" | "explain"` option, defaulting to
+`none`. `explain` runs only after the same `READ_RCA` authorization and Runtime RLS gate
+as deterministic analysis. The server derives `TaskRequirements` and effective
+classification from the authorized report. Unknown classification, no eligible route, or
+final egress denial fails closed without a provider call. Callers cannot select a model,
+provider, classification, execution zone, or free-text prompt.
+
+The model receives an explicit safe projection: focus, run profile, known effective
+classification, status/completeness, source statuses, deterministic finding metadata and
+statements, provenance-aware measurements, limitations, and existing finding evidence
+references. It excludes report/run identifiers, trace IDs, raw evidence, prompts,
+responses, tool payloads, document content, logs, SQL, headers, credentials, URLs, and
+unbounded metadata. For a profile explicitly configured to support structured output and
+reasoning-effort control, the existing strict Pydantic response model is also sent as an
+OpenAI-compatible JSON Schema response format, with local thinking disabled for the
+bounded response. Provider output is strict
+JSON with no additional fields. It can only
+return a bounded summary, a runtime-compatible assessment, explicitly labelled
+`hypothesis` entries with existing evidence references, and bounded next checks.
+
+The result is appended in a separate `reasoning` field with status `AVAILABLE`,
+`NOT_REQUESTED`, `NOT_ALLOWED`, `UNAVAILABLE`, or `MALFORMED`. Routing, provider,
+timeout, parser, reference, or policy failures leave deterministic output unchanged.
+Reasoning limitations always retain deterministic limitations and explicitly state when
+no deterministic confirmed cause exists. A successful report cannot receive a failed
+assessment, and the output validator rejects root-cause claims, unknown evidence
+references, extra fields, and attempts to infer excluded payload categories. The Reasoner
+does not expose chain-of-thought or provider response objects.
+
+RCA reasoning uses an owned `rca.reasoning` span and the existing `llm.call` generation
+path. Langfuse receives only operation/focus, profile/provider/model, classification,
+status, and provider-reported token metadata when present. The safe projection, report
+text, hypotheses text, prompts, and provider response remain outside telemetry. This
+does not change configured-versus-observed cost semantics or create a new Agent run.
+
+### Local Reasoner Timeout
+
+The optional Reasoner has its own finite `RCA_REASONING_TIMEOUT_SECONDS` setting. It is
+independent of Agent and deterministic RCA timeouts. In the local Compose profile it is
+90 seconds: this bounded value covers the measured local Ollama generation range of
+approximately 63 to 82 seconds, including one cold start, while preserving failure
+isolation if the provider does not return.

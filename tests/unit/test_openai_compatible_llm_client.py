@@ -6,8 +6,11 @@ import pytest
 
 from industrial_ai_agent.agent.llm import (
     FinishReason,
+    LLMJsonSchema,
     LLMMessage,
+    LLMReasoningEffort,
     LLMRequest,
+    LLMResponseFormat,
     LLMToolCall,
     LLMToolDefinition,
     MessageRole,
@@ -46,7 +49,11 @@ class FakeOpenAIClient:
         self.closed = True
 
 
-def create_configuration() -> LLMConfiguration:
+def create_configuration(
+    *,
+    supports_structured_output: bool = False,
+    supports_reasoning_effort: bool = False,
+) -> LLMConfiguration:
     return LLMConfiguration.model_validate(
         {
             "profiles": {
@@ -60,10 +67,91 @@ def create_configuration() -> LLMConfiguration:
                     "capabilities": ["TEXT", "TOOL_CALLING"],
                     "quality_class": "HIGH",
                     "cost_class": "LOW",
+                    "supports_structured_output": supports_structured_output,
+                    "supports_reasoning_effort": supports_reasoning_effort,
                 }
             }
         }
     )
+
+
+def test_passes_supported_structured_output_request_to_provider() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content='{"summary":"ok"}', tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    fake_client = FakeOpenAIClient(completion)
+    client = OpenAICompatibleLLMClient(
+        create_configuration(
+            supports_structured_output=True,
+            supports_reasoning_effort=True,
+        ),
+        environment={},
+        client_factory=lambda **_: fake_client,
+    )
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
+        response_format=LLMResponseFormat(
+            json_schema=LLMJsonSchema(
+                name="test_response",
+                schema_definition={"type": "object", "additionalProperties": False},
+            )
+        ),
+        reasoning_effort=LLMReasoningEffort.NONE,
+    )
+
+    client.chat(LOCAL_QUALITY_PROFILE, request)
+
+    assert fake_client.completions.parameters is not None
+    assert fake_client.completions.parameters["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_response",
+            "schema": {"type": "object", "additionalProperties": False},
+            "strict": True,
+        },
+    }
+    assert fake_client.completions.parameters["reasoning_effort"] == "none"
+
+
+def test_rejects_structured_output_for_unsupported_profile() -> None:
+    completion = SimpleNamespace(choices=[])
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(completion),
+    )
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
+        response_format=LLMResponseFormat(
+            json_schema=LLMJsonSchema(
+                name="test_response", schema_definition={"type": "object"}
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not support structured response"):
+        client.chat(LOCAL_QUALITY_PROFILE, request)
+
+
+def test_rejects_reasoning_effort_for_unsupported_profile() -> None:
+    completion = SimpleNamespace(choices=[])
+    client = OpenAICompatibleLLMClient(
+        create_configuration(supports_structured_output=True),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(completion),
+    )
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
+        reasoning_effort=LLMReasoningEffort.NONE,
+    )
+
+    with pytest.raises(ValueError, match="does not support reasoning-effort"):
+        client.chat(LOCAL_QUALITY_PROFILE, request)
 
 
 def create_authenticated_configuration() -> LLMConfiguration:

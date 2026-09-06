@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol, Self
+from typing import Any, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -77,11 +77,45 @@ class LLMToolDefinition(BaseModel):
     parameters: dict[str, Any]
 
 
+class LLMJsonSchema(BaseModel):
+    """Provider-neutral JSON Schema envelope for a bounded structured response."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    name: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+    schema_definition: dict[str, Any] = Field(
+        validation_alias="schema",
+        serialization_alias="schema",
+    )
+    strict: Literal[True] = True
+
+
+class LLMResponseFormat(BaseModel):
+    """A structured response request supported only by configured adapters."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["json_schema"] = "json_schema"
+    json_schema: LLMJsonSchema
+
+
+class LLMReasoningEffort(StrEnum):
+    """Semantic reasoning budget understood by supporting provider adapters."""
+
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    MAX = "max"
+
+
 class LLMRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     messages: tuple[LLMMessage, ...] = Field(min_length=1)
     tools: tuple[LLMToolDefinition, ...] = ()
+    response_format: LLMResponseFormat | None = None
+    reasoning_effort: LLMReasoningEffort | None = None
 
 
 class LLMUsage(BaseModel):
