@@ -220,6 +220,18 @@ The deterministic analyzer remains authoritative. Optional AI reasoning receives
 - [Ollama](https://ollama.com/) running on the host, with the local models used by the Compose profiles
 - A local `.env` created from `.env.example`; provide the required local Compose values, including a 64-character hexadecimal `LANGFUSE_ENCRYPTION_KEY`, and keep the file unversioned
 
+### Full Demo
+
+Set a valid `GROQ_API_KEY` in `.env` and leave `LOCAL_ONLY_MODE=false`. This permits the
+configured `public_fast` profile for `PUBLIC`, `INTERNAL`, and `CONFIDENTIAL` runs;
+`RESTRICTED` runs remain local by deterministic egress policy.
+
+### Local-only Demo
+
+Set `LOCAL_ONLY_MODE=true` and leave `GROQ_API_KEY` unset. The composition root excludes
+all public-cloud model profiles before routing, so the local profiles handle every
+classification. An invalid or placeholder Groq key is not a Local-only configuration.
+
 ```powershell
 Copy-Item .env.example .env
 ollama pull qwen3.5:4b
@@ -231,7 +243,17 @@ python -m http.server 8080 --directory frontend
 
 Open the local browser demo at `http://localhost:8080`, the FastAPI contract at `http://localhost:8000/docs`, Grafana at `http://localhost:3000`, and Langfuse at `http://localhost:3001`.
 
-A valid `GROQ_API_KEY` is optional and needed only when executing the configured `public_fast` profile; a local-only demo can retain an unused nonempty placeholder for that Compose setting. Do not add real credentials to the repository. The frontend is a separate static client and communicates only with the FastAPI JSON API.
+All Compose host ports bind to `127.0.0.1`; the OTel Collector is Compose-internal.
+Grafana keeps anonymous local dashboard access as a Viewer, not an Admin. Do not add real
+credentials to the repository. The frontend is a separate static client and communicates
+only with the FastAPI JSON API.
+
+The UI clearance selector simulates the clearance of an already authenticated user for
+this local demo. It is not a production authentication or authorization interface. A
+production integration must derive clearance from a trusted server-side identity; run
+classification, MCP permissions, PostgreSQL RLS, and model egress remain deterministic
+server-side boundaries. Unknown free text is conservatively `RESTRICTED`: unknown
+sensitivity never authorizes external model processing.
 
 For service ports, MCP access, smoke checks, and detailed local setup, use the existing [Architecture Overview](docs/architecture/overview.md), [Observability guide](docs/architecture/observability.md), and the linked evaluation and implementation guides rather than treating this README as an operations manual.
 

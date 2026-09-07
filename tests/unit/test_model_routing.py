@@ -29,6 +29,11 @@ from industrial_ai_agent.agent.model_routing import (
     TaskRequirements,
     TaskRole,
 )
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunClassificationPolicy,
+    AgentRunProfile,
+    resolve_demo_run_profile,
+)
 from industrial_ai_agent.infrastructure.llm.configuration import load_llm_configuration
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -102,6 +107,65 @@ def test_confidential_task_sees_public_profile_with_sufficient_maximum() -> None
     )
 
     assert profile_names(eligible) == ("local_quality", "public_fast")
+
+
+@pytest.mark.parametrize(
+    "classification", (DataClassification.PUBLIC, DataClassification.CONFIDENTIAL)
+)
+def test_full_demo_routes_eligible_public_classifications_to_public_fast(
+    classification: DataClassification,
+) -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+
+    selected = DeterministicModelRouter().route(
+        requirements(classification=classification, minimum_quality=QualityClass.HIGH),
+        configuration.get_routing_profiles(),
+    )
+
+    assert selected == ModelProfile("public_fast")
+
+
+def test_local_only_configuration_excludes_public_profiles_and_routes_confidential_locally() -> (
+    None
+):
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+    profiles = configuration.get_routing_profiles(local_only=True)
+
+    selected = DeterministicModelRouter().route(
+        requirements(
+            classification=DataClassification.CONFIDENTIAL,
+            minimum_quality=QualityClass.HIGH,
+        ),
+        profiles,
+    )
+
+    assert profile_names(profiles) == ("local_fast", "local_quality")
+    assert selected == ModelProfile("local_quality")
+
+
+@pytest.mark.parametrize(
+    "message",
+    ("Why did the last batch fail?", "  Export customer production plans.  "),
+)
+def test_unknown_free_text_never_has_an_eligible_public_cloud_route(
+    message: str,
+) -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+    profile = resolve_demo_run_profile(message)
+    requirements = AgentRunClassificationPolicy().resolve(profile).task_requirements
+
+    eligible = DeterministicModelRouter().eligible_profiles(
+        requirements, configuration.get_routing_profiles()
+    )
+
+    assert profile is AgentRunProfile.RESTRICTED_TROUBLESHOOTING
+    assert all(item.execution_zone is ExecutionZone.LOCAL for item in eligible)
 
 
 def test_restricted_task_excludes_public_profile_below_its_maximum() -> None:

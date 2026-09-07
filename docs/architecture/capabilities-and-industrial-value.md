@@ -38,6 +38,10 @@ Before data is read, the system checks what the user may see. Before a model is 
 it checks whether current data may be transferred to that model. `RESTRICTED` data stays
 within an approved local model environment. The other levels may go to an external model
 only when that configured model is explicitly approved for the relevant protection level.
+Unknown free-form demo requests are conservatively `RESTRICTED`; unknown sensitivity
+never authorizes external model processing.
+The local UI selector only simulates an already authenticated user's clearance; it is not
+a production identity interface.
 
 ### Cost and efficiency
 

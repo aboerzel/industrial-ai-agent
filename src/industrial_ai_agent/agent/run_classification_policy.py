@@ -194,7 +194,7 @@ def resolve_demo_run_profile(
     This narrow resolver deliberately recognizes only the documented scenarios. It is
     an outer-demo convenience, not a general data-classification engine.
     """
-    normalized = message.upper()
+    normalized = message.strip().upper()
     if any(
         identifier in normalized for identifier in ("P9001", "S07", "PROTO-COMM-07")
     ):
@@ -213,7 +213,8 @@ def resolve_demo_run_profile(
             DataClassification.CONFIDENTIAL: AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
             DataClassification.RESTRICTED: AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
         }[security_context.clearance]
-    return AgentRunProfile.PUBLIC_INFORMATION
+    # Unknown sensitivity must not authorize public-cloud model processing.
+    return AgentRunProfile.RESTRICTED_TROUBLESHOOTING
 
 
 def _is_discovery_request(normalized_message: str) -> bool:

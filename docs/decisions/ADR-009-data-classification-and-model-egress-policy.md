@@ -374,7 +374,14 @@ Negative:
 The FastAPI run boundary resolves an initial classification only from a fixed,
 server-owned `AgentRunProfile`; clients never submit a classification, clearance,
 model profile, MCP identity, or permission. The existing free-form troubleshooting
-request resolves to `CONFIDENTIAL_TROUBLESHOOTING`.
+request is resolved only by deterministic server policy.
+
+Known synthetic demo identifiers resolve to their documented `PUBLIC`, `INTERNAL`,
+`CONFIDENTIAL`, or `RESTRICTED` scope. Other free-form input has no trusted public-data
+evidence and is conservatively resolved as `RESTRICTED_TROUBLESHOOTING`; spelling,
+case, and whitespace cannot downgrade it to a public-cloud-eligible classification.
+Unknown sensitivity therefore never authorizes external model processing. This remains a
+deterministic demo policy, not LLM-based sensitivity classification.
 
 `INTERNAL_DIAGNOSTIC` is available only through a separate bounded target contract.
 It contains validated resource identifiers and no free-form task text. The server

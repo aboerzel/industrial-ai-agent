@@ -318,7 +318,9 @@ def _inspection(record: StoredAgentRun) -> RuntimeRunInspection:
     )
 
 
-def _matches_recent_query(record: StoredAgentRun, query: RecentRuntimeRunsQuery) -> bool:
+def _matches_recent_query(
+    record: StoredAgentRun, query: RecentRuntimeRunsQuery
+) -> bool:
     if query.status is not None and record.status is not query.status:
         return False
     if (

@@ -23,7 +23,9 @@ def test_frontend_static_assets_are_present_and_use_es_modules() -> None:
     assert 'from "./markdown.js"' in app
 
 
-def test_frontend_workspace_keeps_the_input_panel_fixed_and_allows_result_growth() -> None:
+def test_frontend_workspace_keeps_the_input_panel_fixed_and_allows_result_growth() -> (
+    None
+):
     css = (FRONTEND_ROOT / "css" / "app.css").read_text(encoding="utf-8")
 
     assert ".shell {\n  width: calc(100% - 32px);" in css

@@ -8,7 +8,7 @@ services:
       POSTGRES_APP_USER: ${POSTGRES_APP_USER:-factory_app}
       POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - factory-db-data:/var/lib/postgresql
       - ./database/init:/docker-entrypoint-initdb.d:ro
@@ -34,7 +34,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       OTEL_SERVICE_NAME: factory-mcp
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 2).close()"]
       interval: 10s
@@ -68,7 +68,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "8002:8002"
+      - "127.0.0.1:8002:8002"
     volumes:
       - hf-cache:/home/app/.cache/huggingface
     healthcheck:
@@ -95,7 +95,8 @@ services:
       MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN: ${MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN:?Set MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN in .env}
       MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN: ${MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN:?Set MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN in .env}
       MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN: ${MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN:?Set MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN in .env}
-      GROQ_API_KEY: ${GROQ_API_KEY:?Set GROQ_API_KEY in .env}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      LOCAL_ONLY_MODE: ${LOCAL_ONLY_MODE:-false}
       MODEL_CONFIGURATION_PATH: /app/config/model_profiles.docker.toml
       OTEL_ENABLED: "true"
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
@@ -106,7 +107,7 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?Set LANGFUSE_SECRET_KEY in .env}
       LANGFUSE_ENVIRONMENT: local
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       factory-mcp:
         condition: service_healthy
@@ -131,7 +132,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       OTEL_SERVICE_NAME: observability-mcp
     ports:
-      - "8003:8003"
+      - "127.0.0.1:8003:8003"
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8003), 2).close()"]
       interval: 10s
@@ -161,7 +162,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       OTEL_SERVICE_NAME: runtime-mcp
     ports:
-      - "8004:8004"
+      - "127.0.0.1:8004:8004"
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8004), 2).close()"]
       interval: 10s
@@ -182,6 +183,7 @@ services:
       AGENT_RUNTIME_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
       MODEL_CONFIGURATION_PATH: /app/config/model_profiles.docker.toml
       RCA_REASONING_TIMEOUT_SECONDS: "90"
+      LOCAL_ONLY_MODE: ${LOCAL_ONLY_MODE:-false}
       TEMPO_URL: http://tempo:3200
       LOKI_URL: http://loki:3100
       PROMETHEUS_URL: http://prometheus:9090
@@ -198,7 +200,7 @@ services:
       LANGFUSE_ENABLED: "true"
       LANGFUSE_ENVIRONMENT: local
     ports:
-      - "8005:8005"
+      - "127.0.0.1:8005:8005"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -278,7 +280,7 @@ services:
       LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:?Set LANGFUSE_INIT_USER_NAME in .env}
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?Set LANGFUSE_INIT_USER_PASSWORD in .env}
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q http://$${HOSTNAME}:3000/api/public/health?failIfDatabaseUnavailable=true"]
       interval: 10s
@@ -312,7 +314,7 @@ services:
       MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-minio}
       MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:?Set LANGFUSE_MINIO_ROOT_PASSWORD in .env}
     ports:
-      - "9092:9000"
+      - "127.0.0.1:9092:9000"
     volumes:
       - langfuse-minio-data:/data
     healthcheck:
@@ -359,9 +361,6 @@ services:
     command: ["--config=/etc/otelcol-contrib/otel-collector.yaml"]
     volumes:
       - ./observability/otel-collector.yaml:/etc/otelcol-contrib/otel-collector.yaml:ro
-    ports:
-      - "4317:4317"
-      - "4318:4318"
     healthcheck:
       test: ["CMD", "/otelcol-contrib", "components"]
       interval: 15s
@@ -383,7 +382,7 @@ services:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/ready"]
       interval: 10s
@@ -400,7 +399,7 @@ services:
       - ./observability/tempo.yaml:/etc/tempo.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      - "3200:3200"
+      - "127.0.0.1:3200:3200"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3200/ready"]
       interval: 10s
@@ -414,7 +413,7 @@ services:
       - ./observability/loki.yaml:/etc/loki/loki.yaml:ro
       - loki-data:/loki
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     healthcheck:
       test: ["CMD", "/usr/bin/loki", "-config.file=/etc/loki/loki.yaml", "-verify-config"]
       interval: 10s
@@ -425,13 +424,13 @@ services:
     image: grafana/grafana:12.4.0
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
       - grafana-data:/var/lib/grafana
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
       interval: 10s

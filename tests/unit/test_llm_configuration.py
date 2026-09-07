@@ -13,6 +13,7 @@ from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
     LLMConfiguration,
     load_llm_configuration,
+    local_only_mode_enabled,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +92,18 @@ def test_local_profiles_use_same_endpoint() -> None:
     quality_profile = configuration.get_profile("local_quality")
 
     assert fast_profile.base_url == quality_profile.base_url
+
+
+def test_local_only_mode_accepts_only_explicit_boolean_values(monkeypatch) -> None:
+    monkeypatch.setenv("LOCAL_ONLY_MODE", "true")
+    assert local_only_mode_enabled() is True
+
+    monkeypatch.setenv("LOCAL_ONLY_MODE", "false")
+    assert local_only_mode_enabled() is False
+
+    monkeypatch.setenv("LOCAL_ONLY_MODE", "unexpected")
+    with pytest.raises(ValueError, match="LOCAL_ONLY_MODE"):
+        local_only_mode_enabled()
 
 
 def test_rejects_unknown_profile() -> None:

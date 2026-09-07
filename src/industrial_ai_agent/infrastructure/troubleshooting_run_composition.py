@@ -32,6 +32,7 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
 from industrial_ai_agent.infrastructure.llm.configuration import (
     LLMConfiguration,
     load_llm_configuration,
+    local_only_mode_enabled,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
@@ -160,7 +161,9 @@ def create_default_troubleshooting_run_service(
 
     return TroubleshootingRunService(
         router=DeterministicModelRouter(policy),
-        profiles=configuration.get_routing_profiles(),
+        profiles=configuration.get_routing_profiles(
+            local_only=local_only_mode_enabled()
+        ),
         agent_factory=_LangGraphTroubleshootingAgentFactory(
             configuration=configuration,
             mcp_tool_provider_factory=mcp_tool_provider_factory,

@@ -30,7 +30,11 @@ MAX_METRIC_POINTS = 60
 MAX_LOOKBACK = timedelta(hours=48)
 TRACE_CONTEXT_PADDING = timedelta(minutes=5)
 MAX_TRACE_CONTEXT_WINDOW = timedelta(minutes=30)
-SERVICE_HEALTH_WINDOWS = {"5m": timedelta(minutes=5), "15m": timedelta(minutes=15), "1h": timedelta(hours=1)}
+SERVICE_HEALTH_WINDOWS = {
+    "5m": timedelta(minutes=5),
+    "15m": timedelta(minutes=15),
+    "1h": timedelta(hours=1),
+}
 _OWNED_FAILURE_OPERATIONS = frozenset(
     {
         "agent.run",
@@ -217,7 +221,11 @@ class LokiAdapter:
             for value in values:
                 if len(events) >= MAX_LOG_EVENTS:
                     break
-                if not isinstance(value, list | tuple) or not value or not isinstance(value[0], str):
+                if (
+                    not isinstance(value, list | tuple)
+                    or not value
+                    or not isinstance(value[0], str)
+                ):
                     raise ObservabilityMalformedResponse("Loki event is malformed")
                 event = _safe_log_event(labels, value[0], normalized_trace_id)
                 if event is not None:
@@ -237,9 +245,13 @@ class PrometheusAdapter:
         if not spans:
             raise ObservabilityMalformedResponse("Trace contains no spans")
         start = min(span.start_time for span in spans) - TRACE_CONTEXT_PADDING
-        end = max(
-            span.start_time + timedelta(milliseconds=span.duration_ms) for span in spans
-        ) + TRACE_CONTEXT_PADDING
+        end = (
+            max(
+                span.start_time + timedelta(milliseconds=span.duration_ms)
+                for span in spans
+            )
+            + TRACE_CONTEXT_PADDING
+        )
         if end - start > MAX_TRACE_CONTEXT_WINDOW:
             end = start + MAX_TRACE_CONTEXT_WINDOW
         return self._metric_context(
@@ -255,7 +267,9 @@ class PrometheusAdapter:
         try:
             window = SERVICE_HEALTH_WINDOWS[time_window]
         except KeyError as error:
-            raise InvalidObservabilityIdentifier("Unsupported service health window") from error
+            raise InvalidObservabilityIdentifier(
+                "Unsupported service health window"
+            ) from error
         end = datetime.now(UTC)
         return self._metric_context(
             start_time=end - window,
@@ -292,7 +306,9 @@ class PrometheusAdapter:
             end_time=end_time,
             source=source,
             series=tuple(
-                MetricSeries(name=name, points=self._query_range(query, start_time, end_time))
+                MetricSeries(
+                    name=name, points=self._query_range(query, start_time, end_time)
+                )
                 for name, query in queries.items()
             ),
         )
@@ -327,13 +343,17 @@ class PrometheusAdapter:
                 if len(points) >= MAX_METRIC_POINTS:
                     break
                 if not isinstance(point, list | tuple) or len(point) != 2:
-                    raise ObservabilityMalformedResponse("Prometheus point is malformed")
+                    raise ObservabilityMalformedResponse(
+                        "Prometheus point is malformed"
+                    )
                 timestamp, value = point
                 try:
                     converted_timestamp = datetime.fromtimestamp(float(timestamp), UTC)
                     converted_value = float(value)
                 except (TypeError, ValueError, OverflowError) as error:
-                    raise ObservabilityMalformedResponse("Prometheus point value is malformed") from error
+                    raise ObservabilityMalformedResponse(
+                        "Prometheus point value is malformed"
+                    ) from error
                 points.append((converted_timestamp, converted_value))
         return tuple(sorted(points, key=lambda point: point[0]))
 
@@ -423,9 +443,13 @@ class ObservabilityEvidenceService:
         if not spans:
             return ()
         start = min(span.start_time for span in spans) - TRACE_CONTEXT_PADDING
-        end = max(
-            span.start_time + timedelta(milliseconds=span.duration_ms) for span in spans
-        ) + TRACE_CONTEXT_PADDING
+        end = (
+            max(
+                span.start_time + timedelta(milliseconds=span.duration_ms)
+                for span in spans
+            )
+            + TRACE_CONTEXT_PADDING
+        )
         return self._loki.get_trace_logs(
             trace.trace_id,
             start_time=start,
@@ -444,19 +468,27 @@ def _get_json(
     try:
         response = client.get(url, params=params)
     except httpx.RequestError as error:
-        raise ObservabilityBackendUnavailable("Observability backend is unavailable") from error
+        raise ObservabilityBackendUnavailable(
+            "Observability backend is unavailable"
+        ) from error
     if response.status_code == 404 and not not_found_is_empty:
         raise ObservabilityNotFoundError("Observability data was not found")
     if response.status_code >= 500:
         raise ObservabilityBackendUnavailable("Observability backend is unavailable")
     if response.status_code >= 400:
-        raise ObservabilityMalformedResponse("Observability backend rejected bounded query")
+        raise ObservabilityMalformedResponse(
+            "Observability backend rejected bounded query"
+        )
     try:
         payload = response.json()
     except ValueError as error:
-        raise ObservabilityMalformedResponse("Observability backend returned invalid JSON") from error
+        raise ObservabilityMalformedResponse(
+            "Observability backend returned invalid JSON"
+        ) from error
     if not isinstance(payload, Mapping):
-        raise ObservabilityMalformedResponse("Observability backend returned invalid JSON")
+        raise ObservabilityMalformedResponse(
+            "Observability backend returned invalid JSON"
+        )
     if payload.get("status") == "error":
         raise ObservabilityMalformedResponse("Observability backend returned an error")
     return payload
@@ -475,7 +507,9 @@ def _parse_tempo_trace(trace: Mapping[str, object], trace_id: str) -> RunTrace:
         if not isinstance(scope_spans, list):
             raise ObservabilityMalformedResponse("Tempo scope spans are malformed")
         for scope_span in scope_spans:
-            if not isinstance(scope_span, Mapping) or not isinstance(scope_span.get("spans"), list):
+            if not isinstance(scope_span, Mapping) or not isinstance(
+                scope_span.get("spans"), list
+            ):
                 raise ObservabilityMalformedResponse("Tempo scope span is malformed")
             for raw_span in scope_span["spans"]:
                 if not isinstance(raw_span, Mapping):
@@ -486,9 +520,13 @@ def _parse_tempo_trace(trace: Mapping[str, object], trace_id: str) -> RunTrace:
     ordered = _parent_first_order(spans)
     retained = tuple(ordered[:MAX_TRACE_SPANS])
     start = min(span.start_time for span in retained)
-    end = max(span.start_time + timedelta(milliseconds=span.duration_ms) for span in retained)
+    end = max(
+        span.start_time + timedelta(milliseconds=span.duration_ms) for span in retained
+    )
     statuses = {span.status for span in retained}
-    status: Literal["ok", "error", "unset"] = "error" if "error" in statuses else "ok" if "ok" in statuses else "unset"
+    status: Literal["ok", "error", "unset"] = (
+        "error" if "error" in statuses else "ok" if "ok" in statuses else "unset"
+    )
     return RunTrace(
         run_id=None,
         trace_id=trace_id,
@@ -505,21 +543,35 @@ def _parse_tempo_span(raw_span: Mapping[str, object], service_name: str) -> Trac
     span_id = raw_span.get("spanId")
     start_nanos = raw_span.get("startTimeUnixNano")
     end_nanos = raw_span.get("endTimeUnixNano")
-    if not all(isinstance(value, str) and value for value in (name, span_id, start_nanos, end_nanos)):
+    if not all(
+        isinstance(value, str) and value
+        for value in (name, span_id, start_nanos, end_nanos)
+    ):
         raise ObservabilityMalformedResponse("Tempo span fields are malformed")
     try:
         start = datetime.fromtimestamp(int(start_nanos) / 1_000_000_000, UTC)
         duration_ms = max(0, (int(end_nanos) - int(start_nanos)) / 1_000_000)
     except (ValueError, OverflowError) as error:
-        raise ObservabilityMalformedResponse("Tempo span timing is malformed") from error
+        raise ObservabilityMalformedResponse(
+            "Tempo span timing is malformed"
+        ) from error
     attributes = _tempo_attributes(raw_span.get("attributes"))
     parent = raw_span.get("parentSpanId")
-    parent_id = _base64_identifier(parent) if isinstance(parent, str) and parent else None
+    parent_id = (
+        _base64_identifier(parent) if isinstance(parent, str) and parent else None
+    )
     error_code = attributes.get("error.code")
     error_type = attributes.get("error.type")
     raw_status = raw_span.get("status")
     status_code = raw_status.get("code") if isinstance(raw_status, Mapping) else None
-    status: Literal["ok", "error", "unset"] = "error" if status_code in {2, "STATUS_CODE_ERROR", "ERROR"} or attributes.get("operation.status") == "failure" else "ok" if attributes.get("operation.status") == "success" else "unset"
+    status: Literal["ok", "error", "unset"] = (
+        "error"
+        if status_code in {2, "STATUS_CODE_ERROR", "ERROR"}
+        or attributes.get("operation.status") == "failure"
+        else "ok"
+        if attributes.get("operation.status") == "success"
+        else "unset"
+    )
     return TraceSpan(
         span_id=_base64_identifier(span_id),
         parent_span_id=parent_id,
@@ -578,7 +630,11 @@ def _parent_first_order(spans: Iterable[TraceSpan]) -> list[TraceSpan]:
     emitted: list[TraceSpan] = []
     emitted_ids: set[str] = set()
     while pending:
-        ready = [span for span in pending if span.parent_span_id is None or span.parent_span_id in emitted_ids]
+        ready = [
+            span
+            for span in pending
+            if span.parent_span_id is None or span.parent_span_id in emitted_ids
+        ]
         if not ready:
             ready = [pending[0]]
         for span in ready:
@@ -595,10 +651,16 @@ def _safe_log_event(
     service_name = labels.get("service_name")
     label_trace_id = labels.get("trace_id")
     if not isinstance(event_name, str) or event_name not in {
-        "agent.run.completed", "agent.run.failed", "mcp.server.completed", "mcp.server.failed"
+        "agent.run.completed",
+        "agent.run.failed",
+        "mcp.server.completed",
+        "mcp.server.failed",
     }:
         return None
-    if not isinstance(service_name, str) or service_name not in KNOWN_OBSERVABILITY_SERVICES:
+    if (
+        not isinstance(service_name, str)
+        or service_name not in KNOWN_OBSERVABILITY_SERVICES
+    ):
         return None
     if label_trace_id != trace_id:
         return None
@@ -614,7 +676,9 @@ def _safe_log_event(
         trace_id=trace_id,
         span_id=_safe_hex_identifier(labels.get("span_id")),
         run_id=_safe_uuid(labels.get("run_id") or labels.get("run.id")),
-        error_code=_safe_error_code(labels.get("error_code") or labels.get("error.code")),
+        error_code=_safe_error_code(
+            labels.get("error_code") or labels.get("error.code")
+        ),
     )
 
 
@@ -643,11 +707,15 @@ def _validate_service_name(value: str | None) -> str | None:
     return value
 
 
-def _bounded_window(start_time: datetime, end_time: datetime) -> tuple[datetime, datetime]:
+def _bounded_window(
+    start_time: datetime, end_time: datetime
+) -> tuple[datetime, datetime]:
     if start_time.tzinfo is None or end_time.tzinfo is None or end_time <= start_time:
         raise InvalidObservabilityIdentifier("Invalid observability time window")
     if end_time - start_time > MAX_LOOKBACK:
-        raise InvalidObservabilityIdentifier("Observability time window exceeds the maximum")
+        raise InvalidObservabilityIdentifier(
+            "Observability time window exceeds the maximum"
+        )
     return start_time.astimezone(UTC), end_time.astimezone(UTC)
 
 

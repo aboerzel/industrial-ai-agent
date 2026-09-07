@@ -206,7 +206,7 @@ def test_create_run_rejects_all_client_controlled_security_fields(field: str) ->
     assert response.status_code == 422
 
 
-def test_demo_clearance_is_server_mapped_and_cannot_raise_run_classification() -> None:
+def test_demo_clearance_cannot_lower_unknown_free_text_classification() -> None:
     service = FakeRunService(result=_success_result())
     client = TestClient(create_app(service))
 
@@ -219,10 +219,10 @@ def test_demo_clearance_is_server_mapped_and_cannot_raise_run_classification() -
     )
 
     assert response.status_code == 200
-    assert response.json()["data_classification"] == "PUBLIC"
-    assert service.policies[0].data_classification is DataClassification.PUBLIC
-    assert service.policies[0].mcp_clearance_ceiling is DataClassification.PUBLIC
-    assert service.policies[0].mcp_client_identity == "industrial-agent-public"
+    assert response.json()["data_classification"] == "RESTRICTED"
+    assert service.policies[0].data_classification is DataClassification.RESTRICTED
+    assert service.policies[0].mcp_clearance_ceiling is DataClassification.RESTRICTED
+    assert service.policies[0].mcp_client_identity == "industrial-agent-restricted"
 
 
 @pytest.mark.parametrize("clearance", ("PUBLIC", "INTERNAL"))

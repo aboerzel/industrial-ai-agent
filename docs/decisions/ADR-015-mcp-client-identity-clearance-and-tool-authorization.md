@@ -134,3 +134,9 @@ Every request still resolves identity, clearance, and immutable permissions from
 authenticated bearer token. A `run_id`, trace context, or any client header does not
 establish RCA access. Runtime RLS remains the first evidence gate, so inaccessible and
 missing runs remain a neutral unavailable result.
+
+The browser UI clearance selector is a separate local-demo simulation of an already
+authenticated user's clearance. It is not accepted by MCP and is not a production
+identity interface. A future production API adapter must derive its `SecurityContext`
+from trusted server-side identity; MCP identity, permissions, RLS, and model egress
+remain independently deterministic.

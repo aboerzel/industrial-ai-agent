@@ -263,3 +263,12 @@ Negative:
 * configuration errors can leave no eligible model and must fail clearly
 * cost and quality classes require evidence and governance to remain meaningful
 * multiple profiles increase evaluation and operational maintenance
+
+### Local Demo Routing Clarification
+
+The Full Demo retains eligible `PUBLIC_CLOUD` profiles for `PUBLIC`, `INTERNAL`, and
+`CONFIDENTIAL` runs and therefore requires a valid credential for its configured public
+provider. `RESTRICTED` remains ineligible for public-cloud routing. For an explicitly
+local-only demo, `LOCAL_ONLY_MODE=true` removes public-cloud profiles from the candidate
+set before deterministic routing. This is an availability configuration, not a change to
+the security eligibility matrix or final egress check.

@@ -125,7 +125,9 @@ class _FakeEvidenceService:
             "correlated_logs": [],
             "metric_context": {},
             "evidence": ["An error span identifies the failure location."],
-            "limitations": ["This is deterministic evidence aggregation, not a root-cause conclusion."],
+            "limitations": [
+                "This is deterministic evidence aggregation, not a root-cause conclusion."
+            ],
         }
 
 

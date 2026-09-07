@@ -275,6 +275,20 @@ wildcard, authentication, TLS, rate limiting, or streaming endpoint. Its explici
 `reject` decision contract for a persisted pending action.
 Swagger UI at `/docs` remains the generated API contract explorer.
 
+The browser clearance selector is deliberately a local-demo simulation of an already
+authenticated user's clearance, not an authentication or authorization mechanism. A
+production adapter must derive `SecurityContext` from a trusted server-side identity.
+The selector never sets run classification, MCP identity or permissions, RLS clearance,
+or model-egress eligibility. Unknown free text without a documented demo identifier is
+conservatively resolved as `RESTRICTED_TROUBLESHOOTING`: unknown sensitivity never
+authorizes public-cloud model processing.
+
+Compose publishes host-facing demo and diagnostic ports only on `127.0.0.1`; services
+communicating only within Compose, including the OTel Collector, have no host port.
+Grafana anonymous local access is restricted to Viewer. `LOCAL_ONLY_MODE=true` removes
+public-cloud profiles from routing; otherwise the Full Demo requires a valid public
+provider credential for the configured `public_fast` profile.
+
 `POST /api/v1/diagnostics` is the only INTERNAL run entry point. It accepts only
 bounded product and station identifiers, verifies the required projections through an
 INTERNAL RLS context, constructs its prompt server-side, and resolves

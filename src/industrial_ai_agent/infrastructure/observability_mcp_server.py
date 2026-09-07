@@ -99,10 +99,14 @@ def create_observability_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def get_run_trace(run_id: RunIdentifier, ctx: Context | None = None) -> dict[str, Any]:
+    def get_run_trace(
+        run_id: RunIdentifier, ctx: Context | None = None
+    ) -> dict[str, Any]:
         _authorize(ctx, access_control, "get_run_trace")
         return _invoke_tool(
-            telemetry, "get_run_trace", lambda: evidence_service.get_run_trace(run_id).model_dump(mode="json")
+            telemetry,
+            "get_run_trace",
+            lambda: evidence_service.get_run_trace(run_id).model_dump(mode="json"),
         )
 
     @server.tool(
@@ -143,7 +147,9 @@ def create_observability_mcp_server(
         return _invoke_tool(
             telemetry,
             "get_run_metrics",
-            lambda: evidence_service.get_run_metrics(run_or_trace_id).model_dump(mode="json"),
+            lambda: evidence_service.get_run_metrics(run_or_trace_id).model_dump(
+                mode="json"
+            ),
         )
 
     @server.tool(
@@ -164,7 +170,9 @@ def create_observability_mcp_server(
             lambda: {
                 "service_name": service_name,
                 "time_window": time_window,
-                **evidence_service.get_service_health(service_name, time_window).model_dump(mode="json"),
+                **evidence_service.get_service_health(
+                    service_name, time_window
+                ).model_dump(mode="json"),
             },
         )
 
@@ -174,9 +182,15 @@ def create_observability_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def investigate_run(run_id: RunIdentifier, ctx: Context | None = None) -> dict[str, Any]:
+    def investigate_run(
+        run_id: RunIdentifier, ctx: Context | None = None
+    ) -> dict[str, Any]:
         _authorize(ctx, access_control, "investigate_run")
-        return _invoke_tool(telemetry, "investigate_run", lambda: evidence_service.investigate_run(run_id))
+        return _invoke_tool(
+            telemetry,
+            "investigate_run",
+            lambda: evidence_service.investigate_run(run_id),
+        )
 
     for tool_name in _OBSERVABILITY_TOOL_PERMISSIONS:
         require_strict_mcp_tool_arguments(server, tool_name)
@@ -218,7 +232,9 @@ def create_secure_observability_mcp_server(
 
     access_control = create_demo_mcp_access_control(
         tools=listed_tools,
-        required_permission=lambda tool_name: _OBSERVABILITY_TOOL_PERMISSIONS[tool_name],
+        required_permission=lambda tool_name: _OBSERVABILITY_TOOL_PERMISSIONS[
+            tool_name
+        ],
     )
     server = create_observability_mcp_server(
         evidence_service=evidence_service,
@@ -250,12 +266,18 @@ def main() -> None:
     )
 
 
-def _create_evidence_service(configuration: BackendConfiguration) -> ObservabilityEvidenceService:
+def _create_evidence_service(
+    configuration: BackendConfiguration,
+) -> ObservabilityEvidenceService:
     timeout = httpx.Timeout(configuration.timeout_seconds)
     return ObservabilityEvidenceService(
-        tempo=TempoAdapter(configuration.tempo_url, client=httpx.Client(timeout=timeout)),
+        tempo=TempoAdapter(
+            configuration.tempo_url, client=httpx.Client(timeout=timeout)
+        ),
         loki=LokiAdapter(configuration.loki_url, client=httpx.Client(timeout=timeout)),
-        prometheus=PrometheusAdapter(configuration.prometheus_url, client=httpx.Client(timeout=timeout)),
+        prometheus=PrometheusAdapter(
+            configuration.prometheus_url, client=httpx.Client(timeout=timeout)
+        ),
     )
 
 
@@ -266,15 +288,23 @@ def _authorize(
         return
     if ctx is None:
         raise PermissionError("MCP authentication failed")
-    access_control.authorize_tool(access_control.access_context_from_headers(ctx.headers), tool_name)
+    access_control.authorize_tool(
+        access_control.access_context_from_headers(ctx.headers), tool_name
+    )
 
 
-def _invoke_tool(telemetry: Telemetry | None, tool_name: str, action: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+def _invoke_tool(
+    telemetry: Telemetry | None, tool_name: str, action: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
     if telemetry is None:
         return action()
     started = perf_counter()
     status = "success"
-    attributes = {"mcp.tool": tool_name, "mcp.operation": "read", "operation.type": "read"}
+    attributes = {
+        "mcp.tool": tool_name,
+        "mcp.operation": "read",
+        "operation.type": "read",
+    }
     try:
         with telemetry.span("observability.query", attributes):
             result = action()
@@ -282,7 +312,11 @@ def _invoke_tool(telemetry: Telemetry | None, tool_name: str, action: Callable[[
         return result
     except BaseException as error:
         status = "failure"
-        telemetry.log_error(event="mcp.server.failed", run_id=None, error_code=sanitized_error_code(error))
+        telemetry.log_error(
+            event="mcp.server.failed",
+            run_id=None,
+            error_code=sanitized_error_code(error),
+        )
         raise
     finally:
         telemetry.record_mcp_call(
@@ -292,21 +326,28 @@ def _invoke_tool(telemetry: Telemetry | None, tool_name: str, action: Callable[[
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the read-only Observability MCP server.")
+    parser = argparse.ArgumentParser(
+        description="Run the read-only Observability MCP server."
+    )
     parser.add_argument(
         "--transport",
         choices=("stdio", "streamable-http"),
         default=os.getenv("OBSERVABILITY_MCP_TRANSPORT", "stdio"),
     )
-    parser.add_argument("--host", default=os.getenv("OBSERVABILITY_MCP_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("OBSERVABILITY_MCP_PORT", "8003")))
+    parser.add_argument(
+        "--host", default=os.getenv("OBSERVABILITY_MCP_HOST", "127.0.0.1")
+    )
+    parser.add_argument(
+        "--port", type=int, default=int(os.getenv("OBSERVABILITY_MCP_PORT", "8003"))
+    )
     return parser.parse_args()
 
 
 def _create_telemetry() -> Telemetry:
     return configure_telemetry(
         TelemetryConfiguration(
-            enabled=os.getenv("OTEL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"},
+            enabled=os.getenv("OTEL_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"},
             otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317"),
             service_name=os.getenv("OTEL_SERVICE_NAME", "observability-mcp"),
         )

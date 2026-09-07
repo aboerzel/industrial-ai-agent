@@ -37,19 +37,29 @@ def test_run_id_lookup_uses_fixed_traceql_and_returns_safe_trace() -> None:
 
     assert trace.run_id == RUN_ID
     assert trace.trace_id == TRACE_ID
-    assert [span.operation_name for span in trace.spans] == ["agent.run", "mcp.discovery"]
+    assert [span.operation_name for span in trace.spans] == [
+        "agent.run",
+        "mcp.discovery",
+    ]
     assert requests[0].url.params["q"] == f'{{ span.run.id = "{RUN_ID}" }}'
     assert requests[0].url.params["limit"] == "1"
 
 
-def test_trace_parsing_orders_parent_before_child_and_removes_sensitive_attributes() -> None:
-    trace = TempoAdapter("http://tempo", client=_client(lambda _: _json_response(_tempo_trace_payload()))).get_trace(TRACE_ID)
+def test_trace_parsing_orders_parent_before_child_and_removes_sensitive_attributes() -> (
+    None
+):
+    trace = TempoAdapter(
+        "http://tempo", client=_client(lambda _: _json_response(_tempo_trace_payload()))
+    ).get_trace(TRACE_ID)
 
     root, child = trace.spans
     assert root.span_id == "0102030405060708"
     assert child.parent_span_id == root.span_id
     assert root.attributes == {"run.id": RUN_ID, "operation.status": "success"}
-    assert child.attributes == {"error.code": "McpUnavailable", "operation.status": "failure"}
+    assert child.attributes == {
+        "error.code": "McpUnavailable",
+        "operation.status": "failure",
+    }
     assert child.error_code == "McpUnavailable"
 
 
@@ -63,8 +73,12 @@ def test_trace_and_run_identifier_validation_rejects_invalid_values() -> None:
 
 
 def test_trace_not_found_and_backend_unavailable_are_typed() -> None:
-    missing = TempoAdapter("http://tempo", client=_client(lambda _: _json_response({"traces": []})))
-    unavailable = TempoAdapter("http://tempo", client=_client(lambda _: httpx.Response(503)))
+    missing = TempoAdapter(
+        "http://tempo", client=_client(lambda _: _json_response({"traces": []}))
+    )
+    unavailable = TempoAdapter(
+        "http://tempo", client=_client(lambda _: httpx.Response(503))
+    )
 
     with pytest.raises(ObservabilityNotFoundError):
         missing.get_run_trace(RUN_ID)
@@ -72,8 +86,13 @@ def test_trace_not_found_and_backend_unavailable_are_typed() -> None:
         unavailable.get_trace(TRACE_ID)
 
 
-def test_loki_trace_correlation_projects_only_safe_metadata_and_bounds_results() -> None:
-    values = [[str(1_700_000_000_000_000_000 + index), "must never escape"] for index in range(MAX_LOG_EVENTS + 10)]
+def test_loki_trace_correlation_projects_only_safe_metadata_and_bounds_results() -> (
+    None
+):
+    values = [
+        [str(1_700_000_000_000_000_000 + index), "must never escape"]
+        for index in range(MAX_LOG_EVENTS + 10)
+    ]
     payload = {
         "status": "success",
         "data": {
@@ -94,7 +113,9 @@ def test_loki_trace_correlation_projects_only_safe_metadata_and_bounds_results()
             ]
         },
     }
-    events = LokiAdapter("http://loki", client=_client(lambda _: _json_response(payload))).get_trace_logs(
+    events = LokiAdapter(
+        "http://loki", client=_client(lambda _: _json_response(payload))
+    ).get_trace_logs(
         TRACE_ID,
         start_time=datetime.now(UTC) - timedelta(minutes=1),
         end_time=datetime.now(UTC),
@@ -117,12 +138,21 @@ def test_loki_rejects_invalid_trace_id_and_unavailable_or_malformed_responses() 
     now = datetime.now(UTC)
     adapter = LokiAdapter("http://loki", client=_client(lambda _: httpx.Response(503)))
     with pytest.raises(InvalidObservabilityIdentifier):
-        adapter.get_trace_logs("not-a-trace", start_time=now - timedelta(seconds=1), end_time=now)
+        adapter.get_trace_logs(
+            "not-a-trace", start_time=now - timedelta(seconds=1), end_time=now
+        )
     with pytest.raises(ObservabilityBackendUnavailable):
-        adapter.get_trace_logs(TRACE_ID, start_time=now - timedelta(seconds=1), end_time=now)
-    malformed = LokiAdapter("http://loki", client=_client(lambda _: _json_response({"status": "success", "data": {}})))
+        adapter.get_trace_logs(
+            TRACE_ID, start_time=now - timedelta(seconds=1), end_time=now
+        )
+    malformed = LokiAdapter(
+        "http://loki",
+        client=_client(lambda _: _json_response({"status": "success", "data": {}})),
+    )
     with pytest.raises(ObservabilityMalformedResponse):
-        malformed.get_trace_logs(TRACE_ID, start_time=now - timedelta(seconds=1), end_time=now)
+        malformed.get_trace_logs(
+            TRACE_ID, start_time=now - timedelta(seconds=1), end_time=now
+        )
 
 
 def test_prometheus_constructs_bounded_queries_and_bounds_points() -> None:
@@ -135,12 +165,21 @@ def test_prometheus_constructs_bounded_queries_and_bounds_points() -> None:
                 "status": "success",
                 "data": {
                     "resultType": "matrix",
-                    "result": [{"values": [[str(1_700_000_000 + index), "1"] for index in range(MAX_METRIC_POINTS + 10)]}],
+                    "result": [
+                        {
+                            "values": [
+                                [str(1_700_000_000 + index), "1"]
+                                for index in range(MAX_METRIC_POINTS + 10)
+                            ]
+                        }
+                    ],
                 },
             }
         )
 
-    context = PrometheusAdapter("http://prometheus", client=_client(handler)).service_health("factory-mcp", "5m")
+    context = PrometheusAdapter(
+        "http://prometheus", client=_client(handler)
+    ).service_health("factory-mcp", "5m")
 
     assert len(context.series) == 7
     assert all(len(series.points) == MAX_METRIC_POINTS for series in context.series)
@@ -150,19 +189,30 @@ def test_prometheus_constructs_bounded_queries_and_bounds_points() -> None:
 
 
 def test_prometheus_rejects_unrepresentable_window_and_backend_failures() -> None:
-    adapter = PrometheusAdapter("http://prometheus", client=_client(lambda _: httpx.Response(503)))
+    adapter = PrometheusAdapter(
+        "http://prometheus", client=_client(lambda _: httpx.Response(503))
+    )
     with pytest.raises(InvalidObservabilityIdentifier):
         adapter.service_health("factory-mcp", "arbitrary PromQL")
     with pytest.raises(ObservabilityBackendUnavailable):
         adapter.service_health("factory-mcp", "5m")
 
 
-def test_run_metrics_resolves_equivalent_context_for_run_and_trace_identifiers() -> None:
+def test_run_metrics_resolves_equivalent_context_for_run_and_trace_identifiers() -> (
+    None
+):
     tempo = TempoAdapter("http://tempo", client=_client(_tempo_handler))
-    prometheus = PrometheusAdapter("http://prometheus", client=_client(_prometheus_handler))
+    prometheus = PrometheusAdapter(
+        "http://prometheus", client=_client(_prometheus_handler)
+    )
     service = ObservabilityEvidenceService(
         tempo=tempo,
-        loki=LokiAdapter("http://loki", client=_client(lambda _: _json_response({"status": "success", "data": {"result": []}}))),
+        loki=LokiAdapter(
+            "http://loki",
+            client=_client(
+                lambda _: _json_response({"status": "success", "data": {"result": []}})
+            ),
+        ),
         prometheus=prometheus,
     )
 
@@ -183,8 +233,15 @@ def test_run_metrics_returns_neutral_not_found_for_unknown_valid_identifier(
     )
     service = ObservabilityEvidenceService(
         tempo=tempo,
-        loki=LokiAdapter("http://loki", client=_client(lambda _: _json_response({"status": "success", "data": {"result": []}}))),
-        prometheus=PrometheusAdapter("http://prometheus", client=_client(_prometheus_handler)),
+        loki=LokiAdapter(
+            "http://loki",
+            client=_client(
+                lambda _: _json_response({"status": "success", "data": {"result": []}})
+            ),
+        ),
+        prometheus=PrometheusAdapter(
+            "http://prometheus", client=_client(_prometheus_handler)
+        ),
     )
 
     with pytest.raises(ObservabilityNotFoundError):
@@ -193,9 +250,18 @@ def test_run_metrics_returns_neutral_not_found_for_unknown_valid_identifier(
 
 def test_run_metrics_rejects_malformed_identifier() -> None:
     service = ObservabilityEvidenceService(
-        tempo=TempoAdapter("http://tempo", client=_client(lambda _: _json_response({}))),
-        loki=LokiAdapter("http://loki", client=_client(lambda _: _json_response({"status": "success", "data": {"result": []}}))),
-        prometheus=PrometheusAdapter("http://prometheus", client=_client(_prometheus_handler)),
+        tempo=TempoAdapter(
+            "http://tempo", client=_client(lambda _: _json_response({}))
+        ),
+        loki=LokiAdapter(
+            "http://loki",
+            client=_client(
+                lambda _: _json_response({"status": "success", "data": {"result": []}})
+            ),
+        ),
+        prometheus=PrometheusAdapter(
+            "http://prometheus", client=_client(_prometheus_handler)
+        ),
     )
 
     with pytest.raises(InvalidObservabilityIdentifier):
@@ -206,19 +272,32 @@ def test_lookback_and_trace_result_bounds_are_enforced() -> None:
     now = datetime.now(UTC)
     loki = LokiAdapter("http://loki", client=_client(lambda _: _json_response({})))
     with pytest.raises(InvalidObservabilityIdentifier):
-        loki.get_trace_logs(TRACE_ID, start_time=now - MAX_LOOKBACK - timedelta(seconds=1), end_time=now)
+        loki.get_trace_logs(
+            TRACE_ID, start_time=now - MAX_LOOKBACK - timedelta(seconds=1), end_time=now
+        )
 
     payload = _tempo_trace_payload(span_count=MAX_TRACE_SPANS + 1)
-    trace = TempoAdapter("http://tempo", client=_client(lambda _: _json_response(payload))).get_trace(TRACE_ID)
+    trace = TempoAdapter(
+        "http://tempo", client=_client(lambda _: _json_response(payload))
+    ).get_trace(TRACE_ID)
     assert len(trace.spans) == MAX_TRACE_SPANS
     assert trace.truncated is True
 
 
 def test_investigation_aggregates_evidence_without_claiming_root_cause() -> None:
     tempo = TempoAdapter("http://tempo", client=_client(_tempo_handler))
-    loki = LokiAdapter("http://loki", client=_client(lambda _: _json_response({"status": "success", "data": {"result": []}})))
-    prometheus = PrometheusAdapter("http://prometheus", client=_client(_prometheus_handler))
-    result = ObservabilityEvidenceService(tempo=tempo, loki=loki, prometheus=prometheus).investigate_run(RUN_ID)
+    loki = LokiAdapter(
+        "http://loki",
+        client=_client(
+            lambda _: _json_response({"status": "success", "data": {"result": []}})
+        ),
+    )
+    prometheus = PrometheusAdapter(
+        "http://prometheus", client=_client(_prometheus_handler)
+    )
+    result = ObservabilityEvidenceService(
+        tempo=tempo, loki=loki, prometheus=prometheus
+    ).investigate_run(RUN_ID)
 
     assert result["failing_service"] == "factory-mcp"
     assert result["failing_operation"] == "mcp.discovery"
@@ -239,7 +318,15 @@ def _unknown_tempo_handler(request: httpx.Request) -> httpx.Response:
 
 
 def _prometheus_handler(_: httpx.Request) -> httpx.Response:
-    return _json_response({"status": "success", "data": {"resultType": "matrix", "result": [{"values": [["1700000000", "0"]]}]}})
+    return _json_response(
+        {
+            "status": "success",
+            "data": {
+                "resultType": "matrix",
+                "result": [{"values": [["1700000000", "0"]]}],
+            },
+        }
+    )
 
 
 def _tempo_trace_payload(span_count: int = 2) -> dict[str, object]:
@@ -285,11 +372,25 @@ def _tempo_trace_payload(span_count: int = 2) -> dict[str, object]:
         "trace": {
             "resourceSpans": [
                 {
-                    "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "industrial-ai-agent"}}]},
+                    "resource": {
+                        "attributes": [
+                            {
+                                "key": "service.name",
+                                "value": {"stringValue": "industrial-ai-agent"},
+                            }
+                        ]
+                    },
                     "scopeSpans": [{"spans": [spans[0], *spans[2:]]}],
                 },
                 {
-                    "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "factory-mcp"}}]},
+                    "resource": {
+                        "attributes": [
+                            {
+                                "key": "service.name",
+                                "value": {"stringValue": "factory-mcp"},
+                            }
+                        ]
+                    },
                     "scopeSpans": [{"spans": [spans[1]]}],
                 },
             ]

@@ -177,8 +177,12 @@ class AgentRunRecord(Base):
     approval_payload: Mapped[dict[str, object] | None] = mapped_column(JSON)
     approval_action: Mapped[str | None] = mapped_column(String)
     approval_decision: Mapped[str | None] = mapped_column(String)
-    approval_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    approval_decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approval_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    approval_decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     interrupted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

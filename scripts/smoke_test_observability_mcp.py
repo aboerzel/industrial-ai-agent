@@ -30,7 +30,9 @@ async def _run(run_id: str) -> None:
         trace = await session.call_tool("get_run_trace", {"run_id": run_id})
         trace_id = trace.structured_content["trace_id"]
         logs = await session.call_tool("get_trace_logs", {"trace_id": trace_id})
-        metrics = await session.call_tool("get_run_metrics", {"run_or_trace_id": run_id})
+        metrics = await session.call_tool(
+            "get_run_metrics", {"run_or_trace_id": run_id}
+        )
         health = await session.call_tool(
             "get_service_health",
             {"service_name": "industrial-ai-agent", "time_window": "15m"},

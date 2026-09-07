@@ -113,7 +113,8 @@ class TroubleshootingRunService:
         agent_factory: RoutedTroubleshootingAgentFactory,
         checkpointer_factory: RuntimeCheckpointerFactory | None = None,
         classification_policy: AgentRunClassificationPolicy | None = None,
-        internal_diagnostic_scope_validator: InternalDiagnosticScopeValidator | None = None,
+        internal_diagnostic_scope_validator: InternalDiagnosticScopeValidator
+        | None = None,
     ) -> None:
         self._router = router
         self._profiles = profiles
@@ -217,9 +218,11 @@ class TroubleshootingRunService:
 
 def confidential_troubleshooting_requirements() -> TaskRequirements:
     """Build the conservative, server-controlled requirements for this API use case."""
-    return AgentRunClassificationPolicy().resolve(
-        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
-    ).task_requirements
+    return (
+        AgentRunClassificationPolicy()
+        .resolve(AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING)
+        .task_requirements
+    )
 
 
 def internal_diagnostic_message(target: InternalDiagnosticTarget) -> str:

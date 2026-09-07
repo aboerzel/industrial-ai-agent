@@ -61,6 +61,7 @@ from industrial_ai_agent.infrastructure.api.postgres_run_store import (
 from industrial_ai_agent.infrastructure.llm.configuration import (
     LLMConfiguration,
     load_llm_configuration,
+    local_only_mode_enabled,
 )
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
@@ -385,7 +386,9 @@ def _create_rca_reasoner(telemetry: Telemetry | None) -> RcaReasoner | None:
     adapter = OpenAICompatibleLLMClient(configuration)
     return LlmRcaReasoner(
         router=DeterministicModelRouter(),
-        profiles=configuration.get_routing_profiles(),
+        profiles=configuration.get_routing_profiles(
+            local_only=local_only_mode_enabled()
+        ),
         timeout_seconds=float(os.getenv("RCA_REASONING_TIMEOUT_SECONDS", "90")),
         client_factory=lambda classification, focus: _reasoning_llm_client(
             adapter,

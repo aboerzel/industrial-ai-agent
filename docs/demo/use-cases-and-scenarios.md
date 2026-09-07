@@ -5,6 +5,10 @@ normal questions in the Web UI or to `POST /api/v1/runs`; use authenticated MCP 
 direct tool and RCA checks. The UI selector maps to a server-owned `SecurityContext` at
 `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, or `RESTRICTED`.
 
+The selector simulates an already authenticated user's clearance only for this local
+demo. It is not a production identity interface; production clearance must come from a
+trusted server-side identity.
+
 Visibility follows `user clearance >= data classification`. Factory and knowledge lists
 are RLS-filtered before names, relationships, or classifications are returned. They
 never reveal hidden entities, hidden counts, or required clearance. Higher user clearance

@@ -62,6 +62,65 @@ def test_discovery_uses_server_resolved_user_clearance_without_broadening_named_
     assert named_profile is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
 
 
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Why did the last batch fail?",
+        "Please export the customer production plan.",
+        "  WhY did the last batch fail?  ",
+    ),
+)
+def test_unknown_free_text_is_conservatively_restricted(message: str) -> None:
+    assert (
+        resolve_demo_run_profile(message) is AgentRunProfile.RESTRICTED_TROUBLESHOOTING
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    (
+        ("Investigate P4711 at S04.", AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING),
+        ("Investigate P9001 at S07.", AgentRunProfile.RESTRICTED_TROUBLESHOOTING),
+    ),
+)
+def test_named_demo_cases_keep_their_deterministic_classification(
+    message: str, expected: AgentRunProfile
+) -> None:
+    assert resolve_demo_run_profile(message) is expected
+
+
+def test_known_public_discovery_request_stays_public() -> None:
+    public_user = SecurityContext(
+        subject_id="public-demo-user",
+        roles=("demo-engineer",),
+        clearance=DataClassification.PUBLIC,
+        authenticated=True,
+    )
+
+    assert (
+        resolve_demo_run_profile(
+            "Which stations are available?", security_context=public_user
+        )
+        is AgentRunProfile.PUBLIC_INFORMATION
+    )
+
+
+def test_known_internal_discovery_request_stays_internal() -> None:
+    internal_user = SecurityContext(
+        subject_id="internal-demo-user",
+        roles=("demo-engineer",),
+        clearance=DataClassification.INTERNAL,
+        authenticated=True,
+    )
+
+    assert (
+        resolve_demo_run_profile(
+            "Which stations are available?", security_context=internal_user
+        )
+        is AgentRunProfile.INTERNAL_DIAGNOSTIC
+    )
+
+
 def test_persisted_policy_rejects_classification_mismatch() -> None:
     with pytest.raises(ValueError, match="classification"):
         AgentRunClassificationPolicy().resolve_persisted(

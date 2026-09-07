@@ -1,3 +1,4 @@
+import os
 import tomllib
 from decimal import Decimal
 from enum import StrEnum
@@ -27,6 +28,9 @@ from industrial_ai_agent.domain.security import DataClassification
 class AuthenticationMode(StrEnum):
     NONE = "none"
     API_KEY = "api_key"
+
+
+LOCAL_ONLY_MODE_ENV = "LOCAL_ONLY_MODE"
 
 
 class ModelProfileConfig(BaseModel):
@@ -87,7 +91,9 @@ class LLMConfiguration(BaseModel):
     def get_max_data_classification(self, profile_name: str) -> DataClassification:
         return self.get_profile(profile_name).max_data_classification
 
-    def get_routing_profiles(self) -> tuple[ModelProfileMetadata, ...]:
+    def get_routing_profiles(
+        self, *, local_only: bool = False
+    ) -> tuple[ModelProfileMetadata, ...]:
         return tuple(
             ModelProfileMetadata(
                 profile=ModelProfile(profile_name),
@@ -98,6 +104,7 @@ class LLMConfiguration(BaseModel):
                 max_data_classification=profile.max_data_classification,
             )
             for profile_name, profile in sorted(self.profiles.items())
+            if not local_only or profile.execution_zone is ExecutionZone.LOCAL
         )
 
 
@@ -105,3 +112,12 @@ def load_llm_configuration(path: Path) -> LLMConfiguration:
     with path.open("rb") as config_file:
         raw_configuration = tomllib.load(config_file)
     return LLMConfiguration.model_validate(raw_configuration)
+
+
+def local_only_mode_enabled() -> bool:
+    value = os.getenv(LOCAL_ONLY_MODE_ENV, "false").strip().lower()
+    if value in {"0", "false"}:
+        return False
+    if value in {"1", "true"}:
+        return True
+    raise ValueError(f"{LOCAL_ONLY_MODE_ENV} must be either 'true' or 'false'")
