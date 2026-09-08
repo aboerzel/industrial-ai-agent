@@ -20,63 +20,56 @@
         </p>
       </header>
 
-      <section class="workspace" aria-label="Troubleshooting workspace">
-        <form class="investigation-panel" id="investigation-form">
-          <div class="panel-heading">
-            <div>
-              <p class="panel-kicker">NEW INVESTIGATION</p>
-              <h2>Investigate an industrial issue</h2>
-            </div>
-            <span class="connection-indicator" aria-hidden="true"></span>
+      <section class="result-panel" aria-labelledby="result-title">
+        <header class="investigation-header">
+          <div class="investigation-title">
+            <p class="panel-kicker">INVESTIGATION</p>
+            <h2 id="result-title">No active investigation</h2>
+            <p class="investigation-context" id="investigation-context">Ask about a production issue, station, product, maintenance ticket, or available documentation.</p>
           </div>
+          <div class="toolbar-controls">
+            <label class="clearance-control" for="user-clearance" title="Demo access level for the next request.">
+              <span>Demo clearance</span>
+              <select id="user-clearance" name="user-clearance">
+                <option value="PUBLIC" selected>PUBLIC</option>
+                <option value="INTERNAL">INTERNAL</option>
+                <option value="CONFIDENTIAL">CONFIDENTIAL</option>
+                <option value="RESTRICTED">RESTRICTED</option>
+              </select>
+            </label>
+            <span class="status-badge" data-status="idle" id="run-status" hidden></span>
+            <button id="export-pdf-button" type="button" disabled>Export as PDF</button>
+            <button class="secondary-button" id="new-investigation-button" type="button">New Investigation</button>
+          </div>
+        </header>
 
-          <label for="user-clearance">User clearance (demo)</label>
-          <select id="user-clearance" name="user-clearance">
-            <option value="PUBLIC" selected>PUBLIC</option>
-            <option value="INTERNAL">INTERNAL</option>
-            <option value="CONFIDENTIAL">CONFIDENTIAL</option>
-            <option value="RESTRICTED">RESTRICTED</option>
-          </select>
-          <p class="field-note">Demo-only security simulation. The server determines the run classification.</p>
+        <dl class="investigation-metadata" id="investigation-metadata" hidden>
+          <div>
+            <dt>Runs</dt>
+            <dd id="investigation-runs">0</dd>
+          </div>
+          <div>
+            <dt>Tools</dt>
+            <dd id="investigation-tools">0</dd>
+          </div>
+        </dl>
 
-          <label for="message">Troubleshooting request</label>
-          <textarea id="message" name="message" required rows="8">Investigate why product P4711 failed at station S04. Use the available documentation if needed.</textarea>
-          <button id="run-button" type="submit">New Investigation</button>
+        <div class="conversation-history empty-state" id="conversation-history" aria-live="polite" aria-relevant="additions text">
+          <div class="empty-investigation">
+            <h3>Start a new investigation</h3>
+            <p>Ask about a production issue, station, product, maintenance ticket, or available documentation.</p>
+          </div>
+        </div>
+
+        <form class="composer-form" id="composer-form">
+          <label for="composer-message">Message</label>
+          <textarea id="composer-message" name="composer-message" rows="3" placeholder="Ask a troubleshooting question..." required></textarea>
+          <div class="composer-actions">
+            <button id="composer-button" type="submit">Start Investigation</button>
+          </div>
         </form>
 
-        <section class="result-panel" aria-live="polite" aria-labelledby="result-title">
-          <div class="panel-heading">
-            <div>
-              <p class="panel-kicker">INVESTIGATION HISTORY</p>
-              <h2 id="result-title">Awaiting investigation</h2>
-            </div>
-            <div class="header-actions">
-              <button id="export-pdf-button" type="button" disabled>Export as PDF</button>
-              <span class="status-badge" data-status="idle" id="run-status">Idle</span>
-            </div>
-          </div>
-
-          <dl class="run-metadata investigation-metadata">
-            <div>
-              <dt>Investigation</dt>
-              <dd id="investigation-id">Not started</dd>
-            </div>
-            <div>
-              <dt>Activity</dt>
-              <dd id="investigation-summary">Runs: 0 / Tools: 0</dd>
-            </div>
-          </dl>
-
-          <div class="conversation-history empty-state" id="conversation-history">Start an investigation to view the conversation.</div>
-
-          <form class="follow-up-form" id="follow-up-form">
-            <label for="follow-up-message">Ask a follow-up</label>
-            <textarea id="follow-up-message" name="follow-up-message" rows="3" placeholder="Ask a follow-up..." required></textarea>
-            <button id="follow-up-button" type="submit" disabled>Continue Investigation</button>
-          </form>
-
-          <p class="error-message" hidden id="error-message" role="alert"></p>
-        </section>
+        <p class="error-message" hidden id="error-message" role="alert"></p>
       </section>
     </main>
     <script type="module" src="js/app.js"></script>

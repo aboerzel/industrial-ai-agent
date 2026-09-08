@@ -15,7 +15,10 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
 from industrial_ai_agent.infrastructure.observed_run_service import (
     ObservedTroubleshootingRunService,
 )
-from industrial_ai_agent.infrastructure.telemetry import Telemetry, TelemetryConfiguration
+from industrial_ai_agent.infrastructure.telemetry import (
+    Telemetry,
+    TelemetryConfiguration,
+)
 
 
 class RecordingPersistentRunService:
@@ -51,7 +54,9 @@ class RecordingPersistentRunService:
         return _success_result()
 
 
-def test_observed_service_starts_first_persistent_investigation_without_history() -> None:
+def test_observed_service_starts_first_persistent_investigation_without_history() -> (
+    None
+):
     delegate = RecordingPersistentRunService()
     service = ObservedTroubleshootingRunService(delegate, _disabled_telemetry())
     policy = AgentRunClassificationPolicy().resolve(

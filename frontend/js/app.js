@@ -7,109 +7,220 @@ import {
 } from "./api.js";
 import { renderAgentAnswer } from "./markdown.js";
 
-const form = document.querySelector("#investigation-form");
-const messageInput = document.querySelector("#message");
+const composerForm = document.querySelector("#composer-form");
+const composerMessage = document.querySelector("#composer-message");
+const composerButton = document.querySelector("#composer-button");
 const userClearance = document.querySelector("#user-clearance");
-const runButton = document.querySelector("#run-button");
-const followUpForm = document.querySelector("#follow-up-form");
-const followUpMessage = document.querySelector("#follow-up-message");
-const followUpButton = document.querySelector("#follow-up-button");
+const newInvestigationButton = document.querySelector("#new-investigation-button");
 const history = document.querySelector("#conversation-history");
 const runStatus = document.querySelector("#run-status");
-const investigationId = document.querySelector("#investigation-id");
-const investigationSummary = document.querySelector("#investigation-summary");
+const investigationRuns = document.querySelector("#investigation-runs");
+const investigationTools = document.querySelector("#investigation-tools");
+const investigationMetadata = document.querySelector("#investigation-metadata");
+const investigationContext = document.querySelector("#investigation-context");
 const resultTitle = document.querySelector("#result-title");
 const exportPdfButton = document.querySelector("#export-pdf-button");
 const errorMessage = document.querySelector("#error-message");
 
 let currentInvestigationId = null;
+let isSubmitting = false;
+let pendingAgentTurn = null;
 
-form.addEventListener("submit", async (event) => {
+composerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await submitNewInvestigation(messageInput.value.trim());
+  await submitRequest(composerMessage.value.trim());
 });
 
-followUpForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (currentInvestigationId) await submitFollowUp(followUpMessage.value.trim());
+newInvestigationButton.addEventListener("click", () => {
+  if (isSubmitting) return;
+  renderEmptyInvestigation();
+  composerMessage.focus();
 });
 
 exportPdfButton.addEventListener("click", () => {
-  if (currentInvestigationId) downloadInvestigationPdf(currentInvestigationId, userClearance.value);
+  if (currentInvestigationId) {
+    downloadInvestigationPdf(currentInvestigationId, userClearance.value);
+  }
 });
 
-async function submitNewInvestigation(message) {
-  if (!message) return showError("Enter a troubleshooting request before starting an investigation.");
-  setSubmitting(runButton, "Starting investigation...");
-  try {
-    const result = await createRun(message, userClearance.value);
-    currentInvestigationId = result.investigation_id;
-    await reloadInvestigation();
-  } catch (error) {
-    showError(publicError(error, "The investigation could not be started."));
-    setStatus("failed", "Failed");
-  } finally {
-    runButton.disabled = false;
-    runButton.textContent = "New Investigation";
-  }
-}
+renderEmptyInvestigation();
 
-async function submitFollowUp(message) {
-  if (!message) return showError("Enter a follow-up question before continuing.");
-  setSubmitting(followUpButton, "Continuing investigation...");
+async function submitRequest(message) {
+  if (!message) {
+    showError("Enter a troubleshooting request before starting an investigation.");
+    composerMessage.focus();
+    return;
+  }
+  if (isSubmitting) return;
+
+  const isNewInvestigation = currentInvestigationId === null;
+  renderPendingConversation(message, { replace: isNewInvestigation });
+  setSubmitting();
   try {
-    await createRun(message, userClearance.value, currentInvestigationId);
-    followUpMessage.value = "";
+    const result = await createRun(
+      message,
+      userClearance.value,
+      currentInvestigationId,
+    );
+    currentInvestigationId = result.investigation_id;
+    composerMessage.value = "";
     await reloadInvestigation();
   } catch (error) {
-    showError(publicError(error, "The follow-up could not be started."));
-    setStatus("failed", "Failed");
+    renderPendingFailure(publicError(error, "The agent run could not be completed."));
   } finally {
-    followUpButton.disabled = false;
-    followUpButton.textContent = "Continue Investigation";
+    isSubmitting = false;
+    syncControls();
   }
 }
 
 async function reloadInvestigation() {
   if (!currentInvestigationId) return;
-  renderInvestigation(await getInvestigation(currentInvestigationId, userClearance.value));
+  renderInvestigation(
+    await getInvestigation(currentInvestigationId, userClearance.value),
+  );
+}
+
+function renderEmptyInvestigation() {
+  currentInvestigationId = null;
+  pendingAgentTurn = null;
+  resultTitle.textContent = "No active investigation";
+  investigationContext.textContent =
+    "Ask about a production issue, station, product, maintenance ticket, or available documentation.";
+  investigationMetadata.hidden = true;
+  hideStatus();
+  history.classList.add("empty-state");
+  history.replaceChildren(createEmptyState());
+  hideError();
+  syncControls();
 }
 
 function renderInvestigation(investigation) {
   hideError();
+  pendingAgentTurn = null;
   currentInvestigationId = investigation.investigation_id;
   resultTitle.textContent = "Investigation";
-  investigationId.textContent = investigation.investigation_id;
-  investigationSummary.textContent = `Runs: ${investigation.run_count} / Tools: ${investigation.tool_call_count}`;
-  setStatus(investigation.status, statusLabel(investigation.status));
-  exportPdfButton.disabled = false;
-  followUpButton.disabled = false;
+  investigationContext.textContent = investigationContextFor(investigation.turns);
+  investigationRuns.textContent = String(investigation.run_count);
+  investigationTools.textContent = String(investigation.tool_call_count);
+  investigationMetadata.hidden = false;
+  setStatus(investigation.status);
   history.classList.remove("empty-state");
-  history.replaceChildren(...investigation.turns.map(renderTurn));
+  history.replaceChildren(
+    ...investigation.turns.flatMap((turn) => [
+      renderUserTurn(turn),
+      renderAgentTurn(turn),
+    ]),
+  );
+  scrollHistoryToLatest();
+  syncControls();
 }
 
-function renderTurn(turn) {
+function renderPendingConversation(message, { replace }) {
+  hideError();
+  resultTitle.textContent = "Investigation";
+  if (replace) {
+    investigationContext.textContent = "Starting a new investigation.";
+    investigationMetadata.hidden = true;
+    history.replaceChildren();
+  }
+  history.classList.remove("empty-state");
+  const turn = { request: message, status: "running" };
+  pendingAgentTurn = renderAgentTurn(turn);
+  history.append(renderUserTurn(turn), pendingAgentTurn);
+  setStatus("running");
+  scrollHistoryToLatest();
+}
+
+function renderPendingFailure(message) {
+  if (pendingAgentTurn) {
+    pendingAgentTurn.classList.remove("is-pending");
+    pendingAgentTurn.classList.add("is-error");
+    pendingAgentTurn.replaceChildren(
+      createTurnLabel("Agent"),
+      createTurnError(message),
+    );
+  } else {
+    showError(message);
+  }
+  pendingAgentTurn = null;
+  setStatus("failed");
+  scrollHistoryToLatest();
+}
+
+function createEmptyState() {
+  const emptyState = document.createElement("div");
+  emptyState.className = "empty-investigation";
+  const title = document.createElement("h3");
+  title.textContent = "Start a new investigation";
+  const detail = document.createElement("p");
+  detail.textContent =
+    "Ask about a production issue, station, product, maintenance ticket, or available documentation.";
+  emptyState.append(title, detail);
+  return emptyState;
+}
+
+function renderUserTurn(turn) {
   const article = document.createElement("article");
-  article.className = "conversation-turn";
-  const heading = document.createElement("p");
-  heading.className = "turn-label";
-  heading.textContent = `Turn ${turn.sequence} / ${statusLabel(turn.status)}`;
-  const userLabel = document.createElement("h3");
-  userLabel.textContent = "You";
-  const userText = document.createElement("p");
-  userText.className = "user-request";
-  userText.textContent = turn.request;
-  const agentLabel = document.createElement("h3");
-  agentLabel.textContent = "Agent";
-  const agentAnswer = document.createElement("div");
-  agentAnswer.className = "agent-answer";
-  renderAgentAnswer(agentAnswer, turn.answer ?? "No final answer recorded.");
+  article.className = "conversation-message user-turn";
+  article.append(createTurnLabel("You"));
+  const request = document.createElement("p");
+  request.className = "user-request";
+  request.textContent = turn.request;
+  article.append(request);
+  return article;
+}
+
+function renderAgentTurn(turn) {
+  const article = document.createElement("article");
+  article.className = "conversation-message agent-turn";
+  article.append(createTurnLabel("Agent"));
+
+  if (turn.status === "running") {
+    article.classList.add("is-pending");
+    const pending = document.createElement("p");
+    pending.className = "turn-pending";
+    pending.textContent = "Investigating...";
+    article.append(pending);
+    return article;
+  }
+
+  if (turn.status === "failed") {
+    article.classList.add("is-error");
+    article.append(createTurnError("The agent run could not be completed."));
+    return article;
+  }
+
+  const answer = document.createElement("div");
+  answer.className = "agent-answer";
+  renderAgentAnswer(answer, turn.answer ?? "No final answer recorded.");
+  article.append(answer, renderTools(turn.tool_calls));
+
   const metadata = document.createElement("p");
   metadata.className = "turn-metadata";
-  metadata.textContent = `${turn.data_classification} / ${turn.response_language}`;
-  article.append(heading, userLabel, userText, agentLabel, agentAnswer, renderTools(turn.tool_calls), metadata);
+  metadata.textContent = [turn.data_classification, statusLabel(turn.status)]
+    .filter(Boolean)
+    .join(" / ");
+  article.append(metadata);
   if (turn.approval_request) article.append(renderApproval(turn));
   return article;
+}
+
+function createTurnLabel(label) {
+  const heading = document.createElement("h3");
+  heading.className = "turn-label";
+  heading.textContent = label;
+  return heading;
+}
+
+function createTurnError(message) {
+  const error = document.createElement("div");
+  error.className = "turn-error";
+  const title = document.createElement("strong");
+  title.textContent = "Investigation step failed.";
+  const detail = document.createElement("p");
+  detail.textContent = message;
+  error.append(title, detail);
+  return error;
 }
 
 function renderTools(calls) {
@@ -164,24 +275,60 @@ async function decide(runId, decision) {
     await reloadInvestigation();
   } catch (error) {
     showError(publicError(error, "The decision could not be submitted."));
-    setStatus("failed", "Failed");
+    setStatus("failed");
   }
 }
 
-function setSubmitting(button, label) {
-  hideError();
-  button.disabled = true;
-  button.textContent = label;
-  setStatus("running", "Running");
+function setSubmitting() {
+  isSubmitting = true;
+  composerMessage.disabled = true;
+  composerButton.disabled = true;
+  composerButton.textContent = "Investigating...";
+  newInvestigationButton.disabled = true;
 }
 
-function setStatus(status, label) {
+function syncControls() {
+  const hasInvestigation = Boolean(currentInvestigationId);
+  composerMessage.disabled = isSubmitting;
+  composerButton.disabled = isSubmitting;
+  composerButton.textContent = hasInvestigation ? "Send" : "Start Investigation";
+  newInvestigationButton.disabled = isSubmitting;
+  exportPdfButton.disabled = !hasInvestigation;
+}
+
+function setStatus(status) {
+  runStatus.hidden = false;
   runStatus.dataset.status = status;
-  runStatus.textContent = label;
+  runStatus.textContent = statusLabel(status);
+}
+
+function hideStatus() {
+  runStatus.hidden = true;
+  runStatus.dataset.status = "idle";
+  runStatus.textContent = "";
 }
 
 function statusLabel(status) {
-  return status.split("_").map((part) => `${part[0].toUpperCase()}${part.slice(1)}`).join(" ");
+  if (status === "running") return "Investigating";
+  return status
+    .split("_")
+    .map((part) => `${part[0].toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function investigationContextFor(turns) {
+  const identifiers = [
+    ...new Set(
+      (turns[0]?.request.match(/\b(?:P\d+|S\d{2,3})\b/g) ?? []).map(
+        (identifier) => identifier.toUpperCase(),
+      ),
+    ),
+  ];
+  return identifiers.length ? identifiers.join(" / ") : "Active investigation";
+}
+
+function scrollHistoryToLatest() {
+  history.scrollTop = history.scrollHeight;
 }
 
 function publicError(error, fallback) {
