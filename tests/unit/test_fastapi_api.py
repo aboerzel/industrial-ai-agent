@@ -42,6 +42,7 @@ class FakeRunService:
         self._result = result
         self._error = error
         self.messages: list[str] = []
+        self.conversation_contexts: list[object] = []
         self.policies: list[ResolvedRunPolicy] = []
         self.internal_target_available = True
 
@@ -69,9 +70,11 @@ class FakeRunService:
         *,
         run_policy: ResolvedRunPolicy,
         response_language: ResponseLanguage | None = None,
+        conversation_context: tuple[object, ...] = (),
     ) -> AgentRunResult:
         del response_language
         self.messages.append(message)
+        self.conversation_contexts.append(conversation_context)
         self.policies.append(run_policy)
         if self._error is not None:
             raise self._error
@@ -158,6 +161,8 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
     payload = response.json()
     assert set(payload) == {
         "run_id",
+        "investigation_id",
+        "investigation_sequence",
         "status",
         "data_classification",
         "answer",
@@ -166,6 +171,8 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
     }
     assert RunResponse.model_validate(payload).model_dump(mode="json") == payload
     assert payload["status"] == "success"
+    assert payload["investigation_id"] == payload["run_id"]
+    assert payload["investigation_sequence"] == 1
     assert payload["data_classification"] == "CONFIDENTIAL"
     assert payload["answer"] == "P4711 failed at S04."
     assert payload["tool_calls"] == [
@@ -209,6 +216,65 @@ def test_public_run_response_accepts_the_maintenance_ticket_read_trajectory() ->
             "arguments": {"ticket_id": "MT-6EA0DEF5515A"},
         }
     ]
+
+
+def test_investigation_history_groups_follow_ups_filters_clearance_and_exports_pdf() -> (
+    None
+):
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+    first = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Show ticket MT-6EA0DEF5515A.",
+            "user_clearance": "CONFIDENTIAL",
+        },
+    ).json()
+    second = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Investigate P4711 at S04.",
+            "user_clearance": "CONFIDENTIAL",
+            "investigation_id": first["investigation_id"],
+        },
+    ).json()
+
+    assert "investigation_id" in second, second
+    assert second["investigation_id"] == first["investigation_id"]
+    assert second["run_id"] != first["run_id"]
+    assert second["investigation_sequence"] == 2
+    assert len(service.conversation_contexts[-1]) == 1
+
+    history = client.get(
+        f"/api/v1/investigations/{first['investigation_id']}?user_clearance=CONFIDENTIAL"
+    )
+    assert history.status_code == 200
+    payload = history.json()
+    assert [turn["sequence"] for turn in payload["turns"]] == [1, 2]
+    assert payload["turns"][0]["request"] == "Show ticket MT-6EA0DEF5515A."
+    assert payload["turns"][0]["tool_calls"] == [
+        {"tool": "get_product_history", "arguments": {"product_id": "P4711"}}
+    ]
+    assert (
+        client.get(
+            f"/api/v1/investigations/{first['investigation_id']}?user_clearance=PUBLIC"
+        ).status_code
+        == 404
+    )
+
+    pdf = client.get(
+        f"/api/v1/investigations/{first['investigation_id']}/pdf?user_clearance=CONFIDENTIAL"
+    )
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"].startswith("application/pdf")
+    assert pdf.headers["content-disposition"].endswith(
+        f'investigation-{first["investigation_id"]}.pdf"'
+    )
+    assert str(first["investigation_id"]).encode() in pdf.content
+    assert b"Show ticket MT-6EA0DEF5515A." in pdf.content
+    assert b"get_product_history" in pdf.content
+    assert b"CONFIDENTIAL" in pdf.content
+    assert b"Traceback" not in pdf.content
 
 
 def test_create_run_uses_fastapi_validation_for_invalid_request() -> None:

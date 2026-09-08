@@ -87,6 +87,16 @@ up to its approved maximum classification.
 
 ## Current Architecture
 
+### Investigation History and PDF Export
+
+An Investigation is a lightweight ordered grouping of existing agent runs. Each run keeps
+its own `run_id`, classification, response language, tool trajectory, tracing, model
+routing, and approval lifecycle; `investigation_id` and a sequence only preserve visible
+history. A follow-up receives at most the last four prior user/agent turns, labelled as
+untrusted context. It never receives raw tool payloads and only includes prior turns
+eligible for the new run's independently resolved classification. History and PDF are
+the same authorized public projection; an Investigation never grants authorization.
+
 The local Compose deployment names its PostgreSQL service `factory-db`. In this
 single-instance demo, `factory-mcp` waits for its health check, completes idempotent
 Alembic migration and seed bootstrap before opening its MCP port, and `knowledge-mcp`

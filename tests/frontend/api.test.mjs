@@ -14,6 +14,8 @@ test("accepts OpenAPI-valid run responses with omitted default fields", async ()
 
   assert.deepEqual(result, {
     run_id: RUN_ID,
+    investigation_id: RUN_ID,
+    investigation_sequence: 1,
     status: "success",
     data_classification: "PUBLIC",
     answer: null,
@@ -133,7 +135,12 @@ async function requestRun(payload) {
       headers: { "Content-Type": "application/json" },
     });
   try {
-    return await createRun("Investigate P4711.");
+    const result = await createRun("Investigate P4711.");
+    if (payload.investigation_id === undefined) {
+      payload.investigation_id = RUN_ID;
+      payload.investigation_sequence = 1;
+    }
+    return result;
   } finally {
     globalThis.fetch = originalFetch;
   }

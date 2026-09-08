@@ -95,6 +95,11 @@ applications can use approved tools and data sources in a controlled way.
 
 ## How a request is handled
 
+The browser can continue an investigation through multiple independently secured runs.
+The visible chronological history and its server-side PDF contain only authorized user
+requests, rendered answers, and bounded tool projections. This is bounded conversation
+context, not memory, Conversation-RAG, or an automatic root-cause report.
+
 Permission and data-protection checks are outside the AI model. The model does not decide
 what data it may see or where protected data may be processed.
 

@@ -73,6 +73,14 @@ class PendingApproval(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationTurn:
+    """Prior visible user/agent exchange, never an authorization input."""
+
+    user_request: str
+    agent_answer: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class RunExecution:
     result: AgentRunResult | None = None
     approval: PendingApproval | None = None
@@ -90,6 +98,7 @@ class McpBackedTroubleshootingAgent(Protocol):
         user_request: str,
         *,
         response_language: ResponseLanguage | None = None,
+        conversation_context: tuple[ConversationTurn, ...] = (),
     ) -> AgentRunResult: ...
 
     async def astart_via_mcp(
@@ -98,6 +107,7 @@ class McpBackedTroubleshootingAgent(Protocol):
         *,
         thread_id: str,
         response_language: ResponseLanguage | None = None,
+        conversation_context: tuple[ConversationTurn, ...] = (),
     ) -> tuple[object, dict[str, object] | None]: ...
 
     async def aresume_via_mcp(self, *, thread_id: str, approval: object) -> object: ...
@@ -161,6 +171,7 @@ class TroubleshootingRunService:
         *,
         run_policy: ResolvedRunPolicy,
         response_language: ResponseLanguage | None = None,
+        conversation_context: tuple[ConversationTurn, ...] = (),
     ) -> AgentRunResult:
         profile = self._router.route(run_policy.task_requirements, self._profiles)
         resolved_response_language = response_language or detect_response_language(
@@ -171,8 +182,14 @@ class TroubleshootingRunService:
                 profile=profile,
                 run_policy=run_policy,
             ) as agent:
+                if not conversation_context:
+                    return await agent.aanswer_via_mcp(
+                        message, response_language=resolved_response_language
+                    )
                 return await agent.aanswer_via_mcp(
-                    message, response_language=resolved_response_language
+                    message,
+                    response_language=resolved_response_language,
+                    conversation_context=conversation_context,
                 )
         except BaseExceptionGroup as error:
             root_cause = _single_exception_group_cause(error)
@@ -201,6 +218,7 @@ class TroubleshootingRunService:
         run_id: UUID,
         run_policy: ResolvedRunPolicy | None = None,
         response_language: ResponseLanguage | None = None,
+        conversation_context: tuple[ConversationTurn, ...] = (),
     ) -> tuple[ModelProfile, RunExecution]:
         if self._checkpointer_factory is None:
             raise RuntimeError("Persistent HITL runs require a PostgreSQL checkpointer")
@@ -219,6 +237,7 @@ class TroubleshootingRunService:
                     message,
                     thread_id=str(run_id),
                     response_language=resolved_response_language,
+                    conversation_context=conversation_context,
                 )
         return profile, _execution_from_state(state, payload)
 

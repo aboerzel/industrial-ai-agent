@@ -17,6 +17,8 @@ from industrial_ai_agent.infrastructure.api.schemas import RunStatus
 class StoredAgentRun:
     run_id: UUID
     thread_id: UUID
+    investigation_id: UUID
+    investigation_sequence: int
     status: RunStatus
     data_classification: DataClassification
     run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
@@ -73,6 +75,7 @@ class AgentRunStore(Protocol):
         self,
         run_id: UUID,
         *,
+        investigation_id: UUID | None = None,
         request_text: str = "",
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
         run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
@@ -96,6 +99,10 @@ class AgentRunStore(Protocol):
     ) -> StoredAgentRun: ...
 
     async def get(self, run_id: UUID) -> StoredAgentRun | None: ...
+
+    async def list_investigation(
+        self, investigation_id: UUID
+    ) -> tuple[StoredAgentRun, ...]: ...
 
     async def wait_for_approval(
         self, run_id: UUID, approval_request: dict[str, object]
@@ -123,27 +130,38 @@ class InMemoryAgentRunStore:
         self,
         run_id: UUID,
         *,
+        investigation_id: UUID | None = None,
         request_text: str = "",
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
         run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
         model_profile: str | None = None,
         response_language: ResponseLanguage = ResponseLanguage.EN,
     ) -> StoredAgentRun:
-        record = StoredAgentRun(
-            run_id=run_id,
-            thread_id=run_id,
-            status=RunStatus.RUNNING,
-            data_classification=data_classification,
-            run_profile=run_profile,
-            model_profile=model_profile,
-            request_text=request_text,
-            response_language=response_language,
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        )
+        resolved_investigation_id = investigation_id or run_id
         async with self._lock:
             if run_id in self._records:
                 raise ValueError(f"Run already exists: {run_id}")
+            sequence = (
+                sum(
+                    record.investigation_id == resolved_investigation_id
+                    for record in self._records.values()
+                )
+                + 1
+            )
+            record = StoredAgentRun(
+                run_id=run_id,
+                thread_id=run_id,
+                investigation_id=resolved_investigation_id,
+                investigation_sequence=sequence,
+                status=RunStatus.RUNNING,
+                data_classification=data_classification,
+                run_profile=run_profile,
+                model_profile=model_profile,
+                request_text=request_text,
+                response_language=response_language,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
             self._records[run_id] = record
         return record
 
@@ -152,6 +170,8 @@ class InMemoryAgentRunStore:
         record = StoredAgentRun(
             run_id=run_id,
             thread_id=existing.thread_id,
+            investigation_id=existing.investigation_id,
+            investigation_sequence=existing.investigation_sequence,
             status=_to_public_status(result),
             data_classification=existing.data_classification,
             run_profile=existing.run_profile,
@@ -174,6 +194,8 @@ class InMemoryAgentRunStore:
         record = StoredAgentRun(
             run_id=run_id,
             thread_id=existing.thread_id,
+            investigation_id=existing.investigation_id,
+            investigation_sequence=existing.investigation_sequence,
             status=RunStatus.FAILED,
             data_classification=existing.data_classification,
             run_profile=existing.run_profile,
@@ -194,6 +216,21 @@ class InMemoryAgentRunStore:
     async def get(self, run_id: UUID) -> StoredAgentRun | None:
         async with self._lock:
             return self._records.get(run_id)
+
+    async def list_investigation(
+        self, investigation_id: UUID
+    ) -> tuple[StoredAgentRun, ...]:
+        async with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        record
+                        for record in self._records.values()
+                        if record.investigation_id == investigation_id
+                    ),
+                    key=lambda record: record.investigation_sequence,
+                )
+            )
 
     async def wait_for_approval(
         self, run_id: UUID, approval_request: dict[str, object]
@@ -264,6 +301,8 @@ class InMemoryAgentRunStore:
             StoredAgentRun(
                 run_id=existing.run_id,
                 thread_id=existing.thread_id,
+                investigation_id=existing.investigation_id,
+                investigation_sequence=existing.investigation_sequence,
                 status=existing.status,
                 data_classification=data_classification,
                 run_profile=run_profile,

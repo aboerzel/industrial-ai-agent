@@ -61,6 +61,16 @@ class ObservedAgentRunStore:
     async def get(self, run_id: UUID) -> StoredAgentRun | None:
         return await self._observe("get", run_id, self._delegate.get, run_id)
 
+    async def list_investigation(
+        self, investigation_id: UUID
+    ) -> tuple[StoredAgentRun, ...]:
+        return await self._observe(
+            "list_investigation",
+            investigation_id,
+            self._delegate.list_investigation,
+            investigation_id,
+        )
+
     async def wait_for_approval(
         self, run_id: UUID, approval_request: dict[str, object]
     ) -> StoredAgentRun:

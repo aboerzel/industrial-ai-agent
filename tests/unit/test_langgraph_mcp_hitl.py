@@ -31,6 +31,7 @@ from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpTool
 from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
+from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketExecutionArguments,
@@ -289,6 +290,40 @@ def test_hitl_resume_keeps_the_original_response_language() -> None:
     assert "Response language: German." in (
         resumed_client.requests[0].messages[0].content or ""
     )
+
+
+def test_follow_up_context_is_bounded_and_labels_prior_user_claims_as_untrusted() -> (
+    None
+):
+    client = FakeLLMClient(
+        [LLMResponse(text="Follow-up answer.", finish_reason=FinishReason.STOP)]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(client, DEFAULT_PROFILE),
+        mcp_tool_provider=cast(
+            McpToolProvider,
+            cast(object, ReadRecordingMcpToolProvider(("{}", "{}"))),
+        ),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(
+        agent.aanswer_via_mcp(
+            "Check point 1 and 3.",
+            conversation_context=(
+                ConversationTurn(
+                    user_request="I think firmware was updated yesterday.",
+                    agent_answer="1. Inspect station status.\n2. Review documentation.\n3. Verify alarms.",
+                ),
+            ),
+        )
+    )
+
+    assert result.final_answer == "Follow-up answer."
+    context = client.requests[0].messages[1].content or ""
+    assert "USER PROVIDED:" in context
+    assert "not independently verified" in context
+    assert "firmware was updated yesterday" in context
 
 
 def _agent(

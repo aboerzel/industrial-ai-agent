@@ -24,7 +24,7 @@
         <form class="investigation-panel" id="investigation-form">
           <div class="panel-heading">
             <div>
-              <p class="panel-kicker">NEW RUN</p>
+              <p class="panel-kicker">NEW INVESTIGATION</p>
               <h2>Investigate an industrial issue</h2>
             </div>
             <span class="connection-indicator" aria-hidden="true"></span>
@@ -41,53 +41,39 @@
 
           <label for="message">Troubleshooting request</label>
           <textarea id="message" name="message" required rows="8">Investigate why product P4711 failed at station S04. Use the available documentation if needed.</textarea>
-          <button id="run-button" type="submit">Run Investigation</button>
+          <button id="run-button" type="submit">New Investigation</button>
         </form>
 
         <section class="result-panel" aria-live="polite" aria-labelledby="result-title">
           <div class="panel-heading">
             <div>
-              <p class="panel-kicker">RUN RESULT</p>
+              <p class="panel-kicker">INVESTIGATION HISTORY</p>
               <h2 id="result-title">Awaiting investigation</h2>
             </div>
-            <span class="status-badge" data-status="idle" id="run-status">Idle</span>
+            <div class="header-actions">
+              <button id="export-pdf-button" type="button" disabled>Export as PDF</button>
+              <span class="status-badge" data-status="idle" id="run-status">Idle</span>
+            </div>
           </div>
 
-          <dl class="run-metadata">
+          <dl class="run-metadata investigation-metadata">
             <div>
-              <dt>Run ID</dt>
-              <dd id="run-id">Not started</dd>
+              <dt>Investigation</dt>
+              <dd id="investigation-id">Not started</dd>
             </div>
             <div>
-              <dt>Classification</dt>
-              <dd id="run-classification">Not started</dd>
+              <dt>Activity</dt>
+              <dd id="investigation-summary">Runs: 0 / Tools: 0</dd>
             </div>
           </dl>
 
-          <div class="answer-section">
-            <h3>Agent answer</h3>
-            <div class="agent-answer empty-state" id="answer">Start an investigation to view the diagnosis.</div>
-          </div>
+          <div class="conversation-history empty-state" id="conversation-history">Start an investigation to view the conversation.</div>
 
-          <div class="tool-section">
-            <h3>Executed tool calls</h3>
-            <ol class="tool-calls empty-state" id="tool-calls">
-              <li>No tool calls yet.</li>
-            </ol>
-          </div>
-
-          <section class="approval-card" hidden id="approval-card" aria-labelledby="approval-title">
-            <h3 id="approval-title">Approval required</h3>
-            <dl class="run-metadata">
-              <div><dt>Action</dt><dd id="approval-action"></dd></div>
-              <div><dt>Description</dt><dd id="approval-summary"></dd></div>
-            </dl>
-            <pre class="tool-arguments" id="approval-arguments"></pre>
-            <div class="approval-actions">
-              <button id="approve-button" type="button">Approve</button>
-              <button id="reject-button" type="button">Reject</button>
-            </div>
-          </section>
+          <form class="follow-up-form" id="follow-up-form">
+            <label for="follow-up-message">Ask a follow-up</label>
+            <textarea id="follow-up-message" name="follow-up-message" rows="3" placeholder="Ask a follow-up..." required></textarea>
+            <button id="follow-up-button" type="submit" disabled>Continue Investigation</button>
+          </form>
 
           <p class="error-message" hidden id="error-message" role="alert"></p>
         </section>

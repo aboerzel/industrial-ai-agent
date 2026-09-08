@@ -166,6 +166,8 @@ class AgentRunRecord(Base):
 
     run_id: Mapped[UUID] = mapped_column(primary_key=True)
     thread_id: Mapped[UUID] = mapped_column(unique=True)
+    investigation_id: Mapped[UUID] = mapped_column(index=True)
+    investigation_sequence: Mapped[int] = mapped_column()
     status: Mapped[str] = mapped_column(String)
     data_classification: Mapped[int] = mapped_column(SmallInteger)
     run_profile: Mapped[str] = mapped_column(String)

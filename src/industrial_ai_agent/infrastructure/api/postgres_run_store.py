@@ -41,6 +41,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         self,
         run_id: UUID,
         *,
+        investigation_id: UUID | None = None,
         request_text: str = "",
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
         run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
@@ -50,6 +51,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         return await asyncio.to_thread(
             self._create,
             run_id,
+            investigation_id,
             request_text,
             data_classification,
             run_profile,
@@ -60,6 +62,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
     def _create(
         self,
         run_id: UUID,
+        investigation_id: UUID | None,
         request_text: str,
         data_classification: DataClassification,
         run_profile: AgentRunProfile,
@@ -67,9 +70,21 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         response_language: ResponseLanguage,
     ) -> StoredAgentRun:
         with self._session_factory.session(self._security_context) as session:
+            resolved_investigation_id = investigation_id or run_id
+            sequence = (
+                session.scalars(
+                    select(AgentRunRecord.investigation_sequence)
+                    .where(AgentRunRecord.investigation_id == resolved_investigation_id)
+                    .order_by(AgentRunRecord.investigation_sequence.desc())
+                    .limit(1)
+                ).first()
+                or 0
+            ) + 1
             record = AgentRunRecord(
                 run_id=run_id,
                 thread_id=run_id,
+                investigation_id=resolved_investigation_id,
+                investigation_sequence=sequence,
                 status=RunStatus.RUNNING.value,
                 data_classification=int(data_classification),
                 run_profile=run_profile.value,
@@ -167,6 +182,20 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 select(AgentRunRecord).where(AgentRunRecord.run_id == run_id)
             )
             return _stored(record) if record is not None else None
+
+    async def list_investigation(
+        self, investigation_id: UUID
+    ) -> tuple[StoredAgentRun, ...]:
+        return await asyncio.to_thread(self._list_investigation, investigation_id)
+
+    def _list_investigation(self, investigation_id: UUID) -> tuple[StoredAgentRun, ...]:
+        with self._session_factory.session(self._security_context) as session:
+            statement = (
+                select(AgentRunRecord)
+                .where(AgentRunRecord.investigation_id == investigation_id)
+                .order_by(AgentRunRecord.investigation_sequence)
+            )
+            return tuple(_stored(record) for record in session.scalars(statement))
 
     async def wait_for_approval(
         self, run_id: UUID, approval_request: dict[str, object]
@@ -277,6 +306,8 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
     return StoredAgentRun(
         run_id=record.run_id,
         thread_id=record.thread_id,
+        investigation_id=record.investigation_id,
+        investigation_sequence=record.investigation_sequence,
         status=RunStatus(record.status),
         data_classification=DataClassification(record.data_classification),
         run_profile=AgentRunProfile(record.run_profile),

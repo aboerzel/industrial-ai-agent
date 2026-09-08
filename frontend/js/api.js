@@ -9,10 +9,14 @@ export class ApiClientError extends Error {
   }
 }
 
-export async function createRun(message, userClearance) {
+export async function createRun(message, userClearance, investigationId = null) {
   return request("/api/v1/runs", {
     method: "POST",
-    body: JSON.stringify({ message, user_clearance: userClearance }),
+    body: JSON.stringify({
+      message,
+      user_clearance: userClearance,
+      ...(investigationId ? { investigation_id: investigationId } : {}),
+    }),
   });
 }
 
@@ -27,7 +31,20 @@ export async function resumeRun(runId, decision) {
   });
 }
 
-async function request(path, options = {}) {
+export async function getInvestigation(investigationId, userClearance) {
+  const suffix = new URLSearchParams({ user_clearance: userClearance });
+  return request(`/api/v1/investigations/${encodeURIComponent(investigationId)}?${suffix}`,
+    {}, isInvestigationResponse);
+}
+
+export function downloadInvestigationPdf(investigationId, userClearance) {
+  const suffix = new URLSearchParams({ user_clearance: userClearance });
+  window.location.assign(
+    `${API_BASE_URL}/api/v1/investigations/${encodeURIComponent(investigationId)}/pdf?${suffix}`,
+  );
+}
+
+async function request(path, options = {}, validator = isRunResponse) {
   let response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
@@ -55,26 +72,30 @@ async function request(path, options = {}) {
       errorMessageFor(response.status, publicError?.code, publicError?.message),
     );
   }
-  if (!isRunResponse(payload)) {
+  if (!validator(payload)) {
     throw new ApiClientError(
       response.status,
       "invalid_response",
       "The agent API returned an invalid run response.",
     );
   }
-  return {
+  return validator === isRunResponse ? {
     ...payload,
+    investigation_id: payload.investigation_id ?? payload.run_id,
+    investigation_sequence: payload.investigation_sequence ?? 1,
     answer: payload.answer ?? null,
     tool_calls: payload.tool_calls ?? [],
     approval_request: payload.approval_request ?? null,
-  };
+  } : payload;
 }
 
 function isRunResponse(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "status", "data_classification", "answer", "tool_calls", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "tool_calls", "approval_request"]) &&
     isUuid(value.run_id) &&
+    (value.investigation_id === undefined || isUuid(value.investigation_id)) &&
+    (value.investigation_sequence === undefined || (Number.isInteger(value.investigation_sequence) && value.investigation_sequence > 0)) &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
     (value.answer === undefined || value.answer === null || isBoundedString(value.answer, 8_000)) &&
@@ -83,6 +104,33 @@ function isRunResponse(value) {
     (value.approval_request === undefined ||
       value.approval_request === null ||
       isApprovalRequest(value.approval_request))
+  );
+}
+
+function isInvestigationResponse(value) {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["investigation_id", "created_at", "run_count", "tool_call_count", "status", "turns"]) &&
+    isUuid(value.investigation_id) &&
+    Number.isInteger(value.run_count) && value.run_count >= 0 &&
+    Number.isInteger(value.tool_call_count) && value.tool_call_count >= 0 &&
+    typeof value.status === "string" &&
+    Array.isArray(value.turns) && value.turns.every(isInvestigationTurn)
+  );
+}
+
+function isInvestigationTurn(value) {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "tool_calls", "created_at", "updated_at", "approval_request"]) &&
+    isUuid(value.run_id) && Number.isInteger(value.sequence) && value.sequence > 0 &&
+    ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
+    ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
+    ["DE", "EN"].includes(value.response_language) &&
+    isBoundedString(value.request, 4_000) &&
+    (value.answer === null || value.answer === undefined || isBoundedString(value.answer, 8_000)) &&
+    Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall) &&
+    (value.approval_request === null || value.approval_request === undefined || isApprovalRequest(value.approval_request))
   );
 }
 

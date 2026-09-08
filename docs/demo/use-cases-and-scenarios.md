@@ -95,6 +95,13 @@ RLS-visible INTERNAL runs.
 
 ## 8. Execution Notes
 
+## 9. Investigation History and PDF Export
+
+Start a `CONFIDENTIAL` ticket investigation, continue it twice, and verify that distinct
+run IDs share one investigation ID, remain ordered, and preserve individual languages.
+Use **Export as PDF** and confirm `investigation-<id>.pdf` contains only visible turns.
+With lower demo clearance, both confidential history and PDF must be unavailable.
+
 For UI/API acceptance inspect only run classification, selected tool names, and rendered
 answer. For the small live verification inspect Tempo/Langfuse metadata only:
 classification, model profile/provider/execution zone, tool names, token/cost provenance,

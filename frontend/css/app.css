@@ -98,6 +98,19 @@ h3 {
   margin-bottom: 24px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#export-pdf-button {
+  min-height: 32px;
+  padding: 0 10px;
+  background: #4b5a55;
+  font-size: 0.8rem;
+}
+
 .connection-indicator {
   width: 12px;
   height: 12px;
@@ -242,6 +255,60 @@ dd {
 .answer-section,
 .tool-section {
   margin-bottom: 24px;
+}
+
+.conversation-history {
+  display: grid;
+  max-height: 650px;
+  gap: 18px;
+  overflow-y: auto;
+  margin-bottom: 20px;
+  padding-right: 8px;
+}
+
+.conversation-turn {
+  border-bottom: 1px solid #dde5e1;
+  padding-bottom: 18px;
+}
+
+.conversation-turn:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.turn-label,
+.turn-metadata {
+  margin: 0 0 8px;
+  color: #61706a;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.user-request {
+  margin-bottom: 16px;
+  border-left: 3px solid #dc6f24;
+  padding-left: 10px;
+  white-space: pre-wrap;
+}
+
+.tool-details {
+  margin: 14px 0 8px;
+}
+
+.tool-details summary {
+  cursor: pointer;
+  color: #155f3b;
+  font-weight: 700;
+}
+
+.follow-up-form {
+  border-top: 1px solid #dde5e1;
+  padding-top: 18px;
+}
+
+.follow-up-form textarea {
+  min-height: 94px;
+  margin-bottom: 10px;
 }
 
 .agent-answer {
@@ -415,10 +482,12 @@ dd {
   margin-top: 14px;
 }
 
+.reject-button,
 #reject-button {
   background: #8b2f2b;
 }
 
+.reject-button:hover:not(:disabled),
 #reject-button:hover:not(:disabled) {
   background: #70231f;
 }
@@ -445,5 +514,10 @@ dd {
   .investigation-panel,
   .result-panel {
     padding: 18px;
+  }
+
+  .header-actions {
+    align-items: flex-end;
+    flex-direction: column;
   }
 }

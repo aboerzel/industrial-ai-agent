@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
 from industrial_ai_agent.agent.model_egress import (
@@ -28,6 +28,7 @@ from industrial_ai_agent.agent.run_classification_policy import (
 )
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
+    ConversationTurn,
     InternalDiagnosticTargetUnavailableError,
     McpServiceUnavailableError,
     RunExecution,
@@ -35,6 +36,9 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
 )
 from industrial_ai_agent.infrastructure.api.demo_security import (
     DemoSecurityContextResolver,
+)
+from industrial_ai_agent.infrastructure.api.investigation_pdf import (
+    render_investigation_pdf,
 )
 from industrial_ai_agent.infrastructure.api.output_sanitization import (
     sanitize_public_text,
@@ -49,8 +53,11 @@ from industrial_ai_agent.infrastructure.api.schemas import (
     ApprovalRequestResponse,
     CreateRunRequest,
     DataClassificationLabel,
+    DemoUserClearance,
     HealthResponse,
     InternalDiagnosticRequest,
+    InvestigationResponse,
+    InvestigationTurnResponse,
     PublicToolName,
     ResumeRunRequest,
     RunResponse,
@@ -144,6 +151,7 @@ def create_app(
             message=payload.message,
             policy=policy,
             response_language=response_language,
+            investigation_id=payload.investigation_id,
         )
 
     @runs.post(
@@ -195,6 +203,57 @@ def create_app(
                 message=user_facing_error_message("run_not_found", ResponseLanguage.EN),
             )
         return _to_run_response(record)
+
+    @runs.get(
+        f"{API_PREFIX}/investigations/{{investigation_id}}",
+        response_model=InvestigationResponse,
+        responses={status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse}},
+        summary="Get the authorized visible history for one investigation",
+    )
+    async def get_investigation(
+        investigation_id: UUID,
+        request: Request,
+        user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
+    ) -> InvestigationResponse:
+        investigation = await _authorized_investigation(
+            request, investigation_id, user_clearance
+        )
+        if investigation is None:
+            _raise_api_run_error(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="investigation_not_found",
+                message="The requested investigation is not available.",
+            )
+        return investigation
+
+    @runs.get(
+        f"{API_PREFIX}/investigations/{{investigation_id}}/pdf",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse}},
+        summary="Export the authorized visible investigation history as PDF",
+    )
+    async def export_investigation_pdf(
+        investigation_id: UUID,
+        request: Request,
+        user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
+    ) -> Response:
+        investigation = await _authorized_investigation(
+            request, investigation_id, user_clearance
+        )
+        if investigation is None:
+            _raise_api_run_error(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="investigation_not_found",
+                message="The requested investigation is not available.",
+            )
+        return Response(
+            content=render_investigation_pdf(investigation),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="investigation-{investigation_id}.pdf"'
+                )
+            },
+        )
 
     @runs.post(
         f"{API_PREFIX}/runs/{{run_id}}/resume",
@@ -313,17 +372,25 @@ async def _start_run(
     message: str,
     policy: ResolvedRunPolicy,
     response_language: ResponseLanguage,
+    investigation_id: UUID | None = None,
 ) -> RunResponse:
     store = _run_store(request)
     run_id = uuid4()
+    previous_runs = (
+        await store.list_investigation(investigation_id)
+        if investigation_id is not None
+        else ()
+    )
     await store.create(
         run_id,
+        investigation_id=investigation_id,
         request_text=message,
         data_classification=policy.data_classification,
         run_profile=policy.run_profile,
         response_language=response_language,
     )
     service = _run_service(request)
+    conversation_context = _conversation_context(previous_runs, policy)
     try:
         if _persistent_hitl_enabled(service):
             profile, execution = await service.start(
@@ -331,6 +398,7 @@ async def _start_run(
                 run_id=run_id,
                 run_policy=policy,
                 response_language=response_language,
+                conversation_context=conversation_context,
             )
             await store.bind_execution_context(
                 run_id,
@@ -339,9 +407,17 @@ async def _start_run(
                 model_profile=profile.name,
             )
             return _to_run_response(await _persist_execution(store, run_id, execution))
-        result = await service.run_with_policy(
-            message, run_policy=policy, response_language=response_language
-        )
+        if conversation_context:
+            result = await service.run_with_policy(
+                message,
+                run_policy=policy,
+                response_language=response_language,
+                conversation_context=conversation_context,
+            )
+        else:
+            result = await service.run_with_policy(
+                message, run_policy=policy, response_language=response_language
+            )
     except NoEligibleModelError:
         await store.fail(run_id, "no_eligible_model")
         _raise_api_run_error(
@@ -386,6 +462,8 @@ def _to_run_response(record: StoredAgentRun) -> RunResponse:
     result = record.result
     return RunResponse(
         run_id=record.run_id,
+        investigation_id=record.investigation_id,
+        investigation_sequence=record.investigation_sequence,
         status=record.status,
         data_classification=DataClassificationLabel[record.data_classification.name],
         answer=sanitize_public_text(result.final_answer)
@@ -394,6 +472,80 @@ def _to_run_response(record: StoredAgentRun) -> RunResponse:
         tool_calls=_to_tool_calls(result),
         approval_request=_to_approval_request(record.approval_request),
     )
+
+
+async def _authorized_investigation(
+    request: Request,
+    investigation_id: UUID,
+    user_clearance: DemoUserClearance,
+) -> InvestigationResponse | None:
+    security_context = _demo_security_context(request).resolve(user_clearance)
+    records = await _run_store(request).list_investigation(investigation_id)
+    visible = tuple(
+        record
+        for record in records
+        if int(record.data_classification) <= int(security_context.clearance)
+    )
+    if not visible:
+        return None
+    turns = tuple(_to_investigation_turn(record) for record in visible)
+    return InvestigationResponse(
+        investigation_id=investigation_id,
+        created_at=_as_iso(visible[0].created_at),
+        run_count=len(turns),
+        tool_call_count=sum(len(turn.tool_calls) for turn in turns),
+        status=_investigation_status(visible),
+        turns=turns,
+    )
+
+
+def _to_investigation_turn(record: StoredAgentRun) -> InvestigationTurnResponse:
+    result = record.result
+    return InvestigationTurnResponse(
+        run_id=record.run_id,
+        sequence=record.investigation_sequence,
+        status=record.status,
+        data_classification=DataClassificationLabel[record.data_classification.name],
+        response_language=record.response_language.value,
+        request=sanitize_public_text(record.request_text) or "",
+        answer=sanitize_public_text(result.final_answer) if result else None,
+        tool_calls=_to_tool_calls(result),
+        created_at=_as_iso(record.created_at),
+        updated_at=_as_iso(record.updated_at),
+        approval_request=_to_approval_request(record.approval_request),
+    )
+
+
+def _conversation_context(
+    records: tuple[StoredAgentRun, ...], policy: ResolvedRunPolicy
+) -> tuple[ConversationTurn, ...]:
+    eligible = [
+        record
+        for record in records
+        if int(record.data_classification) <= int(policy.data_classification)
+    ]
+    return tuple(
+        ConversationTurn(
+            user_request=record.request_text,
+            agent_answer=record.result.final_answer if record.result else None,
+        )
+        for record in eligible[-4:]
+    )
+
+
+def _investigation_status(records: tuple[StoredAgentRun, ...]) -> str:
+    if any(
+        record.status in {RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL}
+        for record in records
+    ):
+        return "in_progress"
+    if all(record.status is RunStatus.SUCCESS for record in records):
+        return "completed"
+    return "completed_with_attention"
+
+
+def _as_iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 async def _persist_execution(

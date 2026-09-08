@@ -56,6 +56,10 @@ class CreateRunRequest(BaseModel):
         default=DemoUserClearance.PUBLIC,
         description="Demo-only simulated user clearance; it never sets run classification.",
     )
+    investigation_id: UUID | None = Field(
+        default=None,
+        description="Optional existing investigation grouping; never conveys authorization.",
+    )
 
     @field_validator("message")
     @classmethod
@@ -121,11 +125,40 @@ class RunResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: UUID
+    investigation_id: UUID
+    investigation_sequence: int = Field(ge=1)
     status: RunStatus
     data_classification: DataClassificationLabel
     answer: Annotated[str, StringConstraints(max_length=8_000)] | None = None
     tool_calls: tuple[ToolCallResponse, ...] = ()
     approval_request: ApprovalRequestResponse | None = None
+
+
+class InvestigationTurnResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_id: UUID
+    sequence: int = Field(ge=1)
+    status: RunStatus
+    data_classification: DataClassificationLabel
+    response_language: str
+    request: Annotated[str, StringConstraints(max_length=4_000)]
+    answer: Annotated[str, StringConstraints(max_length=8_000)] | None = None
+    tool_calls: tuple[ToolCallResponse, ...] = ()
+    created_at: str | None = None
+    updated_at: str | None = None
+    approval_request: ApprovalRequestResponse | None = None
+
+
+class InvestigationResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    investigation_id: UUID
+    created_at: str | None = None
+    run_count: int = Field(ge=0)
+    tool_call_count: int = Field(ge=0)
+    status: str
+    turns: tuple[InvestigationTurnResponse, ...]
 
 
 class ApiErrorResponse(BaseModel):

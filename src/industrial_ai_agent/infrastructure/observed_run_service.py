@@ -15,6 +15,7 @@ from industrial_ai_agent.agent.run_classification_policy import (
 )
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
+    ConversationTurn,
     RunExecution,
     TroubleshootingRunService,
 )
@@ -55,8 +56,16 @@ class ObservedTroubleshootingRunService:
         *,
         run_policy: ResolvedRunPolicy,
         response_language: ResponseLanguage | None = None,
+        conversation_context: tuple[ConversationTurn, ...] = (),
     ) -> AgentRunResult:
         async def operation(value: str) -> AgentRunResult:
+            if conversation_context:
+                return await self._delegate.run_with_policy(
+                    value,
+                    run_policy=run_policy,
+                    response_language=response_language,
+                    conversation_context=conversation_context,
+                )
             return await self._delegate.run_with_policy(
                 value,
                 run_policy=run_policy,
@@ -78,6 +87,7 @@ class ObservedTroubleshootingRunService:
         run_id: UUID,
         run_policy: ResolvedRunPolicy,
         response_language: ResponseLanguage | None = None,
+        conversation_context: tuple[ConversationTurn, ...] = (),
     ) -> tuple[ModelProfile, RunExecution]:
         return await self._observe_run(
             run_id=run_id,
@@ -85,6 +95,7 @@ class ObservedTroubleshootingRunService:
             message=message,
             run_policy=run_policy,
             response_language=response_language,
+            conversation_context=conversation_context,
         )
 
     async def resume(
@@ -122,6 +133,7 @@ class ObservedTroubleshootingRunService:
         message: str,
         run_policy: ResolvedRunPolicy,
         response_language: ResponseLanguage | None = None,
+        conversation_context: tuple[ConversationTurn, ...] = (),
     ):
         attributes: dict[str, object] = {
             "data.classification": run_policy.data_classification.name,
@@ -140,6 +152,14 @@ class ObservedTroubleshootingRunService:
             ):
                 if run_id is None:
                     result = await operation(message)
+                elif conversation_context:
+                    result = await operation(
+                        message,
+                        run_id=run_id,
+                        run_policy=run_policy,
+                        response_language=response_language,
+                        conversation_context=conversation_context,
+                    )
                 else:
                     result = await operation(
                         message,

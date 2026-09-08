@@ -23,6 +23,7 @@ dependencies = [
     "opentelemetry-instrumentation-asgi>=0.65b0,<0.66",
     "opentelemetry-sdk>=1.44.0,<1.45",
     "pydantic>=2.0",
+    "reportlab>=4.4,<5.0",
     "psycopg[binary]>=3.3.5,<3.4",
     "python-dotenv>=1.0",
     "sqlalchemy>=2.0.52,<2.1",

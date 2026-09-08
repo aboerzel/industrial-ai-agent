@@ -31,6 +31,7 @@ RUN pip install --no-cache-dir \
         "opentelemetry-sdk>=1.44.0,<1.45" \
         "psycopg[binary]>=3.3.5,<3.4" \
         "python-dotenv>=1.0" \
+        "reportlab>=4.4,<5.0" \
         "sqlalchemy>=2.0.52,<2.1" \
         "uvicorn>=0.52.4,<0.53" \
     && pip install --no-cache-dir --no-deps .
