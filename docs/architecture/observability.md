@@ -75,7 +75,10 @@ and percentages in their legend where Grafana supports it.
   `CONFIGURED/MODEL_CONFIGURATION`, not observed run cost.
 * `Industrial AI Agent - Usage Analytics` shows bounded Prometheus usage by run
   classification, model profile, MCP tool, agent-side MCP service, and retrieval strategy,
-  plus their trends. Provider/model and provider-reported token distributions remain
+  plus their trends. Its adjacent tool panels use the selected dashboard range for both
+  tool-call counts and the weighted average tool duration from the MCP histogram sum and
+  count; tools without calls in that range are omitted from the duration panel.
+  Provider/model and provider-reported token distributions remain
   Langfuse-only metadata and are shown as an explicit Grafana data gap rather than being
   copied into Prometheus labels.
 * `Industrial AI Agent - Failure Analytics` shows the non-overlapping failed-agent-run
