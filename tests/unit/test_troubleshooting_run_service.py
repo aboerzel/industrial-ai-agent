@@ -18,6 +18,7 @@ from industrial_ai_agent.agent.model_routing import (
     ModelProfileMetadata,
     QualityClass,
 )
+from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import ResolvedRunPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpBackedTroubleshootingAgent,
@@ -28,8 +29,11 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
 
 class FakeAgent:
     @staticmethod
-    async def aanswer_via_mcp(user_request: str) -> AgentRunResult:
+    async def aanswer_via_mcp(
+        user_request: str, *, response_language: ResponseLanguage | None = None
+    ) -> AgentRunResult:
         assert user_request == "Investigate P4711."
+        assert response_language is ResponseLanguage.EN
         return AgentRunResult(
             status=AgentRunStatus.SUCCESS,
             final_answer="Diagnosis complete.",
@@ -66,8 +70,11 @@ class CapturingFactory(RoutedTroubleshootingAgentFactory):
 
 class FailingAgent:
     @staticmethod
-    async def aanswer_via_mcp(user_request: str) -> AgentRunResult:
+    async def aanswer_via_mcp(
+        user_request: str, *, response_language: ResponseLanguage | None = None
+    ) -> AgentRunResult:
         assert user_request == "Investigate P4711."
+        assert response_language is ResponseLanguage.EN
         raise ExceptionGroup(
             "nested MCP shutdown failure",
             [

@@ -14,6 +14,11 @@ from industrial_ai_agent.agent.model_egress import (
     ModelEgressDeniedError,
 )
 from industrial_ai_agent.agent.model_routing import NoEligibleModelError
+from industrial_ai_agent.agent.response_language import (
+    ResponseLanguage,
+    detect_response_language,
+    user_facing_error_message,
+)
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
     InternalDiagnosticTarget,
@@ -115,6 +120,7 @@ def create_app(
         summary="Start one server-classified troubleshooting run",
     )
     async def create_run(payload: CreateRunRequest, request: Request) -> RunResponse:
+        response_language = detect_response_language(payload.message)
         security_context = _demo_security_context(request).resolve(
             payload.user_clearance
         )
@@ -129,9 +135,16 @@ def create_app(
             _raise_api_run_error(
                 status_code=status.HTTP_404_NOT_FOUND,
                 code="requested_data_unavailable",
-                message="The requested data is unavailable.",
+                message=user_facing_error_message(
+                    "requested_data_unavailable", response_language
+                ),
             )
-        return await _start_run(request, message=payload.message, policy=policy)
+        return await _start_run(
+            request,
+            message=payload.message,
+            policy=policy,
+            response_language=response_language,
+        )
 
     @runs.post(
         f"{API_PREFIX}/diagnostics",
@@ -156,12 +169,15 @@ def create_app(
             _raise_api_run_error(
                 status_code=status.HTTP_404_NOT_FOUND,
                 code="diagnostic_target_unavailable",
-                message="The requested diagnostic target is unavailable.",
+                message=user_facing_error_message(
+                    "diagnostic_target_unavailable", ResponseLanguage.EN
+                ),
             )
         return await _start_run(
             request,
             message=internal_diagnostic_message(target),
             policy=policy,
+            response_language=ResponseLanguage.EN,
         )
 
     @runs.get(
@@ -176,7 +192,7 @@ def create_app(
             _raise_api_run_error(
                 status_code=status.HTTP_404_NOT_FOUND,
                 code="run_not_found",
-                message="The requested run does not exist.",
+                message=user_facing_error_message("run_not_found", ResponseLanguage.EN),
             )
         return _to_run_response(record)
 
@@ -198,14 +214,16 @@ def create_app(
             _raise_api_run_error(
                 status_code=status.HTTP_404_NOT_FOUND,
                 code="run_not_found",
-                message="The requested run does not exist.",
+                message=user_facing_error_message("run_not_found", ResponseLanguage.EN),
             )
         claimed = await store.claim_resume(run_id, decision=payload.decision.value)
         if claimed is None:
             _raise_api_run_error(
                 status_code=status.HTTP_409_CONFLICT,
                 code="run_not_waiting_for_approval",
-                message="The run is not waiting for approval.",
+                message=user_facing_error_message(
+                    "run_not_waiting_for_approval", existing.response_language
+                ),
             )
         service = _run_service(request)
         if not _persistent_hitl_enabled(service) or not claimed.model_profile:
@@ -213,7 +231,9 @@ def create_app(
             _raise_api_run_error(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="internal_error",
-                message="The agent run could not be completed.",
+                message=user_facing_error_message(
+                    "internal_error", claimed.response_language
+                ),
             )
         try:
             execution = await service.resume(
@@ -229,7 +249,9 @@ def create_app(
             _raise_api_run_error(
                 status_code=status.HTTP_403_FORBIDDEN,
                 code="model_egress_denied",
-                message="Model execution is not permitted for this request.",
+                message=user_facing_error_message(
+                    "model_egress_denied", claimed.response_language
+                ),
             )
         # noinspection PyBroadException
         except Exception:  # noqa: BLE001
@@ -237,7 +259,9 @@ def create_app(
             _raise_api_run_error(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="internal_error",
-                message="The agent run could not be completed.",
+                message=user_facing_error_message(
+                    "internal_error", claimed.response_language
+                ),
             )
 
     if telemetry is not None:
@@ -284,7 +308,11 @@ def _persistent_hitl_enabled(service: AgentRunService) -> bool:
 
 
 async def _start_run(
-    request: Request, *, message: str, policy: ResolvedRunPolicy
+    request: Request,
+    *,
+    message: str,
+    policy: ResolvedRunPolicy,
+    response_language: ResponseLanguage,
 ) -> RunResponse:
     store = _run_store(request)
     run_id = uuid4()
@@ -293,12 +321,16 @@ async def _start_run(
         request_text=message,
         data_classification=policy.data_classification,
         run_profile=policy.run_profile,
+        response_language=response_language,
     )
     service = _run_service(request)
     try:
         if _persistent_hitl_enabled(service):
             profile, execution = await service.start(
-                message, run_id=run_id, run_policy=policy
+                message,
+                run_id=run_id,
+                run_policy=policy,
+                response_language=response_language,
             )
             await store.bind_execution_context(
                 run_id,
@@ -307,34 +339,38 @@ async def _start_run(
                 model_profile=profile.name,
             )
             return _to_run_response(await _persist_execution(store, run_id, execution))
-        result = await service.run_with_policy(message, run_policy=policy)
+        result = await service.run_with_policy(
+            message, run_policy=policy, response_language=response_language
+        )
     except NoEligibleModelError:
         await store.fail(run_id, "no_eligible_model")
         _raise_api_run_error(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             code="no_eligible_model",
-            message="No eligible model is available for this request.",
+            message=user_facing_error_message("no_eligible_model", response_language),
         )
     except (ModelEgressDeniedError, DataClassificationBoundaryError):
         await store.fail(run_id, "model_egress_denied")
         _raise_api_run_error(
             status_code=status.HTTP_403_FORBIDDEN,
             code="model_egress_denied",
-            message="Model execution is not permitted for this request.",
+            message=user_facing_error_message("model_egress_denied", response_language),
         )
     except McpServiceUnavailableError:
         await store.fail(run_id, "mcp_service_unavailable")
         _raise_api_run_error(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             code="mcp_service_unavailable",
-            message="A required MCP service is unavailable.",
+            message=user_facing_error_message(
+                "mcp_service_unavailable", response_language
+            ),
         )
     except Exception:  # noqa: BLE001 - public API must sanitize unexpected errors.
         await store.fail(run_id, "internal_error")
         _raise_api_run_error(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code="internal_error",
-            message="The agent run could not be completed.",
+            message=user_facing_error_message("internal_error", response_language),
         )
     if result.model_profile_name is not None:
         await store.bind_execution_context(

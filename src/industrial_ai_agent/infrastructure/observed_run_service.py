@@ -6,6 +6,7 @@ from uuid import UUID
 from industrial_ai_agent.agent.agent_run import AgentRunResult
 from industrial_ai_agent.agent.llm import ModelProfile
 from industrial_ai_agent.agent.model_egress import DataClassification
+from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
     AgentRunProfile,
@@ -49,26 +50,41 @@ class ObservedTroubleshootingRunService:
         return await self._delegate.resolve_internal_diagnostic(target)
 
     async def run_with_policy(
-        self, message: str, *, run_policy: ResolvedRunPolicy
+        self,
+        message: str,
+        *,
+        run_policy: ResolvedRunPolicy,
+        response_language: ResponseLanguage | None = None,
     ) -> AgentRunResult:
         async def operation(value: str) -> AgentRunResult:
-            return await self._delegate.run_with_policy(value, run_policy=run_policy)
+            return await self._delegate.run_with_policy(
+                value,
+                run_policy=run_policy,
+                response_language=response_language,
+            )
 
         return await self._observe_run(
             run_id=None,
             operation=operation,
             message=message,
             run_policy=run_policy,
+            response_language=response_language,
         )
 
     async def start(
-        self, message: str, *, run_id: UUID, run_policy: ResolvedRunPolicy
+        self,
+        message: str,
+        *,
+        run_id: UUID,
+        run_policy: ResolvedRunPolicy,
+        response_language: ResponseLanguage | None = None,
     ) -> tuple[ModelProfile, RunExecution]:
         return await self._observe_run(
             run_id=run_id,
             operation=self._delegate.start,
             message=message,
             run_policy=run_policy,
+            response_language=response_language,
         )
 
     async def resume(
@@ -105,11 +121,14 @@ class ObservedTroubleshootingRunService:
         operation,
         message: str,
         run_policy: ResolvedRunPolicy,
+        response_language: ResponseLanguage | None = None,
     ):
         attributes: dict[str, object] = {
             "data.classification": run_policy.data_classification.name,
             "run.profile": run_policy.run_profile.value,
         }
+        if response_language is not None:
+            attributes["response.language"] = response_language.value.lower()
         if run_id is not None:
             attributes["run.id"] = str(run_id)
         started = perf_counter()
@@ -123,7 +142,10 @@ class ObservedTroubleshootingRunService:
                     result = await operation(message)
                 else:
                     result = await operation(
-                        message, run_id=run_id, run_policy=run_policy
+                        message,
+                        run_id=run_id,
+                        run_policy=run_policy,
+                        response_language=response_language,
                     )
             self._telemetry.log_event(
                 event="agent.run.completed",

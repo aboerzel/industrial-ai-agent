@@ -170,6 +170,7 @@ class AgentRunRecord(Base):
     run_profile: Mapped[str] = mapped_column(String)
     model_profile: Mapped[str | None] = mapped_column(String)
     request_text: Mapped[str] = mapped_column(Text)
+    response_language: Mapped[str] = mapped_column(String)
     final_answer: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)

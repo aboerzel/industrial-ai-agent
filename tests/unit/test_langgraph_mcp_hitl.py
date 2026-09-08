@@ -29,6 +29,7 @@ from industrial_ai_agent.agent.llm import (
 )
 from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpToolSession
 from industrial_ai_agent.agent.model_egress import DataClassification
+from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.tools.tool_contracts import (
@@ -109,6 +110,45 @@ class RecordingMcpToolProvider:
         )
 
 
+@dataclass
+class ReadRecordingMcpToolProvider:
+    tool_results: tuple[str, str]
+
+    @asynccontextmanager
+    async def open_session(self) -> AsyncIterator[McpToolSession]:
+        async def get_product_history(product_id: str) -> str:
+            assert product_id == "P4711"
+            return self.tool_results[0]
+
+        async def search_documentation(query: str, top_k: int) -> str:
+            assert query == "QUALITY-09"
+            assert top_k == 1
+            return self.tool_results[1]
+
+        yield McpToolSession(
+            tools=(
+                StructuredTool.from_function(
+                    coroutine=get_product_history,
+                    name="get_product_history",
+                    description="Get product history.",
+                ),
+                StructuredTool.from_function(
+                    coroutine=search_documentation,
+                    name="search_documentation",
+                    description="Search documentation.",
+                ),
+            ),
+            discovered_tool_names=("get_product_history", "search_documentation"),
+            server_name="fake_read_mcp",
+            server_version="test",
+            protocol_version="test",
+            tool_policies=(
+                ToolPolicy("get_product_history", ToolOperation.READ),
+                ToolPolicy("search_documentation", ToolOperation.READ),
+            ),
+        )
+
+
 def _action_response(
     arguments: dict[str, object] | None = None,
 ) -> LLMResponse:
@@ -128,6 +168,127 @@ def _action_response(
 
 def _final_response() -> LLMResponse:
     return LLMResponse(text="Ticket created.", finish_reason=FinishReason.STOP)
+
+
+@pytest.mark.parametrize(
+    ("user_message", "tool_results", "final_answer", "response_language"),
+    (
+        (
+            (
+                "Untersuche, warum Produkt P4711 an Station S04 fehlgeschlagen ist. "
+                "Verwende bei Bedarf die vorhandene Dokumentation."
+            ),
+            (
+                '{"classification":"CONFIDENTIAL","finding":"QUALITY-09 failed"}',
+                '{"classification":"CONFIDENTIAL","content":"English maintenance guidance"}',
+            ),
+            "P4711 ist an S04 mit QUALITY-09 fehlgeschlagen.",
+            ResponseLanguage.DE,
+        ),
+        (
+            (
+                "Investigate why product P4711 failed at station S04. "
+                "Use the available documentation if needed."
+            ),
+            (
+                '{"classification":"CONFIDENTIAL","finding":"QUALITÄT-09 fehlgeschlagen"}',
+                '{"classification":"CONFIDENTIAL","content":"Deutsche Wartungshinweise"}',
+            ),
+            "P4711 failed at S04 with QUALITY-09.",
+            ResponseLanguage.EN,
+        ),
+    ),
+)
+def test_multi_tool_loops_keep_the_run_response_language(
+    user_message: str,
+    tool_results: tuple[str, str],
+    final_answer: str,
+    response_language: ResponseLanguage,
+) -> None:
+    client = FakeLLMClient(
+        [
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="history",
+                        name="get_product_history",
+                        arguments={"product_id": "P4711"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="documentation",
+                        name="search_documentation",
+                        arguments={"query": "QUALITY-09", "top_k": 1},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(text=final_answer, finish_reason=FinishReason.STOP),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(client, DEFAULT_PROFILE),
+        mcp_tool_provider=cast(
+            McpToolProvider,
+            cast(object, ReadRecordingMcpToolProvider(tool_results)),
+        ),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    state = asyncio.run(agent.ainvoke_via_mcp(user_message))
+
+    assert state["response_language"] is response_language
+    assert state["final_answer"] == final_answer
+    assert len(client.requests) == 3
+    for llm_request in client.requests:
+        assert llm_request.messages[0].content is not None
+        assert f"Response language: {response_language.display_name}." in (
+            llm_request.messages[0].content or ""
+        )
+    assert any(
+        tool_result in (client.requests[-1].messages[-1].content or "")
+        for tool_result in tool_results
+    )
+
+
+def test_hitl_resume_keeps_the_original_response_language() -> None:
+    checkpointer = InMemorySaver()
+    provider = RecordingMcpToolProvider()
+    started, _ = asyncio.run(
+        _agent(
+            FakeLLMClient([_action_response()]), provider, checkpointer
+        ).astart_via_mcp(
+            "Erstelle ein Wartungsticket für S04.",
+            thread_id="language-resume-1",
+        )
+    )
+    resumed_client = FakeLLMClient(
+        [
+            LLMResponse(
+                text="Das Wartungsticket wurde erstellt.",
+                finish_reason=FinishReason.STOP,
+            )
+        ]
+    )
+
+    completed = asyncio.run(
+        _agent(resumed_client, provider, checkpointer).aresume_via_mcp(
+            thread_id="language-resume-1", approval="approve"
+        )
+    )
+
+    assert started["response_language"] is ResponseLanguage.DE
+    assert completed["response_language"] is ResponseLanguage.DE
+    assert completed["final_answer"] == "Das Wartungsticket wurde erstellt."
+    assert "Response language: German." in (
+        resumed_client.requests[0].messages[0].content or ""
+    )
 
 
 def _agent(

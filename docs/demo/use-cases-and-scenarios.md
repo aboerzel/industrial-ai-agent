@@ -99,3 +99,9 @@ classification, model profile/provider/execution zone, tool names, token/cost pr
 and privacy boundaries. Do not print prompts, responses, tool payloads, retrieved
 content, or credentials. The existing message field and clearance selector are sufficient;
 no UI redesign is required.
+
+The response language is selected once from the original free-text request: German
+requests receive German user-facing text and English requests receive English user-facing
+text across all tool loops and an approval resume. Ambiguous or identifier-only requests
+use the deterministic English fallback; technical IDs and structured tool values remain
+unchanged.

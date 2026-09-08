@@ -41,6 +41,11 @@ from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     DataClassificationBoundaryError,
 )
+from industrial_ai_agent.agent.response_language import (
+    ResponseLanguage,
+    detect_response_language,
+    response_language_instruction,
+)
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.domain.security import effective_data_classification
 from industrial_ai_agent.tools.tool_contracts import (
@@ -122,6 +127,7 @@ class TroubleshootingGraphState(TypedDict):
     model_profile_name: str
     run_classification: DataClassification | None
     effective_classification: DataClassification | None
+    response_language: ResponseLanguage
 
 
 class CheckpointedTroubleshootingGraphState(TypedDict):
@@ -137,6 +143,7 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     model_profile_name: str
     run_classification: int | None
     effective_classification: int | None
+    response_language: str
 
 
 class LangGraphTroubleshootingAgent:
@@ -165,6 +172,7 @@ class LangGraphTroubleshootingAgent:
                 self._initial_messages(
                     user_request,
                     system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+                    response_language=detect_response_language(user_request),
                 )
             )
         return to_llm_response(response)
@@ -174,6 +182,7 @@ class LangGraphTroubleshootingAgent:
         user_request: str,
         *,
         session_observer: Callable[[McpToolSession], None] | None = None,
+        response_language: ResponseLanguage | None = None,
     ) -> TroubleshootingGraphState:
         """Run the read-only graph path through one MCP session.
 
@@ -193,6 +202,7 @@ class LangGraphTroubleshootingAgent:
                 self._initial_state(
                     user_request,
                     system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+                    response_language=response_language,
                 ),
                 config=config,
             )
@@ -205,10 +215,12 @@ class LangGraphTroubleshootingAgent:
         user_request: str,
         *,
         session_observer: Callable[[McpToolSession], None] | None = None,
+        response_language: ResponseLanguage | None = None,
     ) -> AgentRunResult:
         state = await self.ainvoke_via_mcp(
             user_request,
             session_observer=session_observer,
+            response_language=response_language,
         )
         run_status = state["run_status"]
         if run_status is None:
@@ -222,7 +234,11 @@ class LangGraphTroubleshootingAgent:
         )
 
     async def astart_via_mcp(
-        self, user_request: str, *, thread_id: str
+        self,
+        user_request: str,
+        *,
+        thread_id: str,
+        response_language: ResponseLanguage | None = None,
     ) -> tuple[TroubleshootingGraphState, dict[str, object] | None]:
         """Start the production multi-MCP graph and persist a native interrupt."""
         self._require_resumable_run_context()
@@ -237,7 +253,9 @@ class LangGraphTroubleshootingAgent:
             config = self._checkpoint_config(thread_id)
             await graph.ainvoke(
                 self._initial_state(
-                    user_request, system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
+                    user_request,
+                    system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+                    response_language=response_language,
                 ),
                 config=config,
             )
@@ -575,10 +593,16 @@ class LangGraphTroubleshootingAgent:
         state: CheckpointedTroubleshootingGraphState,
     ) -> dict[str, object]:
         _require_pending_action(state)
+        response_language = ResponseLanguage(state["response_language"])
         return {
             "pending_action": None,
             "run_status": AgentRunStatus.SUCCESS.value,
-            "final_answer": "Maintenance ticket creation was rejected; no ticket was created.",
+            "final_answer": (
+                "Die Erstellung des Wartungstickets wurde abgelehnt; es wurde kein "
+                "Ticket erstellt."
+                if response_language is ResponseLanguage.DE
+                else "Maintenance ticket creation was rejected; no ticket was created."
+            ),
         }
 
     @asynccontextmanager
@@ -593,11 +617,16 @@ class LangGraphTroubleshootingAgent:
         user_request: str,
         *,
         system_content: str,
+        response_language: ResponseLanguage | None = None,
     ) -> CheckpointedTroubleshootingGraphState:
+        resolved_response_language = response_language or detect_response_language(
+            user_request
+        )
         return {
             "messages": self._initial_messages(
                 user_request,
                 system_content=system_content,
+                response_language=resolved_response_language,
             ),
             "executed_tool_count": 0,
             "executed_tool_calls": (),
@@ -616,6 +645,7 @@ class LangGraphTroubleshootingAgent:
                 if self._run_classification is not None
                 else None
             ),
+            "response_language": resolved_response_language.value,
         }
 
     @staticmethod
@@ -623,12 +653,15 @@ class LangGraphTroubleshootingAgent:
         user_request: str,
         *,
         system_content: str,
+        response_language: ResponseLanguage,
     ) -> list[AnyMessage]:
         normalized_request = user_request.strip()
         if not normalized_request:
             raise ValueError("User request must not be empty")
         messages: list[AnyMessage] = [
-            SystemMessage(content=system_content),
+            SystemMessage(
+                content=f"{system_content}\n\n{response_language_instruction(response_language)}"
+            ),
             HumanMessage(content=normalized_request),
         ]
         return messages
@@ -682,6 +715,7 @@ class LangGraphTroubleshootingAgent:
                 if state["effective_classification"] is not None
                 else None
             ),
+            "response_language": ResponseLanguage(state["response_language"]),
         }
 
     def _observe_result_classification(

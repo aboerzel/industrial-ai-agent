@@ -7,6 +7,7 @@ from typing import Protocol
 from uuid import UUID
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.schemas import RunStatus
@@ -21,6 +22,7 @@ class StoredAgentRun:
     run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
     model_profile: str | None = None
     request_text: str = ""
+    response_language: ResponseLanguage = ResponseLanguage.EN
     result: AgentRunResult | None = None
     error_code: str | None = None
     approval_request: dict[str, object] | None = None
@@ -75,6 +77,7 @@ class AgentRunStore(Protocol):
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
         run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
         model_profile: str | None = None,
+        response_language: ResponseLanguage = ResponseLanguage.EN,
     ) -> StoredAgentRun: ...
 
     async def complete(
@@ -124,6 +127,7 @@ class InMemoryAgentRunStore:
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
         run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
         model_profile: str | None = None,
+        response_language: ResponseLanguage = ResponseLanguage.EN,
     ) -> StoredAgentRun:
         record = StoredAgentRun(
             run_id=run_id,
@@ -133,6 +137,7 @@ class InMemoryAgentRunStore:
             run_profile=run_profile,
             model_profile=model_profile,
             request_text=request_text,
+            response_language=response_language,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -152,6 +157,7 @@ class InMemoryAgentRunStore:
             run_profile=existing.run_profile,
             model_profile=existing.model_profile,
             request_text=existing.request_text,
+            response_language=existing.response_language,
             result=result,
             approval_request=None,
             approval_action=existing.approval_action,
@@ -173,6 +179,7 @@ class InMemoryAgentRunStore:
             run_profile=existing.run_profile,
             model_profile=existing.model_profile,
             request_text=existing.request_text,
+            response_language=existing.response_language,
             error_code=error_code,
             approval_request=None,
             approval_action=existing.approval_action,
@@ -262,6 +269,7 @@ class InMemoryAgentRunStore:
                 run_profile=run_profile,
                 model_profile=model_profile,
                 request_text=existing.request_text,
+                response_language=existing.response_language,
                 result=existing.result,
                 error_code=existing.error_code,
                 approval_request=existing.approval_request,

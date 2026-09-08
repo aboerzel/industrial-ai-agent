@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import select, update
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.run_store import (
@@ -44,6 +45,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         data_classification: DataClassification = DataClassification.CONFIDENTIAL,
         run_profile: AgentRunProfile = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
         model_profile: str | None = None,
+        response_language: ResponseLanguage = ResponseLanguage.EN,
     ) -> StoredAgentRun:
         return await asyncio.to_thread(
             self._create,
@@ -52,6 +54,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             data_classification,
             run_profile,
             model_profile,
+            response_language,
         )
 
     def _create(
@@ -61,6 +64,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         data_classification: DataClassification,
         run_profile: AgentRunProfile,
         model_profile: str | None,
+        response_language: ResponseLanguage,
     ) -> StoredAgentRun:
         with self._session_factory.session(self._security_context) as session:
             record = AgentRunRecord(
@@ -71,6 +75,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 run_profile=run_profile.value,
                 model_profile=model_profile,
                 request_text=request_text,
+                response_language=response_language.value,
                 final_answer=None,
                 error_code=None,
                 error_message=None,
@@ -277,6 +282,7 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
         run_profile=AgentRunProfile(record.run_profile),
         model_profile=record.model_profile,
         request_text=record.request_text,
+        response_language=ResponseLanguage(record.response_language),
         result=result,
         error_code=record.error_code,
         approval_request=record.approval_payload,

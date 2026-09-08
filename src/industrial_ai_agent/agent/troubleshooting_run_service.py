@@ -18,6 +18,10 @@ from industrial_ai_agent.agent.model_routing import (
     ModelProfileMetadata,
     TaskRequirements,
 )
+from industrial_ai_agent.agent.response_language import (
+    ResponseLanguage,
+    detect_response_language,
+)
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
     AgentRunProfile,
@@ -44,7 +48,11 @@ class AgentRunService(Protocol):
     ) -> ResolvedRunPolicy: ...
 
     async def run_with_policy(
-        self, message: str, *, run_policy: ResolvedRunPolicy
+        self,
+        message: str,
+        *,
+        run_policy: ResolvedRunPolicy,
+        response_language: ResponseLanguage | None = None,
     ) -> AgentRunResult: ...
 
 
@@ -77,10 +85,19 @@ class RunExecution:
 class McpBackedTroubleshootingAgent(Protocol):
     """The narrow LangGraph operation needed by the application service."""
 
-    async def aanswer_via_mcp(self, user_request: str) -> AgentRunResult: ...
+    async def aanswer_via_mcp(
+        self,
+        user_request: str,
+        *,
+        response_language: ResponseLanguage | None = None,
+    ) -> AgentRunResult: ...
 
     async def astart_via_mcp(
-        self, user_request: str, *, thread_id: str
+        self,
+        user_request: str,
+        *,
+        thread_id: str,
+        response_language: ResponseLanguage | None = None,
     ) -> tuple[object, dict[str, object] | None]: ...
 
     async def aresume_via_mcp(self, *, thread_id: str, approval: object) -> object: ...
@@ -135,18 +152,28 @@ class TroubleshootingRunService:
             run_policy=self._classification_policy.resolve(
                 AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
             ),
+            response_language=detect_response_language(message),
         )
 
     async def run_with_policy(
-        self, message: str, *, run_policy: ResolvedRunPolicy
+        self,
+        message: str,
+        *,
+        run_policy: ResolvedRunPolicy,
+        response_language: ResponseLanguage | None = None,
     ) -> AgentRunResult:
         profile = self._router.route(run_policy.task_requirements, self._profiles)
+        resolved_response_language = response_language or detect_response_language(
+            message
+        )
         try:
             with self._agent_factory.open_agent(
                 profile=profile,
                 run_policy=run_policy,
             ) as agent:
-                return await agent.aanswer_via_mcp(message)
+                return await agent.aanswer_via_mcp(
+                    message, response_language=resolved_response_language
+                )
         except BaseExceptionGroup as error:
             root_cause = _single_exception_group_cause(error)
             if isinstance(root_cause, McpServiceUnavailableError):
@@ -173,6 +200,7 @@ class TroubleshootingRunService:
         *,
         run_id: UUID,
         run_policy: ResolvedRunPolicy | None = None,
+        response_language: ResponseLanguage | None = None,
     ) -> tuple[ModelProfile, RunExecution]:
         if self._checkpointer_factory is None:
             raise RuntimeError("Persistent HITL runs require a PostgreSQL checkpointer")
@@ -180,12 +208,17 @@ class TroubleshootingRunService:
             AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
         )
         profile = self._router.route(resolved.task_requirements, self._profiles)
+        resolved_response_language = response_language or detect_response_language(
+            message
+        )
         async with self._checkpointer_factory.open() as saver:
             with self._agent_factory.open_agent(
                 profile=profile, run_policy=resolved, checkpointer=saver
             ) as agent:
                 state, payload = await agent.astart_via_mcp(
-                    message, thread_id=str(run_id)
+                    message,
+                    thread_id=str(run_id),
+                    response_language=resolved_response_language,
                 )
         return profile, _execution_from_state(state, payload)
 

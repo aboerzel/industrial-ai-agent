@@ -11,6 +11,7 @@ from industrial_ai_agent.agent.agent_run import (
 )
 from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
 from industrial_ai_agent.agent.model_routing import NoEligibleModelError
+from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
     AgentRunProfile,
@@ -63,8 +64,13 @@ class FakeRunService:
         )
 
     async def run_with_policy(
-        self, message: str, *, run_policy: ResolvedRunPolicy
+        self,
+        message: str,
+        *,
+        run_policy: ResolvedRunPolicy,
+        response_language: ResponseLanguage | None = None,
     ) -> AgentRunResult:
+        del response_language
         self.messages.append(message)
         self.policies.append(run_policy)
         if self._error is not None:
