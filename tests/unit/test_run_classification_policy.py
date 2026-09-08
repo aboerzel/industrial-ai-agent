@@ -121,6 +121,39 @@ def test_known_internal_discovery_request_stays_internal() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("clearance", "expected"),
+    (
+        (DataClassification.PUBLIC, AgentRunProfile.PUBLIC_INFORMATION),
+        (DataClassification.INTERNAL, AgentRunProfile.INTERNAL_DIAGNOSTIC),
+        (
+            DataClassification.CONFIDENTIAL,
+            AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+        ),
+        (
+            DataClassification.RESTRICTED,
+            AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
+        ),
+    ),
+)
+def test_ticket_lookup_uses_the_server_resolved_demo_clearance(
+    clearance: DataClassification, expected: AgentRunProfile
+) -> None:
+    context = SecurityContext(
+        subject_id=f"ticket-{clearance.name.lower()}",
+        roles=("demo-engineer",),
+        clearance=clearance,
+        authenticated=True,
+    )
+
+    assert (
+        resolve_demo_run_profile(
+            "Zeige mir das Ticket MT-6EA0DEF5515A.", security_context=context
+        )
+        is expected
+    )
+
+
 def test_persisted_policy_rejects_classification_mismatch() -> None:
     with pytest.raises(ValueError, match="classification"):
         AgentRunClassificationPolicy().resolve_persisted(

@@ -1,5 +1,6 @@
 """Server-owned classification policy for bounded agent run profiles."""
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -38,6 +39,7 @@ INTERNAL_DIAGNOSTIC_TOOLS = frozenset(
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
         "search_documentation",
     }
 )
@@ -47,6 +49,7 @@ PUBLIC_INFORMATION_TOOLS = frozenset(
         "get_station_overview",
         "list_products",
         "get_product_overview",
+        "get_maintenance_ticket",
         "search_documentation",
     }
 )
@@ -58,6 +61,7 @@ CONFIDENTIAL_TROUBLESHOOTING_TOOLS = frozenset(
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
         "search_documentation",
         "create_maintenance_ticket",
     }
@@ -206,7 +210,9 @@ def resolve_demo_run_profile(
         return AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
     if "P4900" in normalized or "P4901" in normalized or "S02" in normalized:
         return AgentRunProfile.INTERNAL_DIAGNOSTIC
-    if security_context is not None and _is_discovery_request(normalized):
+    if security_context is not None and (
+        _is_discovery_request(normalized) or _is_ticket_lookup_request(normalized)
+    ):
         return {
             DataClassification.PUBLIC: AgentRunProfile.PUBLIC_INFORMATION,
             DataClassification.INTERNAL: AgentRunProfile.INTERNAL_DIAGNOSTIC,
@@ -231,3 +237,7 @@ def _is_discovery_request(normalized_message: str) -> bool:
             "FAILURES",
         )
     )
+
+
+def _is_ticket_lookup_request(normalized_message: str) -> bool:
+    return bool(re.search(r"\bMT-[A-F0-9]{12}\b", normalized_message))

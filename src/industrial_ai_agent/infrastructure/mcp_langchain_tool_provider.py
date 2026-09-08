@@ -49,6 +49,7 @@ DEFAULT_ALLOWED_FACTORY_TOOLS = frozenset(
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
         "create_maintenance_ticket",
     }
 )
@@ -60,6 +61,7 @@ INTERNAL_DIAGNOSTIC_FACTORY_TOOLS = frozenset(
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
     }
 )
 DEFAULT_ALLOWED_KNOWLEDGE_TOOLS = frozenset({"search_documentation"})

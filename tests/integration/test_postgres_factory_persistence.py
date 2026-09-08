@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from uuid import uuid4
 from zipfile import ZipFile
 
 import pytest
@@ -12,6 +13,10 @@ from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunProfile,
 )
 from industrial_ai_agent.domain.machine_status import MachineState
+from industrial_ai_agent.domain.maintenance_ticket import (
+    MaintenanceTicketId,
+    MaintenanceTicketRequestId,
+)
 from industrial_ai_agent.domain.product_history import (
     ProductId,
     ProductionStepStatus,
@@ -28,6 +33,7 @@ from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlDocumentCatalogRepository,
     PostgreSqlFactoryDiscoveryRepository,
     PostgreSqlMachineStatusRepository,
+    PostgreSqlMaintenanceTicketRepository,
     PostgreSqlProductHistoryRepository,
     PostgreSqlSessionFactory,
 )
@@ -207,6 +213,34 @@ def test_rls_clearance_does_not_leak_between_repository_requests() -> None:
         assert internal.get_product_history(ProductId("P4711")) is None
     finally:
         session_factory.dispose()
+
+
+def test_maintenance_ticket_create_and_read_share_rls_filtered_persistence() -> None:
+    assert DATABASE_URL is not None
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    confidential_context = _context(DataClassification.CONFIDENTIAL)
+    internal_context = _context(DataClassification.INTERNAL)
+    request_id = MaintenanceTicketRequestId(f"ticket-read-{uuid4()}")
+    try:
+        confidential_repository = PostgreSqlMaintenanceTicketRepository(
+            session_factory, confidential_context
+        )
+        created = confidential_repository.create_maintenance_ticket(
+            request_id=request_id,
+            station_id=StationId("S04"),
+            summary="Inspect QUALITY-09",
+        )
+        visible = confidential_repository.get_maintenance_ticket(
+            MaintenanceTicketId(created.ticket_id)
+        )
+        hidden = PostgreSqlMaintenanceTicketRepository(
+            session_factory, internal_context
+        ).get_maintenance_ticket(MaintenanceTicketId(created.ticket_id))
+    finally:
+        session_factory.dispose()
+
+    assert visible == created
+    assert hidden is None
 
 
 def test_restricted_demo_case_is_visible_only_at_restricted_clearance() -> None:

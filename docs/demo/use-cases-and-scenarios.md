@@ -74,6 +74,8 @@ but cannot confirm a cause. All records and documents are synthetic.
 |---|---|---|---|
 | Product non-leakage | What do you know about product P9001? | CONFIDENTIAL | Neutral unavailable/not-found semantics without identifier details, count, or required clearance. |
 | Station non-leakage | What do you know about station S07? | CONFIDENTIAL | Neutral unavailable/not-found semantics without restricted state or count. |
+| Ticket lookup | Show me ticket MT-6EA0DEF5515A. | CONFIDENTIAL | Uses `get_maintenance_ticket` to return only the visible ticket projection. User-facing text remains English even when structured ticket values use technical English. |
+| Ticket non-leakage | Zeige mir das Ticket MT-6EA0DEF5515A. | INTERNAL | An unknown or RLS-hidden ticket produces the same neutral unavailable result, without summary, station, status, classification, or required-clearance disclosure. User-facing text remains German. |
 
 ## 7. Root-Cause Analysis
 

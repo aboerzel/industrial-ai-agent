@@ -17,6 +17,7 @@ from industrial_ai_agent.domain.factory_discovery import (
 from industrial_ai_agent.domain.machine_status import MachineState, MachineStatus
 from industrial_ai_agent.domain.maintenance_ticket import (
     MaintenanceTicket,
+    MaintenanceTicketId,
     MaintenanceTicketRequestId,
 )
 from industrial_ai_agent.domain.product_history import (
@@ -292,6 +293,28 @@ class PostgreSqlMaintenanceTicketRepository:
         self._session_factory = session_factory
         self._security_context = security_context
 
+    def get_maintenance_ticket(
+        self, ticket_id: MaintenanceTicketId
+    ) -> MaintenanceTicket | None:
+        with self._session_factory.session(self._security_context) as session:
+            record = session.scalar(
+                select(MaintenanceTicketRecord)
+                .options(joinedload(MaintenanceTicketRecord.station))
+                .where(MaintenanceTicketRecord.ticket_code == ticket_id.value)
+            )
+        if record is None:
+            return None
+        return MaintenanceTicket(
+            ticket_id=record.ticket_code,
+            request_id=MaintenanceTicketRequestId(
+                record.request_id or record.ticket_code
+            ),
+            station_id=StationId(record.station.code),
+            summary=record.summary or "Maintenance ticket",
+            status=record.status,
+            classification=DataClassification(record.classification),
+        )
+
     def create_maintenance_ticket(
         self,
         request_id: MaintenanceTicketRequestId,
@@ -310,6 +333,8 @@ class PostgreSqlMaintenanceTicketRepository:
                     request_id=request_id,
                     station_id=station_id,
                     summary=existing.summary or summary,
+                    status=existing.status,
+                    classification=DataClassification(existing.classification),
                 )
             ticket_code = f"MT-{uuid4().hex[:12].upper()}"
             record = MaintenanceTicketRecord(
@@ -346,12 +371,16 @@ class PostgreSqlMaintenanceTicketRepository:
                     request_id=request_id,
                     station_id=station_id,
                     summary=existing.summary or summary,
+                    status=existing.status,
+                    classification=DataClassification(existing.classification),
                 )
             return MaintenanceTicket(
                 ticket_id=ticket_code,
                 request_id=request_id,
                 station_id=station_id,
                 summary=summary,
+                status="OPEN",
+                classification=self._security_context.clearance,
             )
 
 

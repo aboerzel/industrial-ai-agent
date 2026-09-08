@@ -95,7 +95,7 @@ visible one-shot migration container; a production multi-replica deployment shou
 dedicated migration Job instead.
 
 The project currently implements product-history retrieval, current machine-status
-retrieval, a provider-independent LLM integration boundary, and one bounded
+retrieval, bounded maintenance-ticket retrieval by ticket ID, a provider-independent LLM integration boundary, and one bounded
 `LangGraphTroubleshootingAgent` path over runtime-discovered, allowlisted MCP tools. Its
 sole write tool is `create_maintenance_ticket`; the graph exposes only a strict proposal
 schema to the model, then pauses for human approval before the separate execution step.
@@ -110,7 +110,7 @@ orchestration. The runtime uses LangGraph's official PostgreSQL async checkpoint
 durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
 dynamic tool registry, LangSmith integration, or general evaluation framework.
 Five MCP services expose bounded capabilities through the official MCP SDK v2.
-`factory_mcp` provides product history, machine status, and the approval-gated
+`factory_mcp` provides product history, machine status, server-authorized maintenance-ticket retrieval by ticket ID, and the approval-gated
 maintenance-ticket action; `knowledge_mcp` provides documentation search; and the
 read-only `observability_mcp` provides safe RCA evidence over Tempo, Loki, and
 Prometheus. The read-only `runtime_mcp` reports RLS-filtered persisted run facts only:
@@ -836,9 +836,12 @@ results. The isolated
 `DocumentationSearchCapability.search_documentation(query, top_k=3)` returns structured
 `DocumentationSearchResult` data. LangGraph receives it only through discovered and
 authorized `knowledge_mcp` tools, never through direct retriever injection.
-`MaintenanceTicketCapability.create_maintenance_ticket(...)` is exposed only through
-the fixed Factory MCP action contract. Its deterministic approval boundary executes it
-only after explicit approval.
+`MaintenanceTicketCapability.get_maintenance_ticket(ticket_id)` is a bounded
+read-only projection over the RLS-filtered ticket store; invisible and unknown ticket
+IDs share the same not-found result and it does not expose a general ticket query
+interface. `MaintenanceTicketCapability.create_maintenance_ticket(...)` remains exposed
+only through the fixed Factory MCP action contract. Its deterministic approval boundary
+executes it only after explicit approval.
 
 ### `agent`
 

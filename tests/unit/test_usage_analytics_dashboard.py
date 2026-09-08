@@ -17,6 +17,7 @@ TOOL_COLORS = {
     "create_maintenance_ticket": "#FF7383",
     "get_agent_run": "#8AB8FF",
     "get_machine_status": "#73BF69",
+    "get_maintenance_ticket": "#5DADE2",
     "list_stations": "#5794F2",
     "list_products": "#FF9830",
     "search_documentation": "#B877D9",
@@ -46,7 +47,7 @@ def test_tool_count_and_duration_panels_share_selected_range_and_layout() -> Non
     tool_calls = panels["Tool Calls"]
     duration = panels["Average Tool Call Duration"]
 
-    assert len(TOOL_COLORS) == 24
+    assert len(TOOL_COLORS) == 25
     assert tool_calls["type"] == duration["type"] == "barchart"
     assert tool_calls["description"] == (
         "Number of instrumented tool calls within the selected time range. "

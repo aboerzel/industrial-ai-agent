@@ -20,6 +20,7 @@ from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunSto
             ResponseLanguage.DE,
         ),
         ("Welche Stationen sind verfügbar?", ResponseLanguage.DE),
+        ("zeige mir das ticket MT-6EA0DEF5515A", ResponseLanguage.DE),
         (
             "Investigate why product P4711 failed at station S04.",
             ResponseLanguage.EN,

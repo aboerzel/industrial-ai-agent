@@ -35,6 +35,7 @@ TROUBLESHOOTING_TOOL_POLICIES = {
         ToolPolicy("get_product_overview", ToolOperation.READ),
         ToolPolicy("get_product_history", ToolOperation.READ),
         ToolPolicy("get_machine_status", ToolOperation.READ),
+        ToolPolicy("get_maintenance_ticket", ToolOperation.READ),
         ToolPolicy("search_documentation", ToolOperation.READ),
         ToolPolicy(
             "create_maintenance_ticket",

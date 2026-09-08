@@ -136,6 +136,7 @@ function isPublicToolName(value) {
     "get_machine_status",
     "search_documentation",
     "create_maintenance_ticket",
+    "get_maintenance_ticket",
   ].includes(value);
 }
 

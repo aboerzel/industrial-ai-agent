@@ -56,6 +56,7 @@ from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapabi
 from industrial_ai_agent.tools.product_history import ProductHistoryCapability
 from industrial_ai_agent.tools.tool_contracts import (
     MaintenanceSummary,
+    MaintenanceTicketIdentifier,
     ProductIdentifier,
     StationIdentifier,
     ToolCallIdentifier,
@@ -72,6 +73,7 @@ _FACTORY_TOOL_PERMISSIONS = {
     "get_product_overview": McpPermission.READ_FACTORY,
     "get_product_history": McpPermission.READ_FACTORY,
     "get_machine_status": McpPermission.READ_FACTORY,
+    "get_maintenance_ticket": McpPermission.READ_FACTORY,
     "create_maintenance_ticket": McpPermission.CREATE_MAINTENANCE_TICKET,
 }
 
@@ -277,6 +279,39 @@ def create_factory_mcp_server(
         ticket_capability = maintenance_ticket
 
         @server.tool(
+            name="get_maintenance_ticket",
+            description="Get the bounded visible details of one maintenance ticket.",
+            structured_output=True,
+            annotations=ToolAnnotations(read_only_hint=True),
+        )
+        def get_maintenance_ticket(
+            ticket_id: MaintenanceTicketIdentifier, ctx: Context
+        ) -> dict[str, Any]:
+            _, _, _, active_ticket_capability = _capabilities_for_request(
+                ctx=ctx,
+                tool_name="get_maintenance_ticket",
+                fallback=(
+                    product_history,
+                    machine_status,
+                    factory_discovery,
+                    ticket_capability,
+                ),
+                access_control=access_control,
+                capabilities_for_context=capabilities_for_context,
+            )
+            if active_ticket_capability is None:
+                raise PermissionError("MCP tool is not authorized")
+            result = _invoke_factory_tool(
+                telemetry=telemetry,
+                tool_name="get_maintenance_ticket",
+                operation_type="read",
+                action=lambda: active_ticket_capability.get_maintenance_ticket(
+                    ticket_id
+                ),
+            )
+            return result.model_dump(mode="json")
+
+        @server.tool(
             name="create_maintenance_ticket",
             description="Create an approved maintenance ticket for a station.",
             structured_output=True,
@@ -328,6 +363,7 @@ def create_factory_mcp_server(
     ):
         require_strict_mcp_tool_arguments(server, tool_name)
     if maintenance_ticket is not None:
+        require_strict_mcp_tool_arguments(server, "get_maintenance_ticket")
         require_strict_mcp_tool_arguments(server, "create_maintenance_ticket")
 
     if access_control is not None:

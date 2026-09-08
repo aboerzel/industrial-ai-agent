@@ -82,6 +82,7 @@ class PublicToolName(StrEnum):
     GET_PRODUCT_OVERVIEW = "get_product_overview"
     GET_PRODUCT_HISTORY = "get_product_history"
     GET_MACHINE_STATUS = "get_machine_status"
+    GET_MAINTENANCE_TICKET = "get_maintenance_ticket"
     SEARCH_DOCUMENTATION = "search_documentation"
     CREATE_MAINTENANCE_TICKET = "create_maintenance_ticket"
 

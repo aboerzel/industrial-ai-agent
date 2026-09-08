@@ -12,6 +12,10 @@ StationIdentifier = Annotated[
     str,
     StringConstraints(strip_whitespace=True, pattern=r"^S[0-9]{2,3}$"),
 ]
+MaintenanceTicketIdentifier = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, pattern=r"^MT-[A-F0-9]{12}$"),
+]
 ToolCallIdentifier = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
@@ -37,6 +41,10 @@ class GetProductHistoryArguments(_StrictToolArguments):
 
 class GetMachineStatusArguments(_StrictToolArguments):
     station_id: StationIdentifier
+
+
+class GetMaintenanceTicketArguments(_StrictToolArguments):
+    ticket_id: MaintenanceTicketIdentifier
 
 
 class SearchDocumentationArguments(_StrictToolArguments):

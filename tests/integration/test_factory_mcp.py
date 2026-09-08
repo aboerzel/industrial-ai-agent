@@ -38,6 +38,7 @@ def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> No
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
         "create_maintenance_ticket",
     }
     assert tools_by_name["get_product_history"].input_schema["required"] == [
@@ -45,6 +46,9 @@ def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> No
     ]
     assert tools_by_name["get_machine_status"].input_schema["required"] == [
         "station_id"
+    ]
+    assert tools_by_name["get_maintenance_ticket"].input_schema["required"] == [
+        "ticket_id"
     ]
     assert "required" not in tools_by_name["list_stations"].input_schema
     assert "required" not in tools_by_name["list_products"].input_schema
@@ -128,6 +132,69 @@ def test_factory_mcp_rejects_invalid_maintenance_ticket_inputs_before_dispatch()
                 await server.call_tool("create_maintenance_ticket", arguments)
 
     asyncio.run(call_invalid_tools())
+
+
+def test_factory_mcp_rejects_invalid_maintenance_ticket_id_before_dispatch() -> None:
+    server = create_default_factory_mcp_server()
+
+    async def call_invalid_tool() -> None:
+        with pytest.raises(ToolError, match="Error executing tool"):
+            await server.call_tool("get_maintenance_ticket", {"ticket_id": "MT-0001"})
+
+    asyncio.run(call_invalid_tool())
+
+
+def test_factory_mcp_reads_the_ticket_created_by_the_same_capability() -> None:
+    server = create_default_factory_mcp_server()
+
+    async def create_then_read() -> tuple[dict[str, object], dict[str, object]]:
+        created = await server.call_tool(
+            "create_maintenance_ticket",
+            {
+                "station_id": "S04",
+                "summary": "Inspect QUALITY-09",
+                "request_id": "ticket-read-test",
+            },
+        )
+        assert isinstance(created, CallToolResult)
+        ticket_id = created.structured_content["ticket_id"]
+        assert isinstance(ticket_id, str)
+        read = await server.call_tool(
+            "get_maintenance_ticket", {"ticket_id": ticket_id}
+        )
+        assert isinstance(read, CallToolResult)
+        return created.structured_content, read.structured_content
+
+    created, read = asyncio.run(create_then_read())
+
+    assert read == {
+        "ticket_id": created["ticket_id"],
+        "found": True,
+        "status": "OPEN",
+        "station_id": "S04",
+        "summary": "Inspect QUALITY-09",
+        "classification": 2,
+    }
+
+
+def test_factory_mcp_returns_a_bounded_not_found_ticket_result() -> None:
+    server = create_default_factory_mcp_server()
+
+    async def call_unknown() -> dict[str, object]:
+        result = await server.call_tool(
+            "get_maintenance_ticket", {"ticket_id": "MT-FFFFFFFFFFFF"}
+        )
+        assert isinstance(result, CallToolResult)
+        return result.structured_content
+
+    assert asyncio.run(call_unknown()) == {
+        "ticket_id": "MT-FFFFFFFFFFFF",
+        "found": False,
+        "status": None,
+        "station_id": None,
+        "summary": None,
+        "classification": 2,
+    }
 
 
 def test_factory_mcp_rejects_unknown_arguments_before_capability_dispatch() -> None:
@@ -234,6 +301,7 @@ def _assert_factory_smoke_result(result: FactoryMcpSmokeResult) -> None:
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
         "create_maintenance_ticket",
     )
     assert result.product_history is not None

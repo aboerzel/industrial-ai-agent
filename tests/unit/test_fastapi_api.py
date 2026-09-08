@@ -180,6 +180,37 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
     assert stored_response.json() == payload
 
 
+def test_public_run_response_accepts_the_maintenance_ticket_read_trajectory() -> None:
+    result = AgentRunResult(
+        status=AgentRunStatus.SUCCESS,
+        final_answer="Das Ticket ist verfügbar.",
+        tool_call_count=1,
+        executed_tool_calls=(
+            ExecutedToolCall(
+                tool="get_maintenance_ticket",
+                arguments={"ticket_id": "MT-6EA0DEF5515A"},
+            ),
+        ),
+    )
+    client = TestClient(create_app(FakeRunService(result=result)))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Zeige mir das Ticket MT-6EA0DEF5515A.",
+            "user_clearance": "CONFIDENTIAL",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tool_calls"] == [
+        {
+            "tool": "get_maintenance_ticket",
+            "arguments": {"ticket_id": "MT-6EA0DEF5515A"},
+        }
+    ]
+
+
 def test_create_run_uses_fastapi_validation_for_invalid_request() -> None:
     client = TestClient(create_app(FakeRunService(result=_success_result())))
 

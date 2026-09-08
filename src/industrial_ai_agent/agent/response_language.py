@@ -65,7 +65,7 @@ _ENGLISH_TOKENS = frozenset(
         "which",
     }
 )
-_WORD_PATTERN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]+")
+_WORD_PATTERN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+")
 
 
 def detect_response_language(user_request: str) -> ResponseLanguage:

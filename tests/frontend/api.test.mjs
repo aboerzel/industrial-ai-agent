@@ -72,6 +72,21 @@ test("accepts discovery tool calls in the existing run result contract", async (
   assert.deepEqual(await requestRun(payload), payload);
 });
 
+test("accepts bounded maintenance-ticket retrieval in the run result contract", async () => {
+  const payload = {
+    run_id: RUN_ID,
+    status: "success",
+    data_classification: "RESTRICTED",
+    answer: "Das Ticket MT-6EA0DEF5515A ist offen.",
+    tool_calls: [
+      { tool: "get_maintenance_ticket", arguments: { ticket_id: "MT-6EA0DEF5515A" } },
+    ],
+    approval_request: null,
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
 test("rejects malformed approval data instead of accepting an arbitrary object", async () => {
   await assert.rejects(
     requestRun({

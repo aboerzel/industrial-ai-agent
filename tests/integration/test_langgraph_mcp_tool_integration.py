@@ -192,6 +192,7 @@ def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schema
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
         "create_maintenance_ticket",
     )
     assert set(tools_by_name) == {
@@ -201,6 +202,7 @@ def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schema
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
         "create_maintenance_ticket",
     }
     assert (
@@ -215,6 +217,57 @@ def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schema
         ]
         == "string"
     )
+    assert (
+        _input_schema(tools_by_name["get_maintenance_ticket"])["properties"][
+            "ticket_id"
+        ]["pattern"]
+        == "^MT-[A-F0-9]{12}$"
+    )
+
+
+@pytest.mark.parametrize(
+    ("user_request", "final_answer", "response_language"),
+    (
+        (
+            "Zeige mir das Ticket MT-FFFFFFFFFFFF.",
+            "Das Ticket ist nicht verfügbar.",
+            "German",
+        ),
+        (
+            "Show me ticket MT-FFFFFFFFFFFF.",
+            "The ticket is unavailable.",
+            "English",
+        ),
+    ),
+)
+def test_ticket_lookup_is_selected_in_the_original_response_language(
+    user_request: str,
+    final_answer: str,
+    response_language: str,
+) -> None:
+    llm_client = FakeLLMClient(
+        _tool_response(
+            "get_maintenance_ticket",
+            {"ticket_id": "MT-FFFFFFFFFFFF"},
+            "ticket-read",
+        ),
+        LLMResponse(text=final_answer, finish_reason=FinishReason.STOP),
+    )
+
+    result = asyncio.run(
+        _mcp_agent(llm_client, database_url="").aanswer_via_mcp(user_request)
+    )
+
+    assert [call.tool for call in result.executed_tool_calls] == [
+        "get_maintenance_ticket"
+    ]
+    assert result.final_answer == final_answer
+    assert len(llm_client.requests) == 2
+    for request in llm_client.requests:
+        assert f"Response language: {response_language}." in (
+            request.messages[0].content or ""
+        )
+    assert '"found": false' in (llm_client.requests[-1].messages[-1].content or "")
 
 
 def test_langgraph_mcp_http_path_matches_the_stdio_path(

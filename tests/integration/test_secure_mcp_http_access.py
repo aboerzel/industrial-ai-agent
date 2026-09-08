@@ -45,6 +45,7 @@ access = create_demo_mcp_access_control(
         'get_product_overview': McpPermission.READ_FACTORY,
         'get_product_history': McpPermission.READ_FACTORY,
         'get_machine_status': McpPermission.READ_FACTORY,
+        'get_maintenance_ticket': McpPermission.READ_FACTORY,
         'create_maintenance_ticket': McpPermission.CREATE_MAINTENANCE_TICKET,
     }[name],
 )
@@ -103,6 +104,7 @@ def test_industrial_client_discovers_write_tool(secure_factory_server: str) -> N
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
         "create_maintenance_ticket",
     }
 
@@ -147,6 +149,7 @@ def test_codex_client_discovers_only_read_tools_and_cannot_call_write_tool(
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
     }
     assert outcome == "denied"
 
@@ -163,6 +166,7 @@ def test_internal_agent_discovers_only_read_tools_and_cannot_call_write_tool(
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_maintenance_ticket",
     }
 
 

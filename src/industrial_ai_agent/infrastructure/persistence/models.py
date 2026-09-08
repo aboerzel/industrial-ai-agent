@@ -129,6 +129,7 @@ class MaintenanceTicketRecord(Base):
     classification: Mapped[int] = mapped_column(SmallInteger)
     request_id: Mapped[str | None] = mapped_column(String, unique=True)
     summary: Mapped[str | None] = mapped_column(Text)
+    station: Mapped[StationRecord] = relationship()
 
 
 class ProcessParameterRecord(Base):
