@@ -281,7 +281,9 @@ FastAPI now provides the local/demo external Application Boundary. Its versioned
 `agent_runtime` schema, and awaits an injected troubleshooting run service. That service creates
 server-owned `CONFIDENTIAL_TROUBLESHOOTING` requirements, routes a semantic profile, and invokes
 the existing LangGraph MCP path. Public Pydantic API contracts contain only the run ID,
-status, final answer, and normalized tool calls; they do not expose LangGraph state,
+status, narrative final answer, bounded structured investigation steps derived from the
+actual tool trajectory, bounded structured follow-up prompts, and normalized tool calls;
+they do not expose LangGraph state,
 LangChain messages, MCP types, prompts, or raw tool payloads. `GET /health` is
 process-local liveness only, and `GET /api/v1/runs/{run_id}` reads the durable application
 record. The separate static `frontend/` browser client communicates only with this public

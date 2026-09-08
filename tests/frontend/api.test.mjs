@@ -19,6 +19,8 @@ test("accepts OpenAPI-valid run responses with omitted default fields", async ()
     status: "success",
     data_classification: "PUBLIC",
     answer: null,
+    investigation_steps: [],
+    next_steps: [],
     tool_calls: [],
     approval_request: null,
   });
@@ -140,6 +142,8 @@ async function requestRun(payload) {
       payload.investigation_id = RUN_ID;
       payload.investigation_sequence = 1;
     }
+    if (payload.next_steps === undefined) payload.next_steps = [];
+    if (payload.investigation_steps === undefined) payload.investigation_steps = [];
     return result;
   } finally {
     globalThis.fetch = originalFetch;

@@ -98,6 +98,14 @@ class ToolCallResponse(BaseModel):
     arguments: dict[str, JsonValue]
 
 
+class InvestigationStepResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    step: int = Field(ge=1, le=4)
+    action: PublicToolName
+    finding: Annotated[str, StringConstraints(min_length=1, max_length=1_000)]
+
+
 class ApprovalRequestResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -130,6 +138,12 @@ class RunResponse(BaseModel):
     status: RunStatus
     data_classification: DataClassificationLabel
     answer: Annotated[str, StringConstraints(max_length=8_000)] | None = None
+    investigation_steps: tuple[InvestigationStepResponse, ...] = Field(
+        default=(), max_length=4
+    )
+    next_steps: tuple[
+        Annotated[str, StringConstraints(min_length=1, max_length=500)], ...
+    ] = Field(default=(), max_length=5)
     tool_calls: tuple[ToolCallResponse, ...] = ()
     approval_request: ApprovalRequestResponse | None = None
 
@@ -144,6 +158,12 @@ class InvestigationTurnResponse(BaseModel):
     response_language: str
     request: Annotated[str, StringConstraints(max_length=4_000)]
     answer: Annotated[str, StringConstraints(max_length=8_000)] | None = None
+    investigation_steps: tuple[InvestigationStepResponse, ...] = Field(
+        default=(), max_length=4
+    )
+    next_steps: tuple[
+        Annotated[str, StringConstraints(min_length=1, max_length=500)], ...
+    ] = Field(default=(), max_length=5)
     tool_calls: tuple[ToolCallResponse, ...] = ()
     created_at: str | None = None
     updated_at: str | None = None

@@ -21,6 +21,14 @@ def test_frontend_static_assets_are_present_and_use_es_modules() -> None:
     assert '<script type="module" src="js/app.js"></script>' in index
     assert 'from "./api.js"' in app
     assert 'from "./markdown.js"' in app
+    assert "renderNextSteps" in app
+    assert "turn.next_steps" in app
+    assert "renderInvestigationSteps" in app
+    assert "turn.investigation_steps" in app
+    assert "investigation-summary" in app
+    markdown_source = markdown.read_text(encoding="utf-8")
+    assert "NEXT_STEP_HEADINGS" not in markdown_source
+    assert "addListItemActions" not in markdown_source
 
 
 def test_frontend_nginx_configuration_serves_es_module_mime_types() -> None:
@@ -33,9 +41,10 @@ def test_frontend_nginx_configuration_serves_es_module_mime_types() -> None:
 def test_frontend_workspace_uses_a_full_width_scrollable_conversation() -> None:
     css = (FRONTEND_ROOT / "css" / "app.css").read_text(encoding="utf-8")
 
-    assert ".shell {\n  width: calc(100% - 32px);" in css
+    assert ".shell {\n  width: 100%;\n  max-width: none;" in css
     assert ".result-panel {\n  min-width: 0;" in css
     assert "grid-template-columns" not in css
+    assert "max-width: 1440px;" not in css
     assert ".conversation-history {" in css
     assert "overflow-y: auto;" in css
     assert ".toolbar-controls {" in css

@@ -10,7 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
+from industrial_ai_agent.agent.agent_run import (
+    AgentRunResult,
+    AgentRunStatus,
+    InvestigationStep,
+)
 from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunProfile,
@@ -59,6 +63,14 @@ def _result() -> AgentRunResult:
     return AgentRunResult(
         status=AgentRunStatus.SUCCESS,
         final_answer="Persisted diagnosis.",
+        investigation_steps=(
+            InvestigationStep(
+                step=1,
+                action="get_product_history",
+                finding="P4711 has a recorded failure at S04.",
+            ),
+        ),
+        next_steps=("Check station S04.", "Search documentation for QUALITY-09."),
         tool_call_count=1,
         executed_tool_calls=(
             {"tool": "get_product_history", "arguments": {"product_id": "P4711"}},
@@ -125,6 +137,17 @@ def test_agent_run_store_survives_store_recreation_and_rls() -> None:
     assert restored.data_classification is DataClassification.CONFIDENTIAL
     assert restored.model_profile == "local_quality"
     assert restored.result == _result()
+    assert restored.result.next_steps == (
+        "Check station S04.",
+        "Search documentation for QUALITY-09.",
+    )
+    assert restored.result.investigation_steps == (
+        InvestigationStep(
+            step=1,
+            action="get_product_history",
+            finding="P4711 has a recorded failure at S04.",
+        ),
+    )
     assert hidden_from_public is None
 
 

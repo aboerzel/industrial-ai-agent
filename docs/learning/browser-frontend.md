@@ -51,6 +51,23 @@ and `getRun(runId)`. `js/app.js` owns DOM state and rendering only.
 `js/markdown.js` owns rendering of untrusted agent-answer Markdown only; it neither changes
 the API response nor any agent behavior.
 
+Completed runs expose the bounded final-output projection `answer`, optional
+`investigation_steps`, and optional `next_steps`. `answer` is narrative Markdown only.
+`investigation_steps` is the ordered, structured record of completed tool observations:
+the system derives each step number and canonical tool name from the actual successful
+trajectory, while the bounded finding is finalized only from already-authorized tool
+observations. The API persists the projection with the same run and returns it in
+investigation history. The UI renders `investigation_steps` as a semantic HTML table; it
+never repairs or infers a summary from Markdown.
+
+`next_steps` remains the authoritative follow-up channel. The UI renders those strings as
+editable follow-up actions directly and never infers them from Markdown headings or lists.
+Selecting one only fills the composer. The subsequent submission remains a new,
+independently authorized run. The final agent-output schema bounds both structured lists
+and rejects duplicate action or investigation-summary sections in `answer`. Local profiles
+that support JSON Schema normalize each successful final response through that schema before
+persistence.
+
 ## Local Development
 
 Start the MCP Docker services and local FastAPI API, then serve the frontend from a
@@ -70,8 +87,10 @@ an explicit security design.
 ## Run Lifecycle and Security
 
 Submitting a request disables the button, displays `Running`, waits for the synchronous
-`POST /api/v1/runs` result, and renders the public run ID, status, final answer, and
-normalized tool calls. It does not poll or create a new request per tool call.
+`POST /api/v1/runs` result, and renders the public run ID, status, narrative answer,
+structured investigation summary, structured follow-up prompts, and normalized tool calls.
+It does not poll or create a new request per
+tool call.
 
 The browser cannot choose a model, provider, execution zone, data classification, MCP
 server, tool allowlist, or egress policy. The API continues to assign `CONFIDENTIAL`

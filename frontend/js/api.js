@@ -84,6 +84,8 @@ async function request(path, options = {}, validator = isRunResponse) {
     investigation_id: payload.investigation_id ?? payload.run_id,
     investigation_sequence: payload.investigation_sequence ?? 1,
     answer: payload.answer ?? null,
+    investigation_steps: payload.investigation_steps ?? [],
+    next_steps: payload.next_steps ?? [],
     tool_calls: payload.tool_calls ?? [],
     approval_request: payload.approval_request ?? null,
   } : payload;
@@ -92,13 +94,15 @@ async function request(path, options = {}, validator = isRunResponse) {
 function isRunResponse(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "tool_calls", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "investigation_steps", "next_steps", "tool_calls", "approval_request"]) &&
     isUuid(value.run_id) &&
     (value.investigation_id === undefined || isUuid(value.investigation_id)) &&
     (value.investigation_sequence === undefined || (Number.isInteger(value.investigation_sequence) && value.investigation_sequence > 0)) &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
     (value.answer === undefined || value.answer === null || isBoundedString(value.answer, 8_000)) &&
+    (value.investigation_steps === undefined || isInvestigationSteps(value.investigation_steps)) &&
+    (value.next_steps === undefined || isNextSteps(value.next_steps)) &&
     (value.tool_calls === undefined ||
       (Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall))) &&
     (value.approval_request === undefined ||
@@ -122,13 +126,15 @@ function isInvestigationResponse(value) {
 function isInvestigationTurn(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "tool_calls", "created_at", "updated_at", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "investigation_steps", "next_steps", "tool_calls", "created_at", "updated_at", "approval_request"]) &&
     isUuid(value.run_id) && Number.isInteger(value.sequence) && value.sequence > 0 &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
     ["DE", "EN"].includes(value.response_language) &&
     isBoundedString(value.request, 4_000) &&
     (value.answer === null || value.answer === undefined || isBoundedString(value.answer, 8_000)) &&
+    (value.investigation_steps === undefined || isInvestigationSteps(value.investigation_steps)) &&
+    (value.next_steps === undefined || isNextSteps(value.next_steps)) &&
     Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall) &&
     (value.approval_request === null || value.approval_request === undefined || isApprovalRequest(value.approval_request))
   );
@@ -149,6 +155,28 @@ function isToolCall(value) {
     hasOnlyKeys(value, ["tool", "arguments"]) &&
     isPublicToolName(value.tool) &&
     isRecord(value.arguments)
+  );
+}
+
+function isNextSteps(value) {
+  return (
+    Array.isArray(value) &&
+    value.length <= 5 &&
+    value.every((step) => isBoundedString(step, 500, true))
+  );
+}
+
+function isInvestigationSteps(value) {
+  return (
+    Array.isArray(value) &&
+    value.length <= 4 &&
+    value.every((step, index) =>
+      isRecord(step) &&
+      hasOnlyKeys(step, ["step", "action", "finding"]) &&
+      step.step === index + 1 &&
+      isPublicToolName(step.action) &&
+      isBoundedString(step.finding, 1_000, true),
+    )
   );
 }
 

@@ -22,10 +22,10 @@ select {
 }
 
 .shell {
-  width: calc(100% - 32px);
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 48px 0 56px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 48px 16px 56px;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -489,6 +489,115 @@ dd {
   margin-top: 4px;
 }
 
+.next-step-action {
+  display: inline-flex;
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  align-items: center;
+  justify-content: center;
+  margin: 0 8px 0 0;
+  border: 1px solid #7ea48f;
+  border-radius: 3px;
+  padding: 0;
+  color: #155f3b;
+  background: #eef6f1;
+  font-size: 0.68rem;
+  line-height: 1;
+  vertical-align: text-bottom;
+  user-select: none;
+}
+
+.next-step-action:hover:not(:disabled) {
+  color: #ffffff;
+  background: #176b4b;
+}
+
+.next-step-section {
+  margin-top: 16px;
+  border-top: 1px solid #dde5e1;
+  padding-top: 12px;
+}
+
+.investigation-summary {
+  margin-top: 16px;
+  border-top: 1px solid #dde5e1;
+  padding-top: 12px;
+}
+
+.investigation-summary h4 {
+  margin: 0 0 8px;
+  color: #155f3b;
+  font-size: 0.86rem;
+  text-transform: uppercase;
+}
+
+.investigation-summary-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.investigation-summary table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.investigation-summary th,
+.investigation-summary td {
+  border: 1px solid #cbd6d1;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.investigation-summary th {
+  color: #1d332a;
+  background: #edf3f0;
+}
+
+.investigation-summary th:first-child,
+.investigation-summary td:first-child {
+  width: 56px;
+}
+
+.investigation-summary th:nth-child(2),
+.investigation-summary td:nth-child(2) {
+  width: 205px;
+}
+
+.investigation-summary code {
+  color: #1d332a;
+  font-family: "Courier New", monospace;
+  font-size: 0.87em;
+}
+
+.next-step-section h4 {
+  margin: 0 0 8px;
+  color: #155f3b;
+  font-size: 0.86rem;
+  text-transform: uppercase;
+}
+
+.next-step-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.next-step-list li {
+  display: flex;
+  align-items: flex-start;
+}
+
+.next-step-text {
+  padding-top: 2px;
+}
+
 .agent-answer blockquote {
   border-left: 3px solid #d4e2db;
   padding-left: 12px;
@@ -571,8 +680,9 @@ dd {
 
 @media (max-width: 820px) {
   .shell {
-    width: min(calc(100% - 24px), 760px);
-    padding: 32px 0 44px;
+    width: 100%;
+    max-width: none;
+    padding: 32px 12px 44px;
   }
 
   .site-header {

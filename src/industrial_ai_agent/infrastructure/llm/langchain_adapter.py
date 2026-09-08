@@ -18,6 +18,7 @@ from industrial_ai_agent.agent.llm import (
     LLMMessage,
     LLMRequest,
     LLMResponse,
+    LLMResponseFormat,
     LLMToolCall,
     LLMToolDefinition,
     MessageRole,
@@ -31,12 +32,31 @@ class LLMClientChatModel:
     llm_client: LLMClient
     model_profile: ModelProfile
     tools: tuple[BaseTool, ...] = ()
+    response_format: LLMResponseFormat | None = None
+    supports_structured_output: bool = False
 
     def bind_tools(self, tools: Sequence[BaseTool]) -> LLMClientChatModel:
         return LLMClientChatModel(
             llm_client=self.llm_client,
             model_profile=self.model_profile,
             tools=tuple(tools),
+            response_format=self.response_format,
+            supports_structured_output=self.supports_structured_output,
+        )
+
+    def bind_response_format(
+        self, response_format: LLMResponseFormat
+    ) -> LLMClientChatModel:
+        if not self.supports_structured_output:
+            raise ValueError(
+                "Model profile does not support structured response output"
+            )
+        return LLMClientChatModel(
+            llm_client=self.llm_client,
+            model_profile=self.model_profile,
+            tools=self.tools,
+            response_format=response_format,
+            supports_structured_output=self.supports_structured_output,
         )
 
     def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
@@ -45,6 +65,7 @@ class LLMClientChatModel:
             LLMRequest(
                 messages=tuple(_to_internal_message(message) for message in messages),
                 tools=tuple(_to_internal_tool(tool) for tool in self.tools),
+                response_format=self.response_format,
             ),
         )
         return _to_ai_message(response)

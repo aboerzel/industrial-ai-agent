@@ -115,7 +115,13 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                 else checked_client
             )
             yield LangGraphTroubleshootingAgent(
-                LLMClientChatModel(llm_client, profile),
+                LLMClientChatModel(
+                    llm_client,
+                    profile,
+                    supports_structured_output=self._configuration.get_profile(
+                        profile.name
+                    ).supports_structured_output,
+                ),
                 mcp_tool_provider=self._mcp_tool_provider_factory(run_policy),
                 checkpointer=checkpointer,
                 run_classification=run_policy.data_classification,

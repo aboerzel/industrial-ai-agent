@@ -8,6 +8,7 @@ from industrial_ai_agent.agent.agent_run import (
     AgentRunResult,
     AgentRunStatus,
     ExecutedToolCall,
+    InvestigationStep,
 )
 from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
 from industrial_ai_agent.agent.model_routing import NoEligibleModelError
@@ -166,6 +167,8 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
         "status",
         "data_classification",
         "answer",
+        "investigation_steps",
+        "next_steps",
         "tool_calls",
         "approval_request",
     }
@@ -175,6 +178,17 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
     assert payload["investigation_sequence"] == 1
     assert payload["data_classification"] == "CONFIDENTIAL"
     assert payload["answer"] == "P4711 failed at S04."
+    assert payload["investigation_steps"] == [
+        {
+            "step": 1,
+            "action": "get_product_history",
+            "finding": "P4711 failed at S04.",
+        }
+    ]
+    assert payload["next_steps"] == [
+        "Check station S04.",
+        "Search documentation for QUALITY-09.",
+    ]
     assert payload["tool_calls"] == [
         {"tool": "get_product_history", "arguments": {"product_id": "P4711"}}
     ]
@@ -255,6 +269,17 @@ def test_investigation_history_groups_follow_ups_filters_clearance_and_exports_p
     assert payload["turns"][0]["tool_calls"] == [
         {"tool": "get_product_history", "arguments": {"product_id": "P4711"}}
     ]
+    assert payload["turns"][0]["next_steps"] == [
+        "Check station S04.",
+        "Search documentation for QUALITY-09.",
+    ]
+    assert payload["turns"][0]["investigation_steps"] == [
+        {
+            "step": 1,
+            "action": "get_product_history",
+            "finding": "P4711 failed at S04.",
+        }
+    ]
     assert (
         client.get(
             f"/api/v1/investigations/{first['investigation_id']}?user_clearance=PUBLIC"
@@ -274,6 +299,8 @@ def test_investigation_history_groups_follow_ups_filters_clearance_and_exports_p
     assert b"Show ticket MT-6EA0DEF5515A." in pdf.content
     assert b"get_product_history" in pdf.content
     assert b"CONFIDENTIAL" in pdf.content
+    assert b"Recommended Investigation Actions" in pdf.content
+    assert b"Check station S04." in pdf.content
     assert b"Traceback" not in pdf.content
 
 
@@ -571,6 +598,17 @@ def _success_result() -> AgentRunResult:
     return AgentRunResult(
         status=AgentRunStatus.SUCCESS,
         final_answer="P4711 failed at S04.",
+        investigation_steps=(
+            InvestigationStep(
+                step=1,
+                action="get_product_history",
+                finding="P4711 failed at S04.",
+            ),
+        ),
+        next_steps=(
+            "Check station S04.",
+            "Search documentation for QUALITY-09.",
+        ),
         tool_call_count=1,
         executed_tool_calls=(
             ExecutedToolCall(

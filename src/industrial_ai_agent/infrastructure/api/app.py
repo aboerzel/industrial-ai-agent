@@ -57,6 +57,7 @@ from industrial_ai_agent.infrastructure.api.schemas import (
     HealthResponse,
     InternalDiagnosticRequest,
     InvestigationResponse,
+    InvestigationStepResponse,
     InvestigationTurnResponse,
     PublicToolName,
     ResumeRunRequest,
@@ -469,6 +470,8 @@ def _to_run_response(record: StoredAgentRun) -> RunResponse:
         answer=sanitize_public_text(result.final_answer)
         if result is not None
         else None,
+        investigation_steps=_to_investigation_steps(result),
+        next_steps=_to_next_steps(result),
         tool_calls=_to_tool_calls(result),
         approval_request=_to_approval_request(record.approval_request),
     )
@@ -509,6 +512,8 @@ def _to_investigation_turn(record: StoredAgentRun) -> InvestigationTurnResponse:
         response_language=record.response_language.value,
         request=sanitize_public_text(record.request_text) or "",
         answer=sanitize_public_text(result.final_answer) if result else None,
+        investigation_steps=_to_investigation_steps(result),
+        next_steps=_to_next_steps(result),
         tool_calls=_to_tool_calls(result),
         created_at=_as_iso(record.created_at),
         updated_at=_as_iso(record.updated_at),
@@ -590,6 +595,31 @@ def _to_tool_calls(result: AgentRunResult | None) -> tuple[ToolCallResponse, ...
             arguments=sanitize_public_value(call.arguments),
         )
         for call in result.executed_tool_calls
+    )
+
+
+def _to_next_steps(result: AgentRunResult | None) -> tuple[str, ...]:
+    if result is None:
+        return ()
+    return tuple(
+        sanitized
+        for step in result.next_steps
+        if (sanitized := sanitize_public_text(step)) is not None
+    )
+
+
+def _to_investigation_steps(
+    result: AgentRunResult | None,
+) -> tuple[InvestigationStepResponse, ...]:
+    if result is None:
+        return ()
+    return tuple(
+        InvestigationStepResponse(
+            step=step.step,
+            action=PublicToolName(step.action),
+            finding=sanitize_public_text(step.finding) or "No finding recorded.",
+        )
+        for step in result.investigation_steps
     )
 
 

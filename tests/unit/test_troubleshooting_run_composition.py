@@ -28,6 +28,9 @@ def test_public_run_connects_only_to_its_authorized_read_only_servers(
             "get_station_overview",
             "list_products",
             "get_product_overview",
+            # A ticket lookup is bounded and read-only. The public MCP identity and
+            # PostgreSQL RLS still return the same neutral result for hidden tickets.
+            "get_maintenance_ticket",
         }
     )
     assert servers[1].allowed_tool_names == frozenset({"search_documentation"})

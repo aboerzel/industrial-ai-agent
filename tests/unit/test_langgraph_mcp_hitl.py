@@ -40,20 +40,22 @@ from industrial_ai_agent.tools.tool_contracts import (
 DEFAULT_PROFILE = ModelProfile("local_quality")
 
 
-def test_system_message_requires_compact_investigation_markdown_tables() -> None:
+def test_system_message_requires_structured_investigation_steps() -> None:
     message = MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
 
-    assert "`| Step | Action | Findings / Notes |`" in message
-    assert "exactly one physical Markdown line" in message
-    assert "separate multiple items in the same cell with `<br>`" in message
-    assert "continuation rows with an empty Step or Action cell" in message
-    assert "below the table instead" in message
-    assert "`### Investigation Summary`" in message
+    assert "`investigation_steps`" in message
+    assert "exact step number and canonical tool name" in message
+    assert "Never invent, " in message
+    assert "executed-tool Markdown table" in message
+    assert "Untersuchungsübersicht" in message
     assert "`### Likely Root Cause`" in message
-    assert "`### Recommended Investigation Actions`" in message
-    assert "`### Next Steps`" in message
+    assert "`answer` Markdown string, a bounded `investigation_steps` list" in message
+    assert "follow-up prompts exclusively in `next_steps`" in message
+    assert "Put ALL concrete" in message
+    assert "`Recommended Actions`" in message
+    assert "`Nächste Schritte`" in message
     assert "distinguish collected evidence from inference" in message
-    assert "Keep `### Next Steps` concise and actionable" in message
+    assert "Keep the answer concise and evidence-based" in message
     assert "or explicit factory-discovery request, do not call a tool" in message
 
 
@@ -230,7 +232,21 @@ def test_multi_tool_loops_keep_the_run_response_language(
                 ),
                 finish_reason=FinishReason.TOOL_CALLS,
             ),
-            LLMResponse(text=final_answer, finish_reason=FinishReason.STOP),
+            LLMResponse(
+                text=json.dumps(
+                    {
+                        "answer": final_answer,
+                        "next_steps": [
+                            (
+                                "Prüfe den aktuellen Zustand von Station S04."
+                                if response_language is ResponseLanguage.DE
+                                else "Check the current status of station S04."
+                            )
+                        ],
+                    }
+                ),
+                finish_reason=FinishReason.STOP,
+            ),
         ]
     )
     agent = LangGraphTroubleshootingAgent(
@@ -246,6 +262,13 @@ def test_multi_tool_loops_keep_the_run_response_language(
 
     assert state["response_language"] is response_language
     assert state["final_answer"] == final_answer
+    assert state["next_steps"] == (
+        (
+            "Prüfe den aktuellen Zustand von Station S04."
+            if response_language is ResponseLanguage.DE
+            else "Check the current status of station S04."
+        ),
+    )
     assert len(client.requests) == 3
     for llm_request in client.requests:
         assert llm_request.messages[0].content is not None

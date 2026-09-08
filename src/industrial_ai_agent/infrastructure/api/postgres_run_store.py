@@ -92,6 +92,8 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 request_text=request_text,
                 response_language=response_language.value,
                 final_answer=None,
+                investigation_steps=[],
+                next_steps=[],
                 error_code=None,
                 error_message=None,
                 tool_call_summary=[],
@@ -115,6 +117,10 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             record = _require_record(session, run_id)
             record.status = _to_public_status(result).value
             record.final_answer = result.final_answer
+            record.investigation_steps = [
+                step.model_dump() for step in result.investigation_steps
+            ]
+            record.next_steps = list(result.next_steps)
             record.tool_call_summary = [
                 call.model_dump() for call in result.executed_tool_calls
             ]
@@ -298,6 +304,8 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
                 if record.status == RunStatus.SUCCESS.value
                 else "LIMIT_REACHED",
                 "final_answer": record.final_answer,
+                "investigation_steps": record.investigation_steps,
+                "next_steps": record.next_steps,
                 "tool_call_count": len(record.tool_call_summary),
                 "executed_tool_calls": record.tool_call_summary,
                 "model_profile_name": record.model_profile,

@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool
 from industrial_ai_agent.agent.llm import (
     FinishReason,
     LLMResponse,
+    LLMResponseFormat,
     LLMToolCall,
     ModelProfile,
 )
@@ -20,6 +21,13 @@ class LangChainChatModel(Protocol):
     def model_profile(self) -> ModelProfile: ...
 
     def bind_tools(self, tools: Sequence[BaseTool]) -> LangChainChatModel: ...
+
+    @property
+    def supports_structured_output(self) -> bool: ...
+
+    def bind_response_format(
+        self, response_format: LLMResponseFormat
+    ) -> LangChainChatModel: ...
 
     def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage: ...
 

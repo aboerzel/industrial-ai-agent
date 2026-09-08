@@ -21,6 +21,7 @@ const investigationContext = document.querySelector("#investigation-context");
 const resultTitle = document.querySelector("#result-title");
 const exportPdfButton = document.querySelector("#export-pdf-button");
 const errorMessage = document.querySelector("#error-message");
+const ACTIVE_INVESTIGATION_STORAGE_KEY = "industrial-ai-agent.active-investigation";
 
 let currentInvestigationId = null;
 let isSubmitting = false;
@@ -43,7 +44,24 @@ exportPdfButton.addEventListener("click", () => {
   }
 });
 
-renderEmptyInvestigation();
+void restoreActiveInvestigation();
+
+async function restoreActiveInvestigation() {
+  const activeInvestigation = readActiveInvestigation();
+  if (!activeInvestigation) {
+    renderEmptyInvestigation();
+    return;
+  }
+
+  currentInvestigationId = activeInvestigation.investigationId;
+  userClearance.value = activeInvestigation.userClearance;
+  try {
+    await reloadInvestigation();
+  } catch {
+    clearActiveInvestigation();
+    renderEmptyInvestigation();
+  }
+}
 
 async function submitRequest(message) {
   if (!message) {
@@ -83,6 +101,7 @@ async function reloadInvestigation() {
 function renderEmptyInvestigation() {
   currentInvestigationId = null;
   pendingAgentTurn = null;
+  clearActiveInvestigation();
   resultTitle.textContent = "No active investigation";
   investigationContext.textContent =
     "Ask about a production issue, station, product, maintenance ticket, or available documentation.";
@@ -98,6 +117,7 @@ function renderInvestigation(investigation) {
   hideError();
   pendingAgentTurn = null;
   currentInvestigationId = investigation.investigation_id;
+  persistActiveInvestigation(currentInvestigationId, userClearance.value);
   resultTitle.textContent = "Investigation";
   investigationContext.textContent = investigationContextFor(investigation.turns);
   investigationRuns.textContent = String(investigation.run_count);
@@ -113,6 +133,37 @@ function renderInvestigation(investigation) {
   );
   scrollHistoryToLatest();
   syncControls();
+}
+
+function persistActiveInvestigation(investigationId, clearance) {
+  window.sessionStorage.setItem(
+    ACTIVE_INVESTIGATION_STORAGE_KEY,
+    JSON.stringify({ investigationId, userClearance: clearance }),
+  );
+}
+
+function clearActiveInvestigation() {
+  window.sessionStorage.removeItem(ACTIVE_INVESTIGATION_STORAGE_KEY);
+}
+
+function readActiveInvestigation() {
+  try {
+    const stored = JSON.parse(
+      window.sessionStorage.getItem(ACTIVE_INVESTIGATION_STORAGE_KEY) ?? "null",
+    );
+    if (
+      !stored ||
+      typeof stored.investigationId !== "string" ||
+      !["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(
+        stored.userClearance,
+      )
+    ) {
+      return null;
+    }
+    return stored;
+  } catch {
+    return null;
+  }
 }
 
 function renderPendingConversation(message, { replace }) {
@@ -193,7 +244,15 @@ function renderAgentTurn(turn) {
   const answer = document.createElement("div");
   answer.className = "agent-answer";
   renderAgentAnswer(answer, turn.answer ?? "No final answer recorded.");
-  article.append(answer, renderTools(turn.tool_calls));
+  article.append(answer);
+  const investigationSteps = renderInvestigationSteps(
+    turn.investigation_steps ?? [],
+    turn.response_language,
+  );
+  if (investigationSteps) article.append(investigationSteps);
+  const nextSteps = renderNextSteps(turn.next_steps ?? [], turn.response_language);
+  if (nextSteps) article.append(nextSteps);
+  article.append(renderTools(turn.tool_calls));
 
   const metadata = document.createElement("p");
   metadata.className = "turn-metadata";
@@ -203,6 +262,84 @@ function renderAgentTurn(turn) {
   article.append(metadata);
   if (turn.approval_request) article.append(renderApproval(turn));
   return article;
+}
+
+function renderInvestigationSteps(steps, responseLanguage) {
+  if (!steps.length) return null;
+
+  const section = document.createElement("section");
+  section.className = "investigation-summary";
+  const title = document.createElement("h4");
+  title.textContent =
+    responseLanguage === "DE" ? "Untersuchungsübersicht" : "Investigation Summary";
+  const scroll = document.createElement("div");
+  scroll.className = "investigation-summary-scroll";
+  const table = document.createElement("table");
+  const header = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  for (const label of investigationSummaryLabels(responseLanguage)) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    headerRow.append(cell);
+  }
+  header.append(headerRow);
+  const body = document.createElement("tbody");
+  for (const step of steps) {
+    const row = document.createElement("tr");
+    const number = document.createElement("td");
+    number.textContent = String(step.step);
+    const action = document.createElement("td");
+    const actionName = document.createElement("code");
+    actionName.textContent = step.action;
+    action.append(actionName);
+    const finding = document.createElement("td");
+    finding.textContent = step.finding;
+    row.append(number, action, finding);
+    body.append(row);
+  }
+  table.append(header, body);
+  scroll.append(table);
+  section.append(title, scroll);
+  return section;
+}
+
+function investigationSummaryLabels(responseLanguage) {
+  return responseLanguage === "DE"
+    ? ["Schritt", "Aktion", "Erkenntnisse / Hinweise"]
+    : ["Step", "Action", "Findings / Notes"];
+}
+
+function renderNextSteps(nextSteps, responseLanguage) {
+  if (!nextSteps.length) return null;
+
+  const section = document.createElement("section");
+  section.className = "next-step-section";
+  const title = document.createElement("h4");
+  title.textContent =
+    responseLanguage === "DE"
+      ? "Empfohlene Untersuchungsschritte"
+      : "Recommended Investigation Actions";
+  const list = document.createElement("ul");
+  list.className = "next-step-list";
+  const label = nextStepActionLabel(responseLanguage);
+  for (const nextStep of nextSteps) {
+    const item = document.createElement("li");
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "next-step-action";
+    action.textContent = "▶";
+    action.setAttribute("aria-label", label);
+    action.title = label;
+    action.addEventListener("click", () => useAsFollowUp(nextStep));
+    const text = document.createElement("span");
+    text.className = "next-step-text";
+    text.textContent = nextStep;
+    item.append(action, text);
+    list.append(item);
+  }
+  section.append(title, list);
+  return section;
 }
 
 function createTurnLabel(label) {
@@ -294,6 +431,22 @@ function syncControls() {
   composerButton.textContent = hasInvestigation ? "Send" : "Start Investigation";
   newInvestigationButton.disabled = isSubmitting;
   exportPdfButton.disabled = !hasInvestigation;
+  for (const action of history.querySelectorAll(".next-step-action")) {
+    action.disabled = isSubmitting;
+  }
+}
+
+function useAsFollowUp(nextStep) {
+  if (isSubmitting) return;
+  const existing = composerMessage.value;
+  composerMessage.value = existing.trim()
+    ? `${existing}${existing.endsWith("\n") ? "" : "\n"}${nextStep}`
+    : nextStep;
+  composerMessage.focus();
+}
+
+function nextStepActionLabel(responseLanguage) {
+  return responseLanguage === "DE" ? "Als Folgefrage übernehmen" : "Use as follow-up";
 }
 
 function setStatus(status) {

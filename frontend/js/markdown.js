@@ -58,7 +58,6 @@ export function renderAgentAnswer(container, source) {
     table.replaceWith(wrapper);
     wrapper.append(table);
   }
-
   container.replaceChildren(template.content);
 }
 

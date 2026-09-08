@@ -27,7 +27,10 @@ from industrial_ai_agent.agent.agent_run import (
     AgentRunResult,
     AgentRunStatus,
     ExecutedToolCall,
+    FinalAgentOutput,
+    FinalAgentOutputContractError,
     InvalidToolArgumentsError,
+    InvestigationStep,
     MissingLLMResponseTextError,
     UnknownToolError,
 )
@@ -35,7 +38,7 @@ from industrial_ai_agent.agent.langchain_model import (
     LangChainChatModel,
     to_llm_response,
 )
-from industrial_ai_agent.agent.llm import LLMResponse
+from industrial_ai_agent.agent.llm import LLMJsonSchema, LLMResponse, LLMResponseFormat
 from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpToolSession
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
@@ -68,18 +71,49 @@ MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "requests that identify no product, station, error, explicit documentation "
     "search, or explicit factory-discovery request, do not call a tool. Give safe general considerations or ask for the "
     "missing scope. Format final troubleshooting answers in Markdown where applicable. "
-    "Use this structure: `### Investigation Summary`, `### Likely Root Cause`, "
-    "`### Recommended Investigation Actions`, and `### Next Steps`. Under "
-    "`### Investigation Summary`, use one compact table with exactly the header "
-    "`| Step | Action | Findings / Notes |`. Every logical table row must occupy "
-    "exactly one physical Markdown line. Never put a normal Markdown list on separate "
-    "physical lines inside a table cell; separate multiple items in the same cell with "
-    "`<br>`. Do not create continuation rows with an empty Step or Action cell, and "
-    "keep table content concise. Move detail that does not fit compactly in a table cell "
-    "below the table instead. Use a numbered or bulleted list, not a large table, for "
-    "substantial recommended-action detail. Under `### Likely Root Cause`, distinguish "
+    "Use `### Likely Root Cause` where applicable. "
+    "When you make the final response, return only the configured JSON object with an "
+    "`answer` Markdown string, a bounded `investigation_steps` list, and a bounded "
+    "`next_steps` string list. `investigation_steps` records completed tool observations; "
+    "each entry must use the exact step number and canonical tool name supplied by the "
+    "system, with a concise finding based only on that tool observation. Never invent, "
+    "rename, omit, reorder, or add tool steps. Put ALL concrete, "
+    "user-executable follow-up prompts exclusively in `next_steps`, in the selected "
+    "response language, with technical identifiers unchanged. Do not put concrete follow-up "
+    "prompts into `answer` as a Markdown list. Do not include `Recommended Actions`, "
+    "`Recommended Investigation Actions`, `Next Steps`, `Suggested Actions`, `Empfohlene "
+    "Maßnahmen`, `Empfohlene Untersuchungsschritte`, `Nächste Schritte`, "
+    "`Handlungsempfehlungen`, or equivalent follow-up sections in `answer`. Use an empty "
+    "`next_steps` list only when no meaningful "
+    "follow-up investigation is warranted; do not invent actions just to populate it. Each "
+    "next step must be a self-contained request suitable for the next user turn, including "
+    "relevant identifiers where useful. Bad: `Review Product History`. Better: `Review the "
+    'recent product history of P4711 for recurring quality issues.` Bad JSON: `{"answer": '
+    '"### Recommended Actions\\n- Check S04","next_steps":[]}`. Good JSON: '
+    '`{"answer":"S04 is the primary quality failure point.","investigation_steps":[],"next_steps":["Check '
+    'the current fault state of station S04."]}`. Do not include Investigation Summary, '
+    "Investigation Steps, Tool Summary, Tool Calls, Untersuchungsschritte, "
+    "Untersuchungsübersicht, or an executed-tool Markdown table in `answer`; the UI renders "
+    "the structured investigation summary. Lists in `answer` may explain evidence, but must not enumerate "
+    "user-executable follow-up actions. Under `### Likely Root Cause`, distinguish "
     "collected evidence from inference and do not present hypotheses as confirmed causes. "
-    "Keep `### Next Steps` concise and actionable."
+    "Keep the answer concise and evidence-based."
+)
+
+_FINAL_OUTPUT_NORMALIZATION_SYSTEM_MESSAGE = (
+    "You normalize an already authorized industrial troubleshooting draft into the "
+    "required final JSON schema. Preserve its supported findings and language. Return only "
+    "the JSON object. `answer` is Markdown analysis, evidence, findings, explanation, "
+    "conclusions, and status. `investigation_steps` is the only channel for completed "
+    "tool observations and must exactly mirror the system-supplied authorized tool steps; "
+    "use only their observations for concise findings. `next_steps` is the only channel for concrete optional "
+    "user-executable follow-up prompts. Do not include action-list sections such as "
+    "Recommended Actions, Recommended Investigation Actions, Next Steps, Suggested Actions, "
+    "Follow-up Actions, Empfohlene Maßnahmen, Empfohlene Untersuchungsschritte, Nächste "
+    "Schritte, or Handlungsempfehlungen in `answer`. Do not invent follow-up work; use an "
+    "empty list if none is meaningful. Do not include Investigation Summary, Investigation "
+    "Steps, Tool Summary, Tool Calls, Untersuchungsschritte, Untersuchungsübersicht, or an "
+    "executed-tool Markdown table in `answer`."
 )
 
 
@@ -123,6 +157,8 @@ class TroubleshootingGraphState(TypedDict):
     executed_tool_calls: tuple[ExecutedToolCall, ...]
     run_status: AgentRunStatus | None
     final_answer: str | None
+    investigation_steps: tuple[InvestigationStep, ...]
+    next_steps: tuple[str, ...]
     pending_action: dict[str, str] | None
     approval_result: ApprovalDecision | None
     model_profile_name: str
@@ -139,6 +175,8 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     executed_tool_calls: tuple[dict[str, object], ...]
     run_status: str | None
     final_answer: str | None
+    investigation_steps: tuple[dict[str, object], ...]
+    next_steps: tuple[str, ...]
     pending_action: dict[str, str] | None
     approval_result: str | None
     model_profile_name: str
@@ -233,6 +271,8 @@ class LangGraphTroubleshootingAgent:
         return AgentRunResult(
             status=run_status,
             final_answer=state["final_answer"],
+            investigation_steps=state["investigation_steps"],
+            next_steps=state["next_steps"],
             tool_call_count=state["executed_tool_count"],
             executed_tool_calls=state["executed_tool_calls"],
             model_profile_name=self._chat_model.model_profile.name,
@@ -390,10 +430,41 @@ class LangGraphTroubleshootingAgent:
         if not response.tool_calls:
             if response.text is None:
                 raise MissingLLMResponseTextError("LLM response did not contain text")
+            final_output = FinalAgentOutput.from_model_text(response.text)
+            final_messages: list[AIMessage] = [message]
+            if chat_model.supports_structured_output:
+                normalizer = chat_model.bind_tools(()).bind_response_format(
+                    _final_output_response_format()
+                )
+                normalized_message = normalizer.invoke(
+                    _final_output_normalization_messages(
+                        final_output,
+                        ResponseLanguage(state["response_language"]),
+                        _authorized_tool_observations(state),
+                    )
+                )
+                normalized_response = to_llm_response(normalized_message)
+                if normalized_response.tool_calls or normalized_response.text is None:
+                    raise FinalAgentOutputContractError(
+                        "Final output normalizer did not return text-only structured output"
+                    )
+                final_output = _validated_final_output(normalized_response.text)
+                final_messages.append(normalized_message)
+            final_output.require_no_action_sections()
+            final_output.require_no_investigation_summary_sections()
+            investigation_steps = _resolve_investigation_steps(
+                state["executed_tool_calls"],
+                final_output.investigation_steps,
+                ResponseLanguage(state["response_language"]),
+            )
             return {
-                "messages": [message],
+                "messages": final_messages,
                 "run_status": AgentRunStatus.SUCCESS.value,
-                "final_answer": response.text,
+                "final_answer": final_output.answer,
+                "investigation_steps": tuple(
+                    step.model_dump() for step in investigation_steps
+                ),
+                "next_steps": final_output.next_steps,
             }
         if state["executed_tool_count"] == MAX_TOOL_CALLS:
             return {
@@ -601,6 +672,9 @@ class LangGraphTroubleshootingAgent:
     ) -> dict[str, object]:
         _require_pending_action(state)
         response_language = ResponseLanguage(state["response_language"])
+        investigation_steps = _resolve_investigation_steps(
+            state["executed_tool_calls"], (), response_language
+        )
         return {
             "pending_action": None,
             "run_status": AgentRunStatus.SUCCESS.value,
@@ -610,6 +684,10 @@ class LangGraphTroubleshootingAgent:
                 if response_language is ResponseLanguage.DE
                 else "Maintenance ticket creation was rejected; no ticket was created."
             ),
+            "investigation_steps": tuple(
+                step.model_dump() for step in investigation_steps
+            ),
+            "next_steps": (),
         }
 
     @asynccontextmanager
@@ -641,6 +719,8 @@ class LangGraphTroubleshootingAgent:
             "executed_tool_calls": (),
             "run_status": None,
             "final_answer": None,
+            "investigation_steps": (),
+            "next_steps": (),
             "pending_action": None,
             "approval_result": None,
             "model_profile_name": self._chat_model.model_profile.name,
@@ -728,6 +808,11 @@ class LangGraphTroubleshootingAgent:
             if raw_status is not None
             else None,
             "final_answer": state["final_answer"],
+            "investigation_steps": tuple(
+                InvestigationStep.model_validate(step)
+                for step in state.get("investigation_steps", ())
+            ),
+            "next_steps": tuple(state.get("next_steps", ())),
             "pending_action": state["pending_action"],
             "approval_result": (
                 ApprovalDecision(raw_approval) if raw_approval is not None else None
@@ -785,6 +870,115 @@ def _require_tool_call_id(tool_call_id: object | None) -> str:
     if not isinstance(tool_call_id, str) or not tool_call_id:
         raise ValueError("Tool call requires a non-empty ID")
     return tool_call_id
+
+
+def _final_output_response_format() -> LLMResponseFormat:
+    return LLMResponseFormat(
+        json_schema=LLMJsonSchema(
+            name="troubleshooting_final_output",
+            schema_definition=FinalAgentOutput.model_json_schema(),
+        )
+    )
+
+
+def _final_output_normalization_messages(
+    draft: FinalAgentOutput,
+    response_language: ResponseLanguage,
+    authorized_tool_observations: tuple[dict[str, object], ...],
+) -> list[AnyMessage]:
+    return [
+        SystemMessage(
+            content=(
+                f"{_FINAL_OUTPUT_NORMALIZATION_SYSTEM_MESSAGE}\n\n"
+                f"{response_language_instruction(response_language)}"
+            )
+        ),
+        HumanMessage(
+            content=(
+                "Normalize this final draft without adding evidence. The authorized "
+                "tool observations define the only valid investigation_steps. Return "
+                "one step per observation in the supplied order, preserving each exact "
+                "step number and action. Do not expose the observation payload verbatim:\n\n"
+                + json.dumps(
+                    {
+                        "draft": draft.model_dump(mode="json"),
+                        "authorized_tool_observations": authorized_tool_observations,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        ),
+    ]
+
+
+def _authorized_tool_observations(
+    state: CheckpointedTroubleshootingGraphState,
+) -> tuple[dict[str, object], ...]:
+    """Pass only in-loop, already-authorized observations to finalization."""
+    tool_messages = [
+        message for message in state["messages"] if isinstance(message, ToolMessage)
+    ]
+    observations: list[dict[str, object]] = []
+    for index, call in enumerate(state["executed_tool_calls"], start=1):
+        tool_name = call.get("tool")
+        if not isinstance(tool_name, str):
+            raise FinalAgentOutputContractError("Executed tool call has no valid tool")
+        content = (
+            str(tool_messages[index - 1].content)
+            if index <= len(tool_messages)
+            else "No user-facing observation was recorded."
+        )
+        observations.append(
+            {"step": index, "action": tool_name, "observation": content}
+        )
+    return tuple(observations)
+
+
+def _resolve_investigation_steps(
+    executed_tool_calls: tuple[dict[str, object], ...],
+    proposed_steps: tuple[InvestigationStep, ...],
+    response_language: ResponseLanguage,
+) -> tuple[InvestigationStep, ...]:
+    """Publish model findings only when their system-derived trajectory matches."""
+    expected_actions: tuple[str, ...] = tuple(
+        call["tool"]
+        for call in executed_tool_calls
+        if isinstance(call.get("tool"), str)
+    )
+    if len(expected_actions) != len(executed_tool_calls):
+        raise FinalAgentOutputContractError("Executed tool trajectory is invalid")
+    expected_steps = tuple(range(1, len(expected_actions) + 1))
+    if (
+        len(proposed_steps) == len(expected_actions)
+        and tuple(step.step for step in proposed_steps) == expected_steps
+        and tuple(step.action for step in proposed_steps) == expected_actions
+    ):
+        return proposed_steps
+    return tuple(
+        InvestigationStep(
+            step=index,
+            action=action,
+            finding=_fallback_investigation_finding(action, response_language),
+        )
+        for index, action in enumerate(expected_actions, start=1)
+    )
+
+
+def _fallback_investigation_finding(
+    action: str, response_language: ResponseLanguage
+) -> str:
+    if response_language is ResponseLanguage.DE:
+        return f"Autorisierte Beobachtung mit {action} abgeschlossen."
+    return f"Authorized observation completed with {action}."
+
+
+def _validated_final_output(text: str) -> FinalAgentOutput:
+    try:
+        return FinalAgentOutput.model_validate_json(text).unwrap_serialized_answer()
+    except ValidationError as error:
+        raise FinalAgentOutputContractError(
+            "Final output normalizer returned an invalid structured response"
+        ) from error
 
 
 def _require_pending_action(

@@ -7,7 +7,14 @@ from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import (
+    HRFlowable,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 from industrial_ai_agent.infrastructure.api.schemas import InvestigationResponse
 
@@ -60,6 +67,57 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
                 ),
             ]
         )
+        if turn.next_steps:
+            next_steps_label = (
+                "Empfohlene Untersuchungsschritte"
+                if turn.response_language == "DE"
+                else "Recommended Investigation Actions"
+            )
+            next_steps = "<br/>".join(f"- {escape(step)}" for step in turn.next_steps)
+            story.extend(
+                [
+                    Paragraph(next_steps_label, label),
+                    Paragraph(next_steps, text),
+                ]
+            )
+        if turn.investigation_steps:
+            summary_label = (
+                "Untersuchungsübersicht"
+                if turn.response_language == "DE"
+                else "Investigation Summary"
+            )
+            headings = (
+                ("Schritt", "Aktion", "Erkenntnisse / Hinweise")
+                if turn.response_language == "DE"
+                else ("Step", "Action", "Findings / Notes")
+            )
+            rows = [
+                [Paragraph(escape(value), text) for value in headings],
+                *[
+                    [
+                        Paragraph(str(step.step), text),
+                        Paragraph(escape(step.action.value), text),
+                        Paragraph(_to_pdf_markup(step.finding), text),
+                    ]
+                    for step in turn.investigation_steps
+                ],
+            ]
+            table = Table(rows, colWidths=(16 * mm, 43 * mm, 109 * mm), repeatRows=1)
+            table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), HexColor("#edf3f0")),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), HexColor("#1d332a")),
+                        ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#cbd6d1")),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                        ("TOPPADDING", (0, 0), (-1, -1), 5),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ]
+                )
+            )
+            story.extend([Paragraph(summary_label, label), table, Spacer(1, 2 * mm)])
         if turn.tool_calls:
             names = "<br/>".join(escape(call.tool) for call in turn.tool_calls)
             story.extend([Paragraph("Executed tools", label), Paragraph(names, text)])

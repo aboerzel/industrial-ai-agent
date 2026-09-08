@@ -10,9 +10,9 @@ Object.assign(globalThis, {
 
 const { renderAgentAnswer } = await import("../../frontend/js/markdown.js");
 
-function render(source) {
+function render(source, options) {
   const container = document.createElement("div");
-  renderAgentAnswer(container, source);
+  renderAgentAnswer(container, source, options);
   return container;
 }
 
@@ -52,6 +52,15 @@ test("renders ordered and unordered lists", () => {
     [...answer.querySelectorAll("ol li")].map((item) => item.textContent),
     ["Inspect", "Repair"],
   );
+});
+
+test("does not infer actions from Markdown lists", () => {
+  const answer = render(
+    "### Recommended Investigation Actions\n\n1. Station S04\n   - Inspect quality sensors\n\n### Next Steps\n\n- Search documentation",
+  );
+
+  assert.equal(answer.querySelectorAll("li").length, 3);
+  assert.equal(answer.querySelectorAll(".next-step-action").length, 0);
 });
 
 test("renders inline and fenced code", () => {
