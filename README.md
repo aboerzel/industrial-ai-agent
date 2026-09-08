@@ -216,7 +216,7 @@ The deterministic analyzer remains authoritative. Optional AI reasoning receives
 **Required**
 
 - Docker Desktop with Docker Compose
-- Python 3.12+ for the static local frontend server and local development
+- Python 3.12+ for local development
 - [Ollama](https://ollama.com/) running on the host, with the local models used by the Compose profiles
 - A local `.env` created from `.env.example`; provide the required local Compose values, including a 64-character hexadecimal `LANGFUSE_ENCRYPTION_KEY`, and keep the file unversioned
 
@@ -238,10 +238,19 @@ ollama pull qwen3.5:4b
 ollama pull qwen3.5:9b
 ollama pull qwen3-embedding:0.6b
 docker compose up --build -d
-python -m http.server 8080 --directory frontend
 ```
 
-Open the local browser demo at `http://localhost:8080`, the FastAPI contract at `http://localhost:8000/docs`, Grafana at `http://localhost:3000`, and Langfuse at `http://localhost:3001`.
+Docker Desktop must be running. For normal subsequent starts, use `docker compose up -d`;
+after source or image changes, use `docker compose up --build -d`. Stop the demo with
+`docker compose down`.
+
+Compose serves the local browser demo at `http://localhost:8080`, the FastAPI contract is
+at `http://localhost:8000/docs`, Grafana is at `http://localhost:3000`, and Langfuse is at
+`http://localhost:3001`.
+
+All persistent demo services use `restart: unless-stopped`. If Docker Desktop is configured
+to start with Windows, services that were running recover when the Docker engine becomes
+available. Containers explicitly stopped by the user are intentionally not restarted.
 
 All Compose host ports bind to `127.0.0.1`; the OTel Collector is Compose-internal.
 Grafana keeps anonymous local dashboard access as a Viewer, not an Admin. Do not add real

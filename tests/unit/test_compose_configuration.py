@@ -36,6 +36,53 @@ def test_host_published_demo_ports_are_loopback_only() -> None:
             assert port.get("host_ip") == "127.0.0.1", service_name
 
 
+def test_persistent_demo_services_restart_unless_stopped() -> None:
+    configuration = _compose_configuration()
+    services = configuration["services"]
+    assert isinstance(services, dict)
+
+    for service_name, service in services.items():
+        assert isinstance(service_name, str)
+        assert isinstance(service, dict)
+        assert service.get("restart") == "unless-stopped", service_name
+
+
+def test_frontend_is_a_loopback_only_static_service() -> None:
+    configuration = _compose_configuration()
+    services = configuration["services"]
+    assert isinstance(services, dict)
+    frontend = services["frontend"]
+    assert isinstance(frontend, dict)
+
+    assert frontend["image"] == "nginx:1.29-alpine"
+    assert frontend["restart"] == "unless-stopped"
+    assert _published_ports(frontend) == (
+        {
+            "mode": "ingress",
+            "target": 80,
+            "published": "8080",
+            "protocol": "tcp",
+            "host_ip": "127.0.0.1",
+        },
+    )
+    assert frontend["volumes"] == [
+        {
+            "type": "bind",
+            "source": str(PROJECT_ROOT / "frontend"),
+            "target": "/usr/share/nginx/html",
+            "read_only": True,
+            "bind": {},
+        },
+        {
+            "type": "bind",
+            "source": str(PROJECT_ROOT / "frontend" / "nginx.conf"),
+            "target": "/etc/nginx/conf.d/default.conf",
+            "read_only": True,
+            "bind": {},
+        },
+    ]
+
+
 def test_internal_services_have_no_host_published_ports() -> None:
     configuration = _compose_configuration()
     services = configuration["services"]

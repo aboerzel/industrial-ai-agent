@@ -268,8 +268,9 @@ status, final answer, and normalized tool calls; they do not expose LangGraph st
 LangChain messages, MCP types, prompts, or raw tool payloads. `GET /health` is
 process-local liveness only, and `GET /api/v1/runs/{run_id}` reads the durable application
 record. The separate static `frontend/` browser client communicates only with this public
-HTTP/JSON API. The local API entry point permits only `http://localhost:8080` through
-explicit CORS configuration; it does not serve frontend assets. The API has no CORS
+HTTP/JSON API. Compose serves it with a loopback-only Nginx service at
+`http://localhost:8080`; the local API entry point permits only that origin through
+explicit CORS configuration and does not serve frontend assets. The API has no CORS
 wildcard, authentication, TLS, rate limiting, or streaming endpoint. Its explicit
 `POST /api/v1/runs/{run_id}/resume` endpoint only accepts the strict `approve` or
 `reject` decision contract for a persisted pending action.

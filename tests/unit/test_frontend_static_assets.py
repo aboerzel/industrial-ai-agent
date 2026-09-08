@@ -23,6 +23,13 @@ def test_frontend_static_assets_are_present_and_use_es_modules() -> None:
     assert 'from "./markdown.js"' in app
 
 
+def test_frontend_nginx_configuration_serves_es_module_mime_types() -> None:
+    nginx = (FRONTEND_ROOT / "nginx.conf").read_text(encoding="utf-8")
+
+    assert "location ~ \\.mjs$" in nginx
+    assert "default_type application/javascript;" in nginx
+
+
 def test_frontend_workspace_keeps_the_input_panel_fixed_and_allows_result_growth() -> (
     None
 ):
