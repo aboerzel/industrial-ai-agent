@@ -31,6 +31,7 @@ from industrial_ai_agent.infrastructure.persistence.models import (
 )
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlDocumentCatalogRepository,
+    PostgreSqlDocumentContentRepository,
     PostgreSqlFactoryDiscoveryRepository,
     PostgreSqlMachineStatusRepository,
     PostgreSqlMaintenanceTicketRepository,
@@ -146,6 +147,35 @@ def test_schema_seed_and_repository_mapping_are_available_to_application_role() 
         document.classification <= DataClassification.CONFIDENTIAL
         for document in documents
     )
+
+
+def test_document_content_repository_rechecks_rls_before_reading_cataloged_bytes() -> (
+    None
+):
+    assert DATABASE_URL is not None
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    reader = PostgreSqlDocumentContentRepository(
+        session_factory, PROJECT_ROOT / "demo_factory"
+    )
+    try:
+        confidential = reader.get_document(
+            "doc-s04quality09procedure", _context(DataClassification.CONFIDENTIAL)
+        )
+        lowered_clearance = reader.get_document(
+            "doc-s04quality09procedure", _context(DataClassification.PUBLIC)
+        )
+        unknown = reader.get_document(
+            "unknown", _context(DataClassification.CONFIDENTIAL)
+        )
+    finally:
+        session_factory.dispose()
+
+    assert confidential is not None
+    assert confidential.media_type == "text/markdown"
+    assert confidential.filename == "S04-QUALITY-09-Troubleshooting-Procedure.md"
+    assert confidential.content
+    assert lowered_clearance is None
+    assert unknown is None
 
 
 def test_internal_clearance_exposes_only_the_synthetic_internal_scenario() -> None:

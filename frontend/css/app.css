@@ -663,11 +663,6 @@ dd {
   font-weight: 700;
 }
 
-.document-reference {
-  border-bottom-color: #8b5c1d;
-  color: #7a4d0b;
-}
-
 .structured-reference:focus-visible {
   outline: 3px solid #b9d8ca;
   outline-offset: 2px;
@@ -711,6 +706,27 @@ dd {
 .document-references ul {
   margin: 0;
   padding-left: 20px;
+}
+
+.document-references li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.document-references li + li {
+  margin-top: 7px;
+}
+
+.document-title {
+  color: #7a4d0b;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.document-action {
+  min-height: 26px;
 }
 
 .error-message {

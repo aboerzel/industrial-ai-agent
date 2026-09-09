@@ -25,7 +25,7 @@ def test_retrieval_cache_never_reuses_a_higher_clearance_pipeline(
         embedding_base_url=None,
         reranker_device=None,
         reranker_local_files_only=True,
-        demo_factory_root=tmp_path,
+        document_root=tmp_path,
     )
     built_for: list[SecurityContext] = []
 

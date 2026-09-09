@@ -1,13 +1,19 @@
 """SQLAlchemy 2.x PostgreSQL adapters with transaction-scoped RLS clearance."""
 
+import hashlib
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from uuid import uuid4
 
 from sqlalchemy import Connection, Engine, create_engine, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
+from industrial_ai_agent.application.document_content import (
+    AuthorizedDocumentContent,
+)
 from industrial_ai_agent.domain.factory_discovery import (
     ProductDiscovery,
     ProductOverview,
@@ -424,3 +430,79 @@ class PostgreSqlDocumentCatalogRepository:
             )
             for record in records
         )
+
+
+class PostgreSqlDocumentContentRepository:
+    """Serve only RLS-visible, checksum-verified cataloged document bytes."""
+
+    def __init__(
+        self, session_factory: PostgreSqlSessionFactory, document_root: Path
+    ) -> None:
+        self._session_factory = session_factory
+        self._document_root = document_root.resolve()
+
+    def get_document(
+        self, document_id: str, security_context: SecurityContext
+    ) -> AuthorizedDocumentContent | None:
+        with self._session_factory.session(security_context) as session:
+            record = session.scalar(
+                select(DocumentCatalogRecord).where(
+                    DocumentCatalogRecord.id == document_id
+                )
+            )
+        if record is None:
+            return None
+        path = self._catalog_path(record.file_path)
+        if path is None:
+            return None
+        try:
+            content = path.read_bytes()
+        except OSError:
+            return None
+        if hashlib.sha256(content).hexdigest() != record.checksum:
+            return None
+        return AuthorizedDocumentContent(
+            content=content,
+            media_type=_safe_media_type(record.mime_type),
+            filename=_safe_catalog_filename(record.title, path.suffix),
+        )
+
+    def _catalog_path(self, file_path: str) -> Path | None:
+        relative_path = _document_content_relative_path(file_path)
+        if relative_path is None:
+            return None
+        candidate = (self._document_root / relative_path).resolve()
+        if not candidate.is_relative_to(self._document_root) or not candidate.is_file():
+            return None
+        return candidate
+
+
+def _document_content_relative_path(file_path: str) -> Path | None:
+    """Translate catalog provenance to a safe path below the mounted content root."""
+    if not file_path or "\\" in file_path or PureWindowsPath(file_path).is_absolute():
+        return None
+    path = PurePosixPath(file_path)
+    if (
+        path.is_absolute()
+        or not path.parts
+        or path.parts[0] not in {"documents", "images"}
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        return None
+    return Path(*path.parts)
+
+
+def _safe_media_type(value: str) -> str:
+    return (
+        value
+        if re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", value)
+        else "application/octet-stream"
+    )
+
+
+def _safe_catalog_filename(title: str, suffix: str) -> str:
+    normalized_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", title).strip(".-")[:96]
+    normalized_suffix = (
+        suffix.lower() if re.fullmatch(r"\.[A-Za-z0-9]{1,10}", suffix) else ""
+    )
+    return f"{normalized_stem or 'document'}{normalized_suffix}"

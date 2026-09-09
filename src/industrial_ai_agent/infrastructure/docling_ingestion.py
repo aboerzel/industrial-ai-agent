@@ -2,7 +2,7 @@
 
 import hashlib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Protocol
 
 from docling.datamodel.base_models import InputFormat
@@ -45,14 +45,14 @@ class DoclingDocumentIngestor:
         *,
         converter: _DocumentConverter | None = None,
     ) -> None:
-        self._document_root = document_root
+        self._document_root = document_root.resolve()
         self._converter = converter or _create_local_converter()
 
     def ingest(
         self, catalog_document: CatalogDocument
     ) -> tuple[KnowledgeRetrievalResult, ...]:
-        path = self._document_root / catalog_document.file_path
-        if not path.is_file():
+        path = _catalog_content_path(self._document_root, catalog_document.file_path)
+        if path is None:
             raise ValueError(
                 f"Cataloged document does not exist: {catalog_document.file_path}"
             )
@@ -68,6 +68,24 @@ class DoclingDocumentIngestor:
                 f"Docling produced no text for document: {catalog_document.document_id}"
             )
         return _chunk_document(catalog_document, markdown)
+
+
+def _catalog_content_path(document_root: Path, file_path: str) -> Path | None:
+    """Resolve catalog provenance only beneath the externally mounted document root."""
+    if not file_path or "\\" in file_path or PureWindowsPath(file_path).is_absolute():
+        return None
+    catalog_path = PurePosixPath(file_path)
+    if (
+        catalog_path.is_absolute()
+        or not catalog_path.parts
+        or catalog_path.parts[0] not in {"documents", "images"}
+        or any(part in {"", ".", ".."} for part in catalog_path.parts)
+    ):
+        return None
+    candidate = (document_root / Path(*catalog_path.parts)).resolve()
+    if not candidate.is_relative_to(document_root) or not candidate.is_file():
+        return None
+    return candidate
 
 
 def eligible_catalog_documents(

@@ -2,8 +2,7 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    HF_HOME=/home/app/.cache/huggingface \
-    KNOWLEDGE_MCP_KNOWLEDGE_BASE=/app/knowledge_base
+    HF_HOME=/home/app/.cache/huggingface
 
 WORKDIR /app
 
@@ -15,8 +14,6 @@ RUN apt-get update \
 
 COPY pyproject.toml ./
 COPY src ./src
-COPY knowledge_base ./knowledge_base
-COPY demo_factory ./demo_factory
 
 # Keep the image independent from model artifacts and use a CPU-only Torch wheel.
 RUN pip install --no-cache-dir \

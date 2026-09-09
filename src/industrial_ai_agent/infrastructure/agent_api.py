@@ -21,6 +21,7 @@ from industrial_ai_agent.infrastructure.internal_diagnostic_scope import (
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
 from industrial_ai_agent.infrastructure.observed_run_service import observed_run_service
 from industrial_ai_agent.infrastructure.persistence.postgres import (
+    PostgreSqlDocumentContentRepository,
     PostgreSqlSessionFactory,
 )
 from industrial_ai_agent.infrastructure.telemetry import (
@@ -33,6 +34,7 @@ from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_FRONTEND_ORIGIN = "http://localhost:8080"
+DEFAULT_DOCUMENT_ROOT = Path("/app/data/document-content")
 
 
 def create_default_app():
@@ -76,6 +78,10 @@ def create_default_app():
         ),
         allowed_origins=(frontend_origin,),
         telemetry=telemetry,
+        document_content_reader=PostgreSqlDocumentContentRepository(
+            PostgreSqlSessionFactory(database_url),
+            Path(os.getenv("DOCUMENT_ROOT", str(DEFAULT_DOCUMENT_ROOT))),
+        ),
     )
 
 

@@ -20,7 +20,10 @@ from industrial_ai_agent.agent.agent_run import (
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
     LangGraphTroubleshootingAgent,
+    _append_observation_identifiers,
+    _append_request_identifiers,
     _deduplicate_document_references,
+    _deduplicate_identifier_references,
     _document_references_from_observation,
     _resolve_investigation_steps,
 )
@@ -408,6 +411,86 @@ def test_unknown_finalizer_action_is_replaced_by_the_actual_tool_trajectory() ->
             finding="Autorisierte Beobachtung mit get_machine_status abgeschlossen.",
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_status", "expected_document"),
+    (
+        (
+            ResponseLanguage.EN,
+            "Station S04 is FAULTED with active error QUALITY-09.",
+            "Documentation search returned S04 QUALITY-09 Troubleshooting Procedure.",
+        ),
+        (
+            ResponseLanguage.DE,
+            "Station S04 ist FAULTED mit aktivem Fehler QUALITY-09.",
+            "Die Dokumentationssuche lieferte S04 QUALITY-09 Troubleshooting Procedure.",
+        ),
+    ),
+)
+def test_investigation_findings_are_derived_from_their_authorized_tool_results(
+    language: ResponseLanguage, expected_status: str, expected_document: str
+) -> None:
+    resolved = _resolve_investigation_steps(
+        (
+            {"tool": "get_machine_status", "arguments": {"station_id": "S04"}},
+            {"tool": "search_documentation", "arguments": {"query": "QUALITY-09"}},
+        ),
+        (),
+        language,
+        (
+            '{"station_id":"S04","found":true,"state":"FAULTED","active_error_code":"QUALITY-09"}',
+            '{"results":[{"document_id":"DOC-001","metadata":{"document_title":"S04 QUALITY-09 Troubleshooting Procedure"}}]}',
+        ),
+    )
+
+    assert [(step.step, step.action) for step in resolved] == [
+        (1, "get_machine_status"),
+        (2, "search_documentation"),
+    ]
+    assert [step.finding for step in resolved] == [expected_status, expected_document]
+    assert "QUALITY-09" in resolved[0].finding
+
+
+def test_investigation_finding_falls_back_only_when_no_safe_tool_summary_exists() -> (
+    None
+):
+    resolved = _resolve_investigation_steps(
+        ({"tool": "get_machine_status", "arguments": {"station_id": "S04"}},),
+        (),
+        ResponseLanguage.EN,
+        ("not structured",),
+    )
+
+    assert resolved[0].finding == (
+        "Authorized observation completed with get_machine_status."
+    )
+
+
+def test_reference_extraction_uses_typed_provenance_and_ignores_retrieval_internals() -> (
+    None
+):
+    references = []
+    _append_request_identifiers(references, "Investigate S04, P4711, and QUALITY-09.")
+    _append_observation_identifiers(
+        references,
+        "search_documentation",
+        '{"results":[{"chunk_id":"CHUNK-001","document_id":"FACTORY-DEMO-01-DOCUMENTS",'
+        '"metadata":{"tags":["FACTORY-DEMO-01","TS-320","QUALITY-09"]}}]}',
+    )
+    _append_observation_identifiers(
+        references,
+        "get_machine_status",
+        '{"station_id":"S04","found":true,"state":"FAULTED","active_error_code":"QUALITY-09"}',
+    )
+
+    assert [
+        reference.value for reference in _deduplicate_identifier_references(references)
+    ] == [
+        "S04",
+        "P4711",
+        "QUALITY-09",
+    ]
 
 
 def test_matching_multiple_and_repeated_tool_steps_preserve_execution_order() -> None:

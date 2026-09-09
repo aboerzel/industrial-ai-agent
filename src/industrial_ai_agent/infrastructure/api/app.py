@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.agent_run import AgentRunResult, DocumentReference
 from industrial_ai_agent.agent.model_egress import (
     DataClassificationBoundaryError,
     ModelEgressDeniedError,
@@ -35,6 +35,11 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     RunExecution,
     internal_diagnostic_message,
 )
+from industrial_ai_agent.application.document_content import (
+    AuthorizedDocumentContent,
+    AuthorizedDocumentContentReader,
+)
+from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.demo_security import (
     DemoSecurityContextResolver,
 )
@@ -86,6 +91,7 @@ def create_app(
     run_store: AgentRunStore,
     allowed_origins: tuple[str, ...] = (),
     telemetry: Telemetry | None = None,
+    document_content_reader: AuthorizedDocumentContentReader | None = None,
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
     app = FastAPI(
@@ -100,6 +106,7 @@ def create_app(
     app.state.telemetry = telemetry
     app.state.classification_policy = AgentRunClassificationPolicy()
     app.state.demo_security_context_resolver = DemoSecurityContextResolver()
+    app.state.document_content_reader = document_content_reader
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
     if allowed_origins:
         # noinspection PyTypeChecker
@@ -161,6 +168,7 @@ def create_app(
             policy=policy,
             response_language=response_language,
             investigation_id=payload.investigation_id,
+            document_security_context=security_context,
         )
 
     @runs.post(
@@ -195,6 +203,9 @@ def create_app(
             message=internal_diagnostic_message(target),
             policy=policy,
             response_language=ResponseLanguage.EN,
+            document_security_context=_demo_security_context(request).resolve(
+                DemoUserClearance.INTERNAL
+            ),
         )
 
     @runs.get(
@@ -203,7 +214,11 @@ def create_app(
         responses={status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse}},
         summary="Get the persisted record for one agent run",
     )
-    async def get_run(run_id: UUID, request: Request) -> RunResponse:
+    async def get_run(
+        run_id: UUID,
+        request: Request,
+        user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
+    ) -> RunResponse:
         record = await _run_store(request).get(run_id)
         if record is None:
             _raise_api_run_error(
@@ -211,7 +226,14 @@ def create_app(
                 code="run_not_found",
                 message=user_facing_error_message("run_not_found", ResponseLanguage.EN),
             )
-        return _to_run_response(record)
+        return _to_run_response(
+            record,
+            documents=_authorized_documents_for_result(
+                request,
+                record.result,
+                _demo_security_context(request).resolve(user_clearance),
+            ),
+        )
 
     @runs.get(
         f"{API_PREFIX}/investigations/{{investigation_id}}",
@@ -263,6 +285,32 @@ def create_app(
                 )
             },
         )
+
+    @runs.get(
+        f"{API_PREFIX}/documents/{{document_id}}",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse}},
+        summary="Open one currently authorized cataloged document",
+    )
+    async def open_document(
+        document_id: str,
+        request: Request,
+        user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
+    ) -> Response:
+        document = _authorized_document_content(request, document_id, user_clearance)
+        return _document_response(document, disposition="inline")
+
+    @runs.get(
+        f"{API_PREFIX}/documents/{{document_id}}/download",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse}},
+        summary="Download one currently authorized cataloged document",
+    )
+    async def download_document(
+        document_id: str,
+        request: Request,
+        user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
+    ) -> Response:
+        document = _authorized_document_content(request, document_id, user_clearance)
+        return _document_response(document, disposition="attachment")
 
     @runs.post(
         f"{API_PREFIX}/runs/{{run_id}}/resume",
@@ -377,6 +425,69 @@ def _demo_security_context(request: Request) -> DemoSecurityContextResolver:
     return request.app.state.demo_security_context_resolver
 
 
+def _authorized_document_content(
+    request: Request,
+    document_id: str,
+    user_clearance: DemoUserClearance,
+) -> AuthorizedDocumentContent:
+    reader: AuthorizedDocumentContentReader | None = (
+        request.app.state.document_content_reader
+    )
+    document = (
+        reader.get_document(
+            document_id, _demo_security_context(request).resolve(user_clearance)
+        )
+        if reader is not None
+        else None
+    )
+    if document is None:
+        _raise_api_run_error(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="document_not_available",
+            message="The requested document is not available.",
+        )
+    return document
+
+
+def _authorized_documents_for_result(
+    request: Request,
+    result: AgentRunResult | None,
+    security_context: SecurityContext,
+) -> tuple[DocumentReference, ...]:
+    """Publish only run references whose current RLS-visible content is usable."""
+    if result is None:
+        return ()
+    reader: AuthorizedDocumentContentReader | None = (
+        request.app.state.document_content_reader
+    )
+    if reader is None:
+        return ()
+    return tuple(
+        reference
+        for reference in result.documents
+        if reader.get_document(reference.document_id, security_context) is not None
+    )
+
+
+def _with_authorized_documents(
+    result: AgentRunResult,
+    documents: tuple[DocumentReference, ...],
+) -> AgentRunResult:
+    return result.model_copy(update={"documents": documents})
+
+
+def _document_response(
+    document: AuthorizedDocumentContent, *, disposition: str
+) -> Response:
+    return Response(
+        content=document.content,
+        media_type=document.media_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{document.filename}"'
+        },
+    )
+
+
 def _persistent_hitl_enabled(service: AgentRunService) -> bool:
     """Allow an Infrastructure observability decorator around the application service."""
     return bool(getattr(service, "persistent_hitl_enabled", False))
@@ -389,6 +500,7 @@ async def _start_run(
     policy: ResolvedRunPolicy,
     response_language: ResponseLanguage,
     investigation_id: UUID | None = None,
+    document_security_context: SecurityContext,
 ) -> RunResponse:
     store = _run_store(request)
     run_id = uuid4()
@@ -422,7 +534,16 @@ async def _start_run(
                 run_profile=policy.run_profile,
                 model_profile=profile.name,
             )
-            return _to_run_response(await _persist_execution(store, run_id, execution))
+            return _to_run_response(
+                await _persist_execution(
+                    store,
+                    run_id,
+                    execution,
+                    documents=_authorized_documents_for_result(
+                        request, execution.result, document_security_context
+                    ),
+                )
+            )
         if conversation_context:
             result = await service.run_with_policy(
                 message,
@@ -474,7 +595,11 @@ async def _start_run(
             run_profile=policy.run_profile,
             model_profile=result.model_profile_name,
         )
-    return _to_run_response(await store.complete(run_id, result))
+    filtered_result = _with_authorized_documents(
+        result,
+        _authorized_documents_for_result(request, result, document_security_context),
+    )
+    return _to_run_response(await store.complete(run_id, filtered_result))
 
 
 def _record_internal_failure(
@@ -508,7 +633,11 @@ def _record_internal_failure(
         )
 
 
-def _to_run_response(record: StoredAgentRun) -> RunResponse:
+def _to_run_response(
+    record: StoredAgentRun,
+    *,
+    documents: tuple[DocumentReference, ...] | None = None,
+) -> RunResponse:
     result = record.result
     return RunResponse(
         run_id=record.run_id,
@@ -522,7 +651,7 @@ def _to_run_response(record: StoredAgentRun) -> RunResponse:
         investigation_steps=_to_investigation_steps(result),
         next_steps=_to_next_steps(result),
         identifiers=_to_identifiers(result),
-        documents=_to_documents(result),
+        documents=_to_documents(documents if documents is not None else result),
         tool_calls=_to_tool_calls(result),
         approval_request=_to_approval_request(record.approval_request),
     )
@@ -542,7 +671,15 @@ async def _authorized_investigation(
     )
     if not visible:
         return None
-    turns = tuple(_to_investigation_turn(record) for record in visible)
+    turns = tuple(
+        _to_investigation_turn(
+            record,
+            documents=_authorized_documents_for_result(
+                request, record.result, security_context
+            ),
+        )
+        for record in visible
+    )
     return InvestigationResponse(
         investigation_id=investigation_id,
         created_at=_as_iso(visible[0].created_at),
@@ -553,7 +690,11 @@ async def _authorized_investigation(
     )
 
 
-def _to_investigation_turn(record: StoredAgentRun) -> InvestigationTurnResponse:
+def _to_investigation_turn(
+    record: StoredAgentRun,
+    *,
+    documents: tuple[DocumentReference, ...] | None = None,
+) -> InvestigationTurnResponse:
     result = record.result
     return InvestigationTurnResponse(
         run_id=record.run_id,
@@ -566,7 +707,7 @@ def _to_investigation_turn(record: StoredAgentRun) -> InvestigationTurnResponse:
         investigation_steps=_to_investigation_steps(result),
         next_steps=_to_next_steps(result),
         identifiers=_to_identifiers(result),
-        documents=_to_documents(result),
+        documents=_to_documents(documents if documents is not None else result),
         tool_calls=_to_tool_calls(result),
         created_at=_as_iso(record.created_at),
         updated_at=_as_iso(record.updated_at),
@@ -607,10 +748,16 @@ def _as_iso(value: datetime | None) -> str | None:
 
 
 async def _persist_execution(
-    store: AgentRunStore, run_id: UUID, execution: RunExecution
+    store: AgentRunStore,
+    run_id: UUID,
+    execution: RunExecution,
+    *,
+    documents: tuple[DocumentReference, ...] = (),
 ) -> StoredAgentRun:
     if execution.result is not None:
-        return await store.complete(run_id, execution.result)
+        return await store.complete(
+            run_id, _with_authorized_documents(execution.result, documents)
+        )
     approval = execution.approval
     if approval is None:
         raise RuntimeError("Run execution was incomplete")
@@ -678,8 +825,10 @@ def _to_identifiers(result: AgentRunResult | None):
     )
 
 
-def _to_documents(result: AgentRunResult | None):
-    if result is None:
+def _to_documents(
+    result_or_documents: AgentRunResult | tuple[DocumentReference, ...] | None,
+):
+    if result_or_documents is None:
         return ()
     from industrial_ai_agent.infrastructure.api.schemas import DocumentReferenceResponse
 
@@ -689,7 +838,11 @@ def _to_documents(result: AgentRunResult | None):
             title=sanitize_public_text(reference.title) or reference.document_id,
             format=reference.format,
         )
-        for reference in result.documents
+        for reference in (
+            result_or_documents.documents
+            if isinstance(result_or_documents, AgentRunResult)
+            else result_or_documents
+        )
     )
 
 

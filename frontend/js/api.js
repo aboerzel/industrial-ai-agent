@@ -50,6 +50,60 @@ export function downloadInvestigationPdf(investigationId, userClearance) {
   );
 }
 
+export async function openDocument(documentId, userClearance) {
+  const responseDocument = await requestDocument(documentId, userClearance, false);
+  const objectUrl = URL.createObjectURL(responseDocument.content);
+  window.open(objectUrl, "_blank", "noopener");
+  revokeObjectUrlLater(objectUrl);
+}
+
+export async function downloadDocument(documentId, userClearance) {
+  const responseDocument = await requestDocument(documentId, userClearance, true);
+  const objectUrl = URL.createObjectURL(responseDocument.content);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = document.filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  revokeObjectUrlLater(objectUrl);
+}
+
+async function requestDocument(documentId, userClearance, download) {
+  const suffix = new URLSearchParams({ user_clearance: userClearance });
+  const path = `/api/v1/documents/${encodeURIComponent(documentId)}${download ? "/download" : ""}?${suffix}`;
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { headers: { Accept: "*/*" } });
+  } catch {
+    throw new ApiClientError(0, "backend_unreachable", "The local agent API is not reachable. Start the FastAPI server and try again.");
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const publicError = isApiErrorResponse(payload) ? payload : null;
+    throw new ApiClientError(
+      response.status,
+      publicError?.code ?? "document_request_failed",
+      errorMessageFor(response.status, publicError?.code, publicError?.message),
+    );
+  }
+  return {
+    content: await response.blob(),
+    filename: filenameFromContentDisposition(response.headers.get("content-disposition")),
+  };
+}
+
+function filenameFromContentDisposition(header) {
+  const match = /filename="([^"\\]+)"/.exec(header ?? "");
+  return match?.[1] ?? "document";
+}
+
+function revokeObjectUrlLater(objectUrl) {
+  const timer = globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  timer?.unref?.();
+}
+
 async function request(path, options = {}, validator = isRunResponse) {
   let response;
   try {
@@ -271,6 +325,9 @@ function isUuid(value) {
 function errorMessageFor(status, code, publicMessage) {
   if (code === "requested_data_unavailable") {
     return "The requested data is not available with the selected access level.";
+  }
+  if (code === "document_not_available") {
+    return "The requested document is not available with the selected access level.";
   }
   const defaults = {
     403: "This request is not permitted by the server security policy.",

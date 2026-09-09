@@ -1,8 +1,10 @@
 import {
   ApiClientError,
   createRun,
+  downloadDocument,
   downloadInvestigationPdf,
   getInvestigation,
+  openDocument,
   resumeRun,
 } from "./api.js";
 import { renderAgentAnswer } from "./markdown.js";
@@ -277,7 +279,7 @@ function renderAgentTurn(turn) {
   const answer = document.createElement("div");
   answer.className = "agent-answer";
   renderAgentAnswer(answer, turn.answer ?? "No final answer recorded.");
-  linkStructuredReferences(answer, turn, responseLanguage.value);
+  linkStructuredReferences(answer, turn.identifiers ?? [], responseLanguage.value);
   article.append(answer);
   const investigationSteps = renderInvestigationSteps(
     turn.investigation_steps ?? [],
@@ -286,7 +288,9 @@ function renderAgentTurn(turn) {
   if (investigationSteps) article.append(investigationSteps);
   const nextSteps = renderNextSteps(turn.next_steps ?? [], turn.response_language);
   if (nextSteps) article.append(nextSteps);
-  const documents = renderAdditionalDocuments(turn.documents ?? [], turn.answer ?? "", responseLanguage.value);
+  const references = renderIdentifierReferences(turn.identifiers ?? [], responseLanguage.value);
+  if (references) article.append(references);
+  const documents = renderDocuments(turn.documents ?? [], responseLanguage.value);
   if (documents) article.append(documents);
   article.append(renderTools(turn.tool_calls));
 
@@ -378,18 +382,8 @@ function renderNextSteps(nextSteps, responseLanguage) {
   return section;
 }
 
-function linkStructuredReferences(answer, turn, selectedLanguage) {
-  const references = [
-    ...(turn.documents ?? []).map((reference) => ({
-      ...reference,
-      kind: "document",
-      value: reference.title,
-    })),
-    ...(turn.identifiers ?? []).map((reference) => ({
-      ...reference,
-      kind: "identifier",
-    })),
-  ].filter((reference) => reference.value);
+function linkStructuredReferences(answer, identifiers, selectedLanguage) {
+  const references = identifiers.map((reference) => ({ ...reference, kind: "identifier" })).filter((reference) => reference.value);
   if (!references.length) return;
 
   const matcher = new RegExp(
@@ -433,7 +427,7 @@ function createReferenceControl(reference, selectedLanguage) {
   control.tabIndex = 0;
   control.setAttribute("role", "button");
   control.textContent = reference.value;
-  control.title = reference.kind === "document" ? "Document reference" : "Reference actions";
+  control.title = "Reference actions";
   const openMenu = () => showReferenceMenu(control, reference, selectedLanguage);
   control.addEventListener("click", openMenu);
   control.addEventListener("keydown", (event) => {
@@ -450,51 +444,81 @@ function showReferenceMenu(anchor, reference, selectedLanguage) {
   const menu = document.createElement("div");
   menu.className = "reference-popover";
   menu.setAttribute("role", "menu");
-  if (reference.kind === "document") {
-    const unavailable = selectedLanguage === "DE"
-      ? "Sicherer Dokumentzugriff ist noch nicht konfiguriert."
-      : "Secure document access is not configured yet.";
-    for (const label of ["Open", "Download"]) {
-      const action = document.createElement("button");
-      action.type = "button";
-      action.className = "reference-action";
-      action.textContent = label;
-      action.disabled = true;
-      action.title = unavailable;
-      menu.append(action);
-    }
-  } else {
-    for (const actionDefinition of identifierActions(reference, selectedLanguage)) {
-      const action = document.createElement("button");
-      action.type = "button";
-      action.className = "reference-action";
-      action.textContent = actionDefinition.label;
-      action.addEventListener("click", () => {
-        if (actionDefinition.prompt) useAsFollowUp(actionDefinition.prompt);
-        if (actionDefinition.copy) void copyIdentifier(reference.value);
-        menu.remove();
-      });
-      menu.append(action);
-    }
+  for (const actionDefinition of identifierActions(reference, selectedLanguage)) {
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "reference-action";
+    action.textContent = actionDefinition.label;
+    action.disabled = isSubmitting;
+    action.addEventListener("click", () => {
+      if (actionDefinition.prompt) useAsFollowUp(actionDefinition.prompt);
+      if (actionDefinition.copy) void copyIdentifier(reference.value);
+      menu.remove();
+    });
+    menu.append(action);
   }
   anchor.after(menu);
 }
 
-function renderAdditionalDocuments(documents, answer, selectedLanguage) {
-  const unlinked = documents.filter((documentReference) => !answer.includes(documentReference.title));
-  if (!unlinked.length) return null;
+function renderIdentifierReferences(identifiers, selectedLanguage) {
+  if (!identifiers.length) return null;
   const section = document.createElement("section");
   section.className = "document-references";
   const title = document.createElement("h4");
   title.textContent = selectedLanguage === "DE" ? "Referenzen" : "References";
   const list = document.createElement("ul");
-  for (const reference of unlinked) {
+  for (const reference of identifiers) {
     const item = document.createElement("li");
-    item.append(createReferenceControl({ ...reference, kind: "document", value: reference.title }, selectedLanguage));
+    item.append(createReferenceControl({ ...reference, kind: "identifier" }, selectedLanguage));
     list.append(item);
   }
   section.append(title, list);
   return section;
+}
+
+function renderDocuments(documents, selectedLanguage) {
+  const uniqueDocuments = [...new Map(documents.map((reference) => [reference.document_id, reference])).values()];
+  if (!uniqueDocuments.length) return null;
+  const section = document.createElement("section");
+  section.className = "document-references";
+  const title = document.createElement("h4");
+  title.textContent = selectedLanguage === "DE" ? "Dokumente" : "Documents";
+  const list = document.createElement("ul");
+  for (const reference of uniqueDocuments) {
+    const item = document.createElement("li");
+    const documentTitle = document.createElement("span");
+    documentTitle.className = "document-title";
+    documentTitle.textContent = reference.title;
+    const open = createDocumentAction(
+      selectedLanguage === "DE" ? "Öffnen" : "Open",
+      () => openDocument(reference.document_id, userClearance.value),
+    );
+    const download = createDocumentAction(
+      selectedLanguage === "DE" ? "Herunterladen" : "Download",
+      () => downloadDocument(reference.document_id, userClearance.value),
+    );
+    item.append(documentTitle, open, download);
+    list.append(item);
+  }
+  section.append(title, list);
+  return section;
+}
+
+function createDocumentAction(label, action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "reference-action document-action";
+  button.textContent = label;
+  button.disabled = isSubmitting;
+  button.addEventListener("click", async () => {
+    if (isSubmitting) return;
+    try {
+      await action();
+    } catch (error) {
+      showError(publicError(error, "The document could not be retrieved."));
+    }
+  });
+  return button;
 }
 
 function identifierActions(reference, language) {

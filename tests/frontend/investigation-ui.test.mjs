@@ -425,8 +425,8 @@ test("renders a single-composer investigation workspace", async (t) => {
     }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: "DE" });
     try {
       await settle();
-      assert.equal(document.querySelectorAll(".identifier-reference").length, 2);
-      const documentReferences = [...document.querySelectorAll(".document-reference")];
+      assert.equal(document.querySelectorAll(".identifier-reference").length, 4);
+      const documentReferences = [...document.querySelectorAll(".document-title")];
       assert.deepEqual(
         documentReferences.map((reference) => reference.textContent),
         ["S04 QUALITY-09 Troubleshooting Procedure", "Quality Inspection Workflow"],
@@ -434,6 +434,10 @@ test("renders a single-composer investigation workspace", async (t) => {
       assert.equal(documentReferences.some((reference) => reference.textContent === "Document"), false);
       assert.equal(document.querySelectorAll(".structured-reference").length, 4);
       assert.equal(document.querySelector(".agent-answer")?.textContent.includes("Untrusted-99"), true);
+      assert.deepEqual(
+        [...document.querySelectorAll(".document-references h4")].map((node) => node.textContent),
+        ["Referenzen", "Dokumente"],
+      );
 
       document.querySelector(".identifier-reference").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
       const investigate = [...document.querySelectorAll(".reference-action")].find((button) => button.textContent === "Untersuchen");
@@ -444,9 +448,66 @@ test("renders a single-composer investigation workspace", async (t) => {
       );
       assert.equal(requests, 0);
 
-      document.querySelector(".document-reference").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-      assert.deepEqual([...document.querySelectorAll(".reference-action")].map((button) => [button.textContent, button.disabled]), [["Open", true], ["Download", true]]);
+      assert.deepEqual(
+        [...document.querySelectorAll(".document-action")].map((button) => [button.textContent, button.disabled]),
+        [["Öffnen", false], ["Herunterladen", false], ["Öffnen", false], ["Herunterladen", false]],
+      );
     } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("uses only the secure API document endpoints for Open and Download", async () => {
+    const referenced = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
+    referenced.turns[0].identifiers = [{ value: "QUALITY-09", type: "error_code" }];
+    referenced.turns[0].documents = [
+      {
+        document_id: "DOC-001",
+        title: "S04 QUALITY-09 Troubleshooting Procedure",
+        format: "application/pdf",
+      },
+    ];
+    const documentRequests = [];
+    const { document, window, restoreFetch } = await loadApp((url) => {
+      if (String(url).includes("/api/v1/documents/")) {
+        documentRequests.push(String(url));
+        return new Response("authorized document", {
+          status: 200,
+          headers: {
+            "Content-Type": "text/markdown",
+            "Content-Disposition": 'attachment; filename="Quality-Procedure.md"',
+          },
+        });
+      }
+      return jsonResponse(referenced);
+    }, { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    const originalClick = window.HTMLAnchorElement.prototype.click;
+    try {
+      URL.createObjectURL = () => "blob:authorized-document";
+      URL.revokeObjectURL = () => {};
+      window.open = () => null;
+      window.HTMLAnchorElement.prototype.click = () => {};
+      await settle();
+
+      const actions = [...document.querySelectorAll(".document-action")];
+      assert.deepEqual(actions.map((button) => button.textContent), ["Open", "Download"]);
+      actions[0].click();
+      await settle();
+      actions[1].click();
+      await settle();
+
+      assert.deepEqual(documentRequests, [
+        "http://localhost:8000/api/v1/documents/DOC-001?user_clearance=CONFIDENTIAL",
+        "http://localhost:8000/api/v1/documents/DOC-001/download?user_clearance=CONFIDENTIAL",
+      ]);
+      assert.equal(document.querySelector("#composer-message")?.value, "Investigate P4711 at S04.");
+      assert.equal(document.querySelector("#error-message")?.hidden, true);
+    } finally {
+      URL.createObjectURL = originalCreateObjectUrl;
+      URL.revokeObjectURL = originalRevokeObjectUrl;
+      window.HTMLAnchorElement.prototype.click = originalClick;
       restoreFetch();
     }
   });
@@ -465,7 +526,7 @@ test("keeps a full-width workspace and responsive toolbar contract in CSS", asyn
 
 async function loadApp(fetchImplementation = null, activeInvestigation = null) {
   const dom = new JSDOM(`<!doctype html><html><body>
-    <section class="result-panel"><h2 id="result-title"></h2><p id="investigation-context"></p><div class="toolbar-controls"><label class="clearance-control"><select id="user-clearance"><option value="PUBLIC">PUBLIC</option><option value="INTERNAL">INTERNAL</option><option value="RESTRICTED" selected>RESTRICTED</option></select></label><label class="clearance-control"><select id="response-language"><option value="DE">Deutsch</option><option value="EN" selected>English</option></select></label><span id="run-status" hidden></span><button id="export-pdf-button" type="button"></button><button id="new-investigation-button" type="button"></button></div><dl id="investigation-metadata"><dd id="investigation-runs"></dd><dd id="investigation-tools"></dd></dl><div id="conversation-history"></div><form id="composer-form"><textarea id="composer-message">Investigate P4711 at S04.</textarea><button id="composer-button" type="submit">Send</button></form><p id="error-message" hidden></p></section>
+    <section class="result-panel"><h2 id="result-title"></h2><p id="investigation-context"></p><div class="toolbar-controls"><label class="clearance-control"><select id="user-clearance"><option value="PUBLIC">PUBLIC</option><option value="INTERNAL">INTERNAL</option><option value="CONFIDENTIAL">CONFIDENTIAL</option><option value="RESTRICTED" selected>RESTRICTED</option></select></label><label class="clearance-control"><select id="response-language"><option value="DE">Deutsch</option><option value="EN" selected>English</option></select></label><span id="run-status" hidden></span><button id="export-pdf-button" type="button"></button><button id="new-investigation-button" type="button"></button></div><dl id="investigation-metadata"><dd id="investigation-runs"></dd><dd id="investigation-tools"></dd></dl><div id="conversation-history"></div><form id="composer-form"><textarea id="composer-message">Investigate P4711 at S04.</textarea><button id="composer-button" type="submit">Send</button></form><p id="error-message" hidden></p></section>
   </body></html>`, { url: "http://localhost:8080" });
   const originalFetch = globalThis.fetch;
   Object.assign(globalThis, { document: dom.window.document, window: dom.window });

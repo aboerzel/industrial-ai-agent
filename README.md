@@ -244,6 +244,22 @@ Docker Desktop must be running. For normal subsequent starts, use `docker compos
 after source or image changes, use `docker compose up --build -d`. Stop the demo with
 `docker compose down`.
 
+### Document Storage
+
+Runtime factory data and document content are infrastructure storage, not application-image
+content. The local demo bind-mounts `${FACTORY_DATA_HOST_PATH:-./demo_factory}/metadata`
+read-only at `/app/data/factory/metadata` and
+`${DOCUMENT_HOST_PATH:-./demo_factory/documents}` plus
+`${FACTORY_IMAGE_HOST_PATH:-./demo_factory/images}` read-only below
+`/app/data/document-content`.
+`${KNOWLEDGE_HOST_PATH:-./knowledge_base}` is mounted read-only at `/app/data/knowledge`.
+The Factory MCP consumes `FACTORY_DATA_ROOT`; the Agent API and document retrieval consume
+`DOCUMENT_ROOT`; the knowledge fallback consumes `KNOWLEDGE_ROOT`. For production, an
+organization-managed SMB/NFS share or platform volume is mounted by the host or deployment
+platform at the same container roots. The application does not mount shares or handle their
+credentials. Catalog metadata maps a document ID to a safe relative path server-side after
+authorization; browsers receive no storage path or URL.
+
 Compose serves the local browser demo at `http://localhost:8080`, the FastAPI contract is
 at `http://localhost:8000/docs`, Grafana is at `http://localhost:3000`, and Langfuse is at
 `http://localhost:3001`.

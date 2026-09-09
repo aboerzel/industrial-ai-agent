@@ -24,9 +24,8 @@ from industrial_ai_agent.infrastructure.persistence.models import (
     StationRecord,
 )
 
-DEMO_FACTORY_ROOT = Path(
-    os.getenv("DEMO_FACTORY_ROOT", str(Path.cwd() / "demo_factory"))
-)
+DEFAULT_FACTORY_DATA_ROOT = Path("/app/data/factory")
+FACTORY_DATA_ROOT = Path(os.getenv("FACTORY_DATA_ROOT", str(DEFAULT_FACTORY_DATA_ROOT)))
 FACTORY_ID = "00000000-0000-0000-0000-000000000001"
 STATIONS = {
     "S01": "00000000-0000-0000-0000-000000000101",
@@ -278,11 +277,13 @@ def _seed_operational_records(session: Session) -> None:
 
 
 def _seed_document_catalog(session: Session) -> None:
-    catalog = json.loads(
-        (DEMO_FACTORY_ROOT / "metadata" / "document_catalog.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    catalog_path = FACTORY_DATA_ROOT / "metadata" / "document_catalog.json"
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            "FACTORY_DATA_ROOT does not provide document catalog metadata"
+        ) from error
     for document in catalog:
         session.merge(
             DocumentCatalogRecord(

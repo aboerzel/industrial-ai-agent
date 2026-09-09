@@ -461,6 +461,7 @@ class LangGraphTroubleshootingAgent:
                 state["executed_tool_calls"],
                 final_output.investigation_steps,
                 ResponseLanguage(state["response_language"]),
+                _tool_observation_contents(state),
             )
             identifiers, documents = _derive_structured_references(state)
             return {
@@ -683,7 +684,10 @@ class LangGraphTroubleshootingAgent:
         _require_pending_action(state)
         response_language = ResponseLanguage(state["response_language"])
         investigation_steps = _resolve_investigation_steps(
-            state["executed_tool_calls"], (), response_language
+            state["executed_tool_calls"],
+            (),
+            response_language,
+            _tool_observation_contents(state),
         )
         identifiers, documents = _derive_structured_references(state)
         return {
@@ -957,6 +961,17 @@ def _authorized_tool_observations(
     return tuple(observations)
 
 
+def _tool_observation_contents(
+    state: CheckpointedTroubleshootingGraphState,
+) -> tuple[str, ...]:
+    """Return only the current run's already-authorized tool observations."""
+    return tuple(
+        str(message.content)
+        for message in state["messages"]
+        if isinstance(message, ToolMessage)
+    )
+
+
 _STATION_IDENTIFIER_PATTERN = re.compile(r"\bS\d{2,3}\b", re.IGNORECASE)
 _PRODUCT_IDENTIFIER_PATTERN = re.compile(r"\bP\d{4}\b", re.IGNORECASE)
 _MAINTENANCE_TICKET_PATTERN = re.compile(r"\bMT-[A-F0-9]{10}\b", re.IGNORECASE)
@@ -977,12 +992,10 @@ def _derive_structured_references(
     be published when it was present in the submitted request, canonical tool
     arguments, or an observation returned by an already-authorized tool call.
     """
-    evidence: list[str] = []
-    evidence.extend(
-        str(message.content)
-        for message in state["messages"]
-        if isinstance(message, HumanMessage)
-    )
+    identifiers: list[IdentifierReference] = []
+    for message in state["messages"]:
+        if isinstance(message, HumanMessage):
+            _append_request_identifiers(identifiers, str(message.content))
     tool_messages = [
         message for message in state["messages"] if isinstance(message, ToolMessage)
     ]
@@ -990,47 +1003,145 @@ def _derive_structured_references(
     for index, call in enumerate(state["executed_tool_calls"]):
         arguments = call.get("arguments")
         if isinstance(arguments, dict):
-            evidence.extend(_string_values(arguments))
+            _append_argument_identifiers(identifiers, arguments)
         if index >= len(tool_messages):
             continue
         observation = str(tool_messages[index].content)
-        evidence.append(observation)
+        _append_observation_identifiers(
+            identifiers, str(call.get("tool", "")), observation
+        )
         if call.get("tool") == "search_documentation":
             documents.extend(_document_references_from_observation(observation))
 
-    identifiers = _identifier_references_from_evidence(evidence)
-    return identifiers, _deduplicate_document_references(documents)
+    return _deduplicate_identifier_references(
+        identifiers
+    ), _deduplicate_document_references(documents)
 
 
-def _identifier_references_from_evidence(
-    evidence: list[str],
-) -> tuple[IdentifierReference, ...]:
-    found: list[IdentifierReference] = []
-    for value in evidence:
-        matches = sorted(
-            (
-                (match.start(), reference_type, match.group(0).upper())
-                for pattern, reference_type in (
-                    (_MAINTENANCE_TICKET_PATTERN, IdentifierType.MAINTENANCE_TICKET),
-                    (_STATION_IDENTIFIER_PATTERN, IdentifierType.STATION),
-                    (_PRODUCT_IDENTIFIER_PATTERN, IdentifierType.PRODUCT),
-                    (_ERROR_CODE_PATTERN, IdentifierType.ERROR_CODE),
-                )
-                for match in pattern.finditer(value)
-            ),
-            key=lambda item: item[0],
+def _append_request_identifiers(
+    references: list[IdentifierReference], request: str
+) -> None:
+    """Requests can supply stable station, product, and ticket identities only."""
+    _append_pattern_references(
+        references,
+        request,
+        (
+            (_MAINTENANCE_TICKET_PATTERN, IdentifierType.MAINTENANCE_TICKET),
+            (_STATION_IDENTIFIER_PATTERN, IdentifierType.STATION),
+            (_PRODUCT_IDENTIFIER_PATTERN, IdentifierType.PRODUCT),
+            (_ERROR_CODE_PATTERN, IdentifierType.ERROR_CODE),
+        ),
+    )
+
+
+def _append_argument_identifiers(
+    references: list[IdentifierReference], arguments: dict[object, object]
+) -> None:
+    """Use the typed tool-contract field names rather than arbitrary argument text."""
+    field_types = {
+        "station_id": IdentifierType.STATION,
+        "product_id": IdentifierType.PRODUCT,
+        "ticket_id": IdentifierType.MAINTENANCE_TICKET,
+        "maintenance_ticket_id": IdentifierType.MAINTENANCE_TICKET,
+        "error_code": IdentifierType.ERROR_CODE,
+    }
+    for field, reference_type in field_types.items():
+        value = arguments.get(field)
+        if isinstance(value, str):
+            _append_identifier(references, value, reference_type)
+
+
+def _append_observation_identifiers(
+    references: list[IdentifierReference], action: str, observation: str
+) -> None:
+    """Read identifiers only from documented domain fields of one tool response."""
+    try:
+        payload = json.loads(observation)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(payload, dict):
+        return
+    if action == "get_machine_status":
+        _append_identifier(
+            references, payload.get("station_id"), IdentifierType.STATION
         )
-        for _, reference_type, normalized in matches:
-            if reference_type is IdentifierType.ERROR_CODE and normalized.startswith(
-                "MT-"
-            ):
-                continue
-            reference = IdentifierReference(value=normalized, type=reference_type)
-            if reference not in found:
-                found.append(reference)
-            if len(found) == 12:
-                return tuple(found)
-    return tuple(found)
+        _append_identifier(
+            references, payload.get("active_error_code"), IdentifierType.ERROR_CODE
+        )
+    elif action == "get_product_history":
+        _append_identifier(
+            references, payload.get("product_id"), IdentifierType.PRODUCT
+        )
+        steps = payload.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                _append_identifier(
+                    references, step.get("station_id"), IdentifierType.STATION
+                )
+                _append_identifier(
+                    references, step.get("error_code"), IdentifierType.ERROR_CODE
+                )
+    elif action == "get_maintenance_ticket":
+        _append_identifier(
+            references,
+            payload.get("ticket_id") or payload.get("ticket_code"),
+            IdentifierType.MAINTENANCE_TICKET,
+        )
+        _append_identifier(
+            references, payload.get("station_id"), IdentifierType.STATION
+        )
+
+
+def _append_pattern_references(
+    references: list[IdentifierReference],
+    value: str,
+    patterns: tuple[tuple[re.Pattern[str], IdentifierType], ...],
+) -> None:
+    matches = sorted(
+        (
+            (match.start(), match.group(0), reference_type)
+            for pattern, reference_type in patterns
+            for match in pattern.finditer(value)
+        ),
+        key=lambda item: item[0],
+    )
+    for _, matched_value, reference_type in matches:
+        if (
+            reference_type is IdentifierType.ERROR_CODE
+            and matched_value.upper().startswith("MT-")
+        ):
+            continue
+        _append_identifier(references, matched_value, reference_type)
+
+
+def _append_identifier(
+    references: list[IdentifierReference], value: object, reference_type: IdentifierType
+) -> None:
+    if not isinstance(value, str):
+        return
+    normalized = value.strip().upper()
+    if not normalized:
+        return
+    try:
+        reference = IdentifierReference(value=normalized, type=reference_type)
+    except ValidationError:
+        return
+    references.append(reference)
+
+
+def _deduplicate_identifier_references(
+    references: list[IdentifierReference],
+) -> tuple[IdentifierReference, ...]:
+    unique: list[IdentifierReference] = []
+    for reference in references:
+        if reference in unique:
+            continue
+        unique.append(reference)
+        if len(unique) == 12:
+            break
+    return tuple(unique)
 
 
 def _document_references_from_observation(observation: str) -> list[DocumentReference]:
@@ -1108,16 +1219,6 @@ def _deduplicate_document_references(
     return tuple(unique)
 
 
-def _string_values(value: object) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [item for child in value.values() for item in _string_values(child)]
-    if isinstance(value, (list, tuple)):
-        return [item for child in value for item in _string_values(child)]
-    return []
-
-
 def _serialized_tool_observation(result: object) -> str:
     """Keep structured MCP result shape available to the deterministic final projection."""
     if isinstance(result, (dict, list, tuple)):
@@ -1129,8 +1230,9 @@ def _resolve_investigation_steps(
     executed_tool_calls: tuple[dict[str, object], ...],
     proposed_steps: tuple[InvestigationStep, ...],
     response_language: ResponseLanguage,
+    observations: tuple[str, ...] = (),
 ) -> tuple[InvestigationStep, ...]:
-    """Publish model findings only when their system-derived trajectory matches."""
+    """Publish system-derived trajectory and bounded findings from each observation."""
     expected_actions: tuple[str, ...] = tuple(
         call["tool"]
         for call in executed_tool_calls
@@ -1139,19 +1241,150 @@ def _resolve_investigation_steps(
     if len(expected_actions) != len(executed_tool_calls):
         raise FinalAgentOutputContractError("Executed tool trajectory is invalid")
     expected_steps = tuple(range(1, len(expected_actions) + 1))
-    if (
+    has_matching_trajectory = (
         len(proposed_steps) == len(expected_actions)
         and tuple(step.step for step in proposed_steps) == expected_steps
         and tuple(step.action for step in proposed_steps) == expected_actions
-    ):
-        return proposed_steps
+    )
     return tuple(
         InvestigationStep(
             step=index,
             action=action,
-            finding=_fallback_investigation_finding(action, response_language),
+            finding=(
+                _finding_from_authorized_observation(
+                    action,
+                    observations[index - 1] if index <= len(observations) else None,
+                    response_language,
+                )
+                or (
+                    proposed_steps[index - 1].finding
+                    if has_matching_trajectory
+                    else None
+                )
+                or _fallback_investigation_finding(action, response_language)
+            ),
         )
         for index, action in enumerate(expected_actions, start=1)
+    )
+
+
+def _finding_from_authorized_observation(
+    action: str,
+    observation: str | None,
+    response_language: ResponseLanguage,
+) -> str | None:
+    """Derive a concise finding from one tool result without exposing its payload."""
+    if observation is None:
+        return None
+    try:
+        payload = json.loads(observation)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if action == "get_machine_status":
+        return _machine_status_finding(payload, response_language)
+    if action == "search_documentation":
+        return _documentation_search_finding(payload, response_language)
+    if action == "get_product_history":
+        return _product_history_finding(payload, response_language)
+    return None
+
+
+def _machine_status_finding(
+    payload: dict[object, object], response_language: ResponseLanguage
+) -> str | None:
+    station_id = payload.get("station_id")
+    found = payload.get("found")
+    if not isinstance(station_id, str) or not isinstance(found, bool):
+        return None
+    if not found:
+        return (
+            f"Station {station_id} wurde nicht gefunden."
+            if response_language is ResponseLanguage.DE
+            else f"Station {station_id} was not found."
+        )
+    state = payload.get("state")
+    error_code = payload.get("active_error_code")
+    if not isinstance(state, str) or not state:
+        return None
+    if isinstance(error_code, str) and error_code:
+        return (
+            f"Station {station_id} ist {state} mit aktivem Fehler {error_code}."
+            if response_language is ResponseLanguage.DE
+            else f"Station {station_id} is {state} with active error {error_code}."
+        )
+    return (
+        f"Station {station_id} ist {state}."
+        if response_language is ResponseLanguage.DE
+        else f"Station {station_id} is {state}."
+    )
+
+
+def _documentation_search_finding(
+    payload: dict[object, object], response_language: ResponseLanguage
+) -> str | None:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return None
+    if not results:
+        return (
+            "Die Dokumentationssuche lieferte keine autorisierten Treffer."
+            if response_language is ResponseLanguage.DE
+            else "Documentation search returned no authorized matches."
+        )
+    first = results[0]
+    if not isinstance(first, dict):
+        return None
+    metadata = first.get("metadata")
+    title = metadata.get("document_title") if isinstance(metadata, dict) else None
+    if not isinstance(title, str) or not title.strip():
+        return None
+    normalized_title = title.strip()[:256]
+    return (
+        f"Die Dokumentationssuche lieferte {normalized_title}."
+        if response_language is ResponseLanguage.DE
+        else f"Documentation search returned {normalized_title}."
+    )
+
+
+def _product_history_finding(
+    payload: dict[object, object], response_language: ResponseLanguage
+) -> str | None:
+    product_id = payload.get("product_id")
+    found = payload.get("found")
+    steps = payload.get("steps")
+    if not isinstance(product_id, str) or not isinstance(found, bool):
+        return None
+    if not found:
+        return (
+            f"Produkt {product_id} wurde nicht gefunden."
+            if response_language is ResponseLanguage.DE
+            else f"Product {product_id} was not found."
+        )
+    if not isinstance(steps, list):
+        return None
+    for step in reversed(steps):
+        if not isinstance(step, dict) or step.get("status") != "FAILED":
+            continue
+        station_id = step.get("station_id")
+        error_code = step.get("error_code")
+        if isinstance(station_id, str) and isinstance(error_code, str) and error_code:
+            return (
+                f"Produkt {product_id} ist an {station_id} mit Fehler {error_code} fehlgeschlagen."
+                if response_language is ResponseLanguage.DE
+                else f"Product {product_id} failed at {station_id} with error {error_code}."
+            )
+        if isinstance(station_id, str):
+            return (
+                f"Produkt {product_id} ist an {station_id} fehlgeschlagen."
+                if response_language is ResponseLanguage.DE
+                else f"Product {product_id} failed at {station_id}."
+            )
+    return (
+        f"Für Produkt {product_id} wurden {len(steps)} Produktionsschritte gefunden."
+        if response_language is ResponseLanguage.DE
+        else f"Product {product_id} has {len(steps)} recorded production steps."
     )
 
 

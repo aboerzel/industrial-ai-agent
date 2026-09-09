@@ -32,11 +32,14 @@ services:
       MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN: ${MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN:?Set MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN in .env}
       MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN: ${MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN:?Set MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN in .env}
       MCP_CODEX_DEVELOPMENT_TOKEN: ${MCP_CODEX_DEVELOPMENT_TOKEN:?Set MCP_CODEX_DEVELOPMENT_TOKEN in .env}
+      FACTORY_DATA_ROOT: /app/data/factory
       OTEL_ENABLED: "true"
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       OTEL_SERVICE_NAME: factory-mcp
     ports:
       - "127.0.0.1:8001:8001"
+    volumes:
+      - ${FACTORY_DATA_HOST_PATH:-./demo_factory}/metadata:/app/data/factory/metadata:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 2).close()"]
       interval: 10s
@@ -59,7 +62,8 @@ services:
       # query, embedding, reranking input, or MCP result is sent to that service.
       KNOWLEDGE_MCP_RERANKER_LOCAL_FILES_ONLY: "false"
       KNOWLEDGE_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
-      KNOWLEDGE_MCP_DEMO_FACTORY_ROOT: /app/demo_factory
+      DOCUMENT_ROOT: /app/data/document-content
+      KNOWLEDGE_ROOT: /app/data/knowledge
       MCP_INDUSTRIAL_AGENT_TOKEN: ${MCP_INDUSTRIAL_AGENT_TOKEN:?Set MCP_INDUSTRIAL_AGENT_TOKEN in .env}
       MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN: ${MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN:?Set MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN in .env}
       MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN: ${MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN:?Set MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN in .env}
@@ -74,6 +78,9 @@ services:
       - "127.0.0.1:8002:8002"
     volumes:
       - hf-cache:/home/app/.cache/huggingface
+      - ${DOCUMENT_HOST_PATH:-./demo_factory/documents}:/app/data/document-content/documents:ro
+      - ${FACTORY_IMAGE_HOST_PATH:-./demo_factory/images}:/app/data/document-content/images:ro
+      - ${KNOWLEDGE_HOST_PATH:-./knowledge_base}:/app/data/knowledge:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8002), 2).close()"]
       interval: 10s
@@ -110,8 +117,12 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?Set LANGFUSE_PUBLIC_KEY in .env}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?Set LANGFUSE_SECRET_KEY in .env}
       LANGFUSE_ENVIRONMENT: local
+      DOCUMENT_ROOT: /app/data/document-content
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - ${DOCUMENT_HOST_PATH:-./demo_factory/documents}:/app/data/document-content/documents:ro
+      - ${FACTORY_IMAGE_HOST_PATH:-./demo_factory/images}:/app/data/document-content/images:ro
     depends_on:
       factory-mcp:
         condition: service_healthy

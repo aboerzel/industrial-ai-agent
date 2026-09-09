@@ -2,12 +2,16 @@
 
 import re
 from io import BytesIO
+from pathlib import Path
 from xml.sax.saxutils import escape
 
+import reportlab
 from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     HRFlowable,
     Paragraph,
@@ -20,9 +24,36 @@ from reportlab.platypus import (
 
 from industrial_ai_agent.infrastructure.api.schemas import InvestigationResponse
 
+_PDF_FONT_FAMILY = "IndustrialPdfVera"
+
+
+def _register_pdf_fonts() -> tuple[str, str]:
+    """Use ReportLab's bundled Unicode fonts instead of lossy Type-1 encodings."""
+    if _PDF_FONT_FAMILY not in pdfmetrics.getRegisteredFontNames():
+        font_directory = Path(reportlab.__file__).resolve().parent / "fonts"
+        pdfmetrics.registerFont(TTFont(_PDF_FONT_FAMILY, font_directory / "Vera.ttf"))
+        pdfmetrics.registerFont(
+            TTFont(f"{_PDF_FONT_FAMILY}-Bold", font_directory / "VeraBd.ttf")
+        )
+        pdfmetrics.registerFont(
+            TTFont(f"{_PDF_FONT_FAMILY}-Italic", font_directory / "VeraIt.ttf")
+        )
+        pdfmetrics.registerFont(
+            TTFont(f"{_PDF_FONT_FAMILY}-BoldItalic", font_directory / "VeraBI.ttf")
+        )
+        pdfmetrics.registerFontFamily(
+            _PDF_FONT_FAMILY,
+            normal=_PDF_FONT_FAMILY,
+            bold=f"{_PDF_FONT_FAMILY}-Bold",
+            italic=f"{_PDF_FONT_FAMILY}-Italic",
+            boldItalic=f"{_PDF_FONT_FAMILY}-BoldItalic",
+        )
+    return _PDF_FONT_FAMILY, _PDF_FONT_FAMILY
+
 
 def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
     """Render only the public history projection supplied by the API route."""
+    body_font, code_font = _register_pdf_fonts()
     buffer = BytesIO()
     document = SimpleDocTemplate(
         buffer,
@@ -36,6 +67,9 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
         author="Industrial AI Agent",
     )
     styles = getSampleStyleSheet()
+    for style in styles.byName.values():
+        style.fontName = body_font
+    styles["Code"].fontName = code_font
     title = ParagraphStyle(
         "InvestigationTitle", parent=styles["Title"], textColor=HexColor("#176b4b")
     )
@@ -62,10 +96,10 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
             [
                 Paragraph(f"Turn {turn.sequence}", heading),
                 Paragraph("User", label),
-                *_markdown_flowables(turn.request, styles),
+                *_markdown_flowables(turn.request, styles, code_font),
                 Paragraph("Agent", label),
                 *_markdown_flowables(
-                    turn.answer or "No final answer recorded.", styles
+                    turn.answer or "No final answer recorded.", styles, code_font
                 ),
             ]
         )
@@ -86,7 +120,7 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
                     [
                         Paragraph(str(step.step), text),
                         Paragraph(escape(step.action.value), text),
-                        Paragraph(_inline_markup(step.finding), text),
+                        Paragraph(_inline_markup(step.finding, code_font), text),
                     ]
                     for step in turn.investigation_steps
                 ],
@@ -115,7 +149,7 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
             )
             story.append(Paragraph(next_steps_label, label))
             story.extend(
-                Paragraph(_inline_markup(step), text, bulletText="•")
+                Paragraph(_inline_markup(step, code_font), text, bulletText="•")
                 for step in turn.next_steps
             )
         if turn.identifiers or turn.documents:
@@ -124,12 +158,16 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
             )
             story.append(Paragraph(references_label, label))
             story.extend(
-                Paragraph(_inline_markup(reference.value), text, bulletText="•")
+                Paragraph(
+                    _inline_markup(reference.value, code_font), text, bulletText="•"
+                )
                 for reference in turn.identifiers
             )
             story.extend(
                 Paragraph(
-                    _inline_markup(f"{reference.title} ({reference.document_id})"),
+                    _inline_markup(
+                        f"{reference.title} ({reference.document_id})", code_font
+                    ),
                     text,
                     bulletText="•",
                 )
@@ -165,7 +203,9 @@ _UNORDERED_LIST_PATTERN = re.compile(r"^\s*[-*+]\s+(.+)$")
 _ORDERED_LIST_PATTERN = re.compile(r"^\s*(\d+)\.\s+(.+)$")
 
 
-def _markdown_flowables(value: str, styles: dict[str, ParagraphStyle]) -> list[object]:
+def _markdown_flowables(
+    value: str, styles: dict[str, ParagraphStyle], code_font: str
+) -> list[object]:
     """Render the supported Markdown subset without admitting model-provided HTML."""
     story: list[object] = []
     lines = value.splitlines() or [""]
@@ -194,7 +234,10 @@ def _markdown_flowables(value: str, styles: dict[str, ParagraphStyle]) -> list[o
         if heading:
             depth = min(len(heading.group(1)) + 1, 4)
             story.append(
-                Paragraph(_inline_markup(heading.group(2)), styles[f"Heading{depth}"])
+                Paragraph(
+                    _inline_markup(heading.group(2), code_font),
+                    styles[f"Heading{depth}"],
+                )
             )
             index += 1
             continue
@@ -203,7 +246,7 @@ def _markdown_flowables(value: str, styles: dict[str, ParagraphStyle]) -> list[o
             while index < len(lines) and "|" in lines[index] and lines[index].strip():
                 table_lines.append(lines[index])
                 index += 1
-            story.append(_markdown_table(table_lines, body))
+            story.append(_markdown_table(table_lines, body, code_font))
             story.append(Spacer(1, 2 * mm))
             continue
         unordered = _UNORDERED_LIST_PATTERN.match(line)
@@ -220,7 +263,9 @@ def _markdown_flowables(value: str, styles: dict[str, ParagraphStyle]) -> list[o
                     "•" if item.re is _UNORDERED_LIST_PATTERN else f"{item.group(1)}."
                 )
                 story.append(
-                    Paragraph(_inline_markup(text_value), body, bulletText=bullet)
+                    Paragraph(
+                        _inline_markup(text_value, code_font), body, bulletText=bullet
+                    )
                 )
                 index += 1
             continue
@@ -239,7 +284,10 @@ def _markdown_flowables(value: str, styles: dict[str, ParagraphStyle]) -> list[o
         if paragraph_lines:
             story.append(
                 Paragraph(
-                    "<br/>".join(_inline_markup(item) for item in paragraph_lines), body
+                    "<br/>".join(
+                        _inline_markup(item, code_font) for item in paragraph_lines
+                    ),
+                    body,
                 )
             )
         else:
@@ -255,10 +303,13 @@ def _is_markdown_table(lines: list[str], index: int) -> bool:
     )
 
 
-def _markdown_table(lines: list[str], style: ParagraphStyle) -> Table:
+def _markdown_table(lines: list[str], style: ParagraphStyle, code_font: str) -> Table:
     rows = [_split_table_row(line) for line in lines if not _is_table_separator(line)]
     table = Table(
-        [[Paragraph(_inline_markup(cell), style) for cell in row] for row in rows],
+        [
+            [Paragraph(_inline_markup(cell, code_font), style) for cell in row]
+            for row in rows
+        ],
         repeatRows=1,
     )
     table.setStyle(
@@ -285,9 +336,11 @@ def _split_table_row(line: str) -> list[str]:
     return [cell.strip() for cell in line.strip().strip("|").split("|")]
 
 
-def _inline_markup(value: str) -> str:
+def _inline_markup(value: str, code_font: str = _PDF_FONT_FAMILY) -> str:
     escaped = escape(value)
-    escaped = re.sub(r"`([^`]+)`", r'<font face="Courier">\1</font>', escaped)
+    # The enclosing Unicode font preserves technical characters; inline code remains
+    # semantically separated from Markdown without switching back to a Type-1 font.
+    escaped = re.sub(r"`([^`]+)`", r"\1", escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*|__([^_]+)__", r"<b>\1\2</b>", escaped)
     return re.sub(
         r"(?<!\*)\*([^*]+)\*(?!\*)|(?<!_)_([^_]+)_(?!_)", r"<i>\1\2</i>", escaped

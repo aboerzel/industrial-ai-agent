@@ -11,7 +11,6 @@ COPY pyproject.toml ./
 COPY src ./src
 COPY alembic.ini ./
 COPY migrations ./migrations
-COPY demo_factory ./demo_factory
 COPY database/entrypoints/factory-mcp-start.sh /usr/local/bin/factory-mcp-start
 
 # The container exposes only factory_mcp, so it avoids optional retrieval and LLM runtimes.

@@ -790,6 +790,20 @@ for example `Dockerfile.factory-mcp`, `Dockerfile.knowledge-mcp`,
 `Dockerfile.vision-mcp`, or `Dockerfile.agent-api`. Third-party service images do not
 require a project Dockerfile unless the project actually builds a custom image for them.
 
+## Runtime Data and Environment Configuration
+
+Environment configuration invariant:
+
+* `.env` and `.env.example` must remain structurally synchronized: supported keys occur once in both files, in the same section and order, unless an exception is explicitly documented.
+* `.env.example` contains placeholders only for passwords, keys, tokens, and other secrets; never copy local secret values.
+* Adding, renaming, or removing an environment variable requires updating both files plus the consuming Compose/configuration/documentation in the same change.
+
+Runtime data invariant:
+
+* `demo_factory`, `knowledge_base`, document repositories, indexes, and runtime factory/catalog data must not be baked into application Docker images.
+* Containers consume configured external, preferably read-only mounts; the backing storage may be a local folder, mounted share, or platform volume.
+* Application code remains storage-backend agnostic and never mounts SMB/NFS shares or manages their credentials.
+
 ## Frontend Boundary
 
 Frontend code must remain isolated from the Python backend and may communicate with the

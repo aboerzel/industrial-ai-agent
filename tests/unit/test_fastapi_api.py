@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from industrial_ai_agent.agent.agent_run import (
     AgentRunResult,
     AgentRunStatus,
+    DocumentReference,
     ExecutedToolCall,
     InvestigationStep,
 )
@@ -25,6 +26,7 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpServiceUnavailableError,
     confidential_troubleshooting_requirements,
 )
+from industrial_ai_agent.application.document_content import AuthorizedDocumentContent
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.app import create_app as _create_app
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
@@ -85,16 +87,38 @@ class FakeRunService:
         return self._result
 
 
+class FakeDocumentContentReader:
+    def __init__(self) -> None:
+        self.contexts = []
+        self.available = True
+
+    def get_document(self, document_id: str, security_context):
+        self.contexts.append((document_id, security_context))
+        if (
+            document_id != "doc-quality-procedure"
+            or not self.available
+            or security_context.clearance < DataClassification.CONFIDENTIAL
+        ):
+            return None
+        return AuthorizedDocumentContent(
+            content=b"authorized document bytes",
+            media_type="text/markdown",
+            filename="S04-QUALITY-09-Troubleshooting-Procedure.md",
+        )
+
+
 def create_app(
     run_service: FakeRunService,
     *,
     allowed_origins: tuple[str, ...] = (),
+    document_content_reader: FakeDocumentContentReader | None = None,
 ):
     """Keep the in-memory adapter explicit and isolated to API unit tests."""
     return _create_app(
         run_service,
         run_store=InMemoryAgentRunStore(),
         allowed_origins=allowed_origins,
+        document_content_reader=document_content_reader,
     )
 
 
@@ -347,14 +371,19 @@ def test_pdf_renders_supported_markdown_and_structured_references_without_raw_sy
         identifiers=({"value": "QUALITY-09", "type": "error_code"},),
         documents=(
             {
-                "document_id": "quality-procedure",
+                "document_id": "doc-quality-procedure",
                 "title": "Quality Procedure",
                 "format": "markdown",
             },
         ),
         tool_call_count=0,
     )
-    client = TestClient(create_app(FakeRunService(result=result)))
+    client = TestClient(
+        create_app(
+            FakeRunService(result=result),
+            document_content_reader=FakeDocumentContentReader(),
+        )
+    )
     run = client.post(
         "/api/v1/runs",
         json={"message": "Investigate QUALITY-09.", "user_clearance": "CONFIDENTIAL"},
@@ -374,7 +403,7 @@ def test_pdf_renders_supported_markdown_and_structured_references_without_raw_sy
     ]
     assert history.json()["turns"][0]["documents"] == [
         {
-            "document_id": "quality-procedure",
+            "document_id": "doc-quality-procedure",
             "title": "Quality Procedure",
             "format": "markdown",
         }
@@ -385,6 +414,134 @@ def test_pdf_renders_supported_markdown_and_structured_references_without_raw_sy
     assert b"### Heading" not in pdf.content
     assert b"**bold**" not in pdf.content
     assert b"| Column |" not in pdf.content
+
+
+def test_pdf_preserves_technical_identifiers_with_hyphen_minus_exactly() -> None:
+    identifiers = (
+        "QUALITY-09",
+        "quality-related",
+        "mis-calibrated",
+        "doc-s04quality09procedure",
+        "POSITION-ENC-02",
+    )
+    result = AgentRunResult(
+        status=AgentRunStatus.SUCCESS,
+        final_answer="\n".join(identifiers),
+        tool_call_count=0,
+    )
+    client = TestClient(create_app(FakeRunService(result=result)))
+    run = client.post(
+        "/api/v1/runs",
+        json={"message": "Inspect QUALITY-09.", "user_clearance": "CONFIDENTIAL"},
+    ).json()
+
+    pdf = client.get(
+        f"/api/v1/investigations/{run['investigation_id']}/pdf?user_clearance=CONFIDENTIAL"
+    )
+
+    assert pdf.status_code == 200
+    for identifier in identifiers:
+        assert identifier.encode() in pdf.content
+
+
+def test_document_open_and_download_reauthorize_each_request_without_storage_leaks() -> (
+    None
+):
+    reader = FakeDocumentContentReader()
+    client = TestClient(
+        create_app(
+            FakeRunService(result=_success_result()), document_content_reader=reader
+        )
+    )
+
+    opened = client.get(
+        "/api/v1/documents/doc-quality-procedure?user_clearance=CONFIDENTIAL"
+    )
+    downloaded = client.get(
+        "/api/v1/documents/doc-quality-procedure/download?user_clearance=CONFIDENTIAL"
+    )
+    lowered_clearance = client.get(
+        "/api/v1/documents/doc-quality-procedure?user_clearance=PUBLIC"
+    )
+    unknown = client.get("/api/v1/documents/unknown?user_clearance=CONFIDENTIAL")
+
+    assert opened.status_code == 200
+    assert opened.headers["content-type"].startswith("text/markdown")
+    assert opened.headers["content-disposition"] == (
+        'inline; filename="S04-QUALITY-09-Troubleshooting-Procedure.md"'
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-disposition"] == (
+        'attachment; filename="S04-QUALITY-09-Troubleshooting-Procedure.md"'
+    )
+    assert lowered_clearance.status_code == unknown.status_code == 404
+    assert (
+        lowered_clearance.json()
+        == unknown.json()
+        == {
+            "code": "document_not_available",
+            "message": "The requested document is not available.",
+        }
+    )
+    assert all("demo_factory" not in value for value in opened.headers.values())
+    assert all("http" not in value for value in opened.headers.values())
+    assert [context.clearance for _, context in reader.contexts] == [
+        DataClassification.CONFIDENTIAL,
+        DataClassification.CONFIDENTIAL,
+        DataClassification.PUBLIC,
+        DataClassification.CONFIDENTIAL,
+    ]
+
+
+def test_run_and_history_publish_only_currently_authorized_usable_documents() -> None:
+    reader = FakeDocumentContentReader()
+    result = AgentRunResult(
+        status=AgentRunStatus.SUCCESS,
+        final_answer="Documentation was consulted.",
+        tool_call_count=0,
+        documents=(
+            DocumentReference(
+                document_id="doc-quality-procedure",
+                title="S04 QUALITY-09 Troubleshooting Procedure",
+                format="markdown",
+            ),
+            DocumentReference(
+                document_id="doc-without-content",
+                title="Must not be published",
+                format="pdf",
+            ),
+        ),
+    )
+    client = TestClient(
+        create_app(FakeRunService(result=result), document_content_reader=reader)
+    )
+
+    created = client.post("/api/v1/runs", json=_confidential_request())
+
+    assert created.status_code == 200
+    assert created.json()["documents"] == [
+        {
+            "document_id": "doc-quality-procedure",
+            "title": "S04 QUALITY-09 Troubleshooting Procedure",
+            "format": "markdown",
+        }
+    ]
+    assert "Must not be published" not in created.text
+    investigation_id = created.json()["investigation_id"]
+    history = client.get(
+        f"/api/v1/investigations/{investigation_id}?user_clearance=CONFIDENTIAL"
+    )
+    assert history.status_code == 200
+    assert history.json()["turns"][0]["documents"] == created.json()["documents"]
+
+    # A persisted reference is not a permanent authorization token.
+    reader.available = False
+    reconstructed = client.get(
+        f"/api/v1/investigations/{investigation_id}?user_clearance=CONFIDENTIAL"
+    )
+    assert reconstructed.status_code == 200
+    assert reconstructed.json()["turns"][0]["documents"] == []
+    assert "S04 QUALITY-09 Troubleshooting Procedure" not in reconstructed.text
 
 
 def test_create_run_uses_fastapi_validation_for_invalid_request() -> None:

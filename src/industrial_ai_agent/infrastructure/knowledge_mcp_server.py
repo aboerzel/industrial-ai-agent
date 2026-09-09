@@ -42,9 +42,8 @@ from industrial_ai_agent.tools.tool_contracts import (
 KNOWLEDGE_MCP_SERVER_NAME = "knowledge_mcp"
 KNOWLEDGE_MCP_SERVER_VERSION = "0.1.0"
 KNOWLEDGE_MCP_HTTP_PATH = "/mcp"
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_KNOWLEDGE_BASE_PATH = PROJECT_ROOT / "knowledge_base"
-DEFAULT_DEMO_FACTORY_ROOT = PROJECT_ROOT / "demo_factory"
+DEFAULT_KNOWLEDGE_ROOT = Path("/app/data/knowledge")
+DEFAULT_DOCUMENT_ROOT = Path("/app/data/document-content")
 
 _KNOWLEDGE_TOOL_PERMISSIONS = {"search_documentation": McpPermission.READ_KNOWLEDGE}
 type DocumentationSearchForContext = Callable[
@@ -104,12 +103,12 @@ def create_knowledge_mcp_server(
 
 def create_default_knowledge_mcp_server(
     *,
-    knowledge_base_path: Path = DEFAULT_KNOWLEDGE_BASE_PATH,
+    knowledge_base_path: Path = DEFAULT_KNOWLEDGE_ROOT,
     embedding_base_url: str | None = None,
     reranker_device: str | None = None,
     reranker_local_files_only: bool = True,
     database_url: str | None = None,
-    demo_factory_root: Path = DEFAULT_DEMO_FACTORY_ROOT,
+    document_root: Path = DEFAULT_DOCUMENT_ROOT,
     telemetry: Telemetry | None = None,
 ) -> MCPServer:
     """Assemble the frozen local retrieval pipeline at the server composition root."""
@@ -134,7 +133,7 @@ def create_default_knowledge_mcp_server(
         eligible_catalog = eligible_catalog_documents(
             catalog, DEMO_ENGINEER_SECURITY_CONTEXT
         )
-        ingestor = DoclingDocumentIngestor(demo_factory_root)
+        ingestor = DoclingDocumentIngestor(document_root)
         chunks = tuple(
             chunk
             for document in eligible_catalog
@@ -169,14 +168,14 @@ class ClearanceAwareDocumentationSearchFactory:
         embedding_base_url: str | None,
         reranker_device: str | None,
         reranker_local_files_only: bool,
-        demo_factory_root: Path,
+        document_root: Path,
         telemetry: Telemetry | None = None,
     ) -> None:
         self._database_url = database_url
         self._embedding_base_url = embedding_base_url
         self._reranker_device = reranker_device
         self._reranker_local_files_only = reranker_local_files_only
-        self._demo_factory_root = demo_factory_root
+        self._document_root = document_root
         self._telemetry = telemetry
         self._cache: dict[SecurityContext, DocumentationSearchCapability] = {}
         self._lock = Lock()
@@ -211,7 +210,7 @@ class ClearanceAwareDocumentationSearchFactory:
             PostgreSqlSessionFactory(self._database_url), security_context
         ).list_documents()
         eligible_catalog = eligible_catalog_documents(catalog, security_context)
-        ingestor = DoclingDocumentIngestor(self._demo_factory_root)
+        ingestor = DoclingDocumentIngestor(self._document_root)
         chunks = tuple(
             chunk
             for document in eligible_catalog
@@ -233,7 +232,7 @@ def create_secure_knowledge_mcp_server(
     reranker_device: str | None,
     reranker_local_files_only: bool,
     database_url: str,
-    demo_factory_root: Path,
+    document_root: Path,
     telemetry: Telemetry | None = None,
 ) -> MCPServer:
     """Build the HTTP composition with clearance-isolated retrieval pipelines."""
@@ -242,7 +241,7 @@ def create_secure_knowledge_mcp_server(
         embedding_base_url=embedding_base_url,
         reranker_device=reranker_device,
         reranker_local_files_only=reranker_local_files_only,
-        demo_factory_root=demo_factory_root,
+        document_root=document_root,
         telemetry=telemetry,
     )
     # This fallback is never reached by authenticated HTTP calls. It remains PUBLIC
@@ -278,9 +277,7 @@ def main() -> None:
     args = _parse_args()
     telemetry = _create_knowledge_telemetry() if args.transport != "stdio" else None
     database_url = os.getenv("KNOWLEDGE_DATABASE_URL")
-    demo_factory_root = Path(
-        os.getenv("KNOWLEDGE_MCP_DEMO_FACTORY_ROOT", DEFAULT_DEMO_FACTORY_ROOT)
-    )
+    document_root = Path(os.getenv("DOCUMENT_ROOT", str(DEFAULT_DOCUMENT_ROOT)))
     server = (
         create_default_knowledge_mcp_server(
             knowledge_base_path=args.knowledge_base,
@@ -288,7 +285,7 @@ def main() -> None:
             reranker_device=args.reranker_device,
             reranker_local_files_only=args.reranker_local_files_only,
             database_url=database_url,
-            demo_factory_root=demo_factory_root,
+            document_root=document_root,
             telemetry=telemetry,
         )
         if args.transport == "stdio"
@@ -297,7 +294,7 @@ def main() -> None:
             reranker_device=args.reranker_device,
             reranker_local_files_only=args.reranker_local_files_only,
             database_url=_require_knowledge_database_url(database_url),
-            demo_factory_root=demo_factory_root,
+            document_root=document_root,
             telemetry=telemetry,
         )
     )
@@ -333,9 +330,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--knowledge-base",
         type=Path,
-        default=Path(
-            os.getenv("KNOWLEDGE_MCP_KNOWLEDGE_BASE", DEFAULT_KNOWLEDGE_BASE_PATH)
-        ),
+        default=Path(os.getenv("KNOWLEDGE_ROOT", str(DEFAULT_KNOWLEDGE_ROOT))),
     )
     parser.add_argument(
         "--ollama-base-url",
