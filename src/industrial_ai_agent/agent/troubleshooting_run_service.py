@@ -320,6 +320,8 @@ def _execution_from_state(
             final_answer=values.get("final_answer"),
             investigation_steps=values.get("investigation_steps", ()),
             next_steps=values.get("next_steps", ()),
+            identifiers=values.get("identifiers", ()),
+            documents=values.get("documents", ()),
             tool_call_count=values.get("executed_tool_count", 0),
             executed_tool_calls=values.get("executed_tool_calls", ()),
             model_profile_name=values.get("model_profile_name"),

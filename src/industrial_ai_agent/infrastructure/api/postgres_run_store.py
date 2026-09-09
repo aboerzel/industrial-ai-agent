@@ -94,6 +94,8 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 final_answer=None,
                 investigation_steps=[],
                 next_steps=[],
+                identifiers=[],
+                documents=[],
                 error_code=None,
                 error_message=None,
                 tool_call_summary=[],
@@ -121,6 +123,12 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 step.model_dump() for step in result.investigation_steps
             ]
             record.next_steps = list(result.next_steps)
+            record.identifiers = [
+                reference.model_dump() for reference in result.identifiers
+            ]
+            record.documents = [
+                reference.model_dump() for reference in result.documents
+            ]
             record.tool_call_summary = [
                 call.model_dump() for call in result.executed_tool_calls
             ]
@@ -306,6 +314,8 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
                 "final_answer": record.final_answer,
                 "investigation_steps": record.investigation_steps,
                 "next_steps": record.next_steps,
+                "identifiers": record.identifiers,
+                "documents": record.documents,
                 "tool_call_count": len(record.tool_call_summary),
                 "executed_tool_calls": record.tool_call_summary,
                 "model_profile_name": record.model_profile,

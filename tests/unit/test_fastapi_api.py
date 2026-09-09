@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from uuid import UUID
 
 import pytest
@@ -27,7 +28,7 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.app import create_app as _create_app
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
-from industrial_ai_agent.infrastructure.api.schemas import RunResponse
+from industrial_ai_agent.infrastructure.api.schemas import RunResponse, RunStatus
 from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     create_default_troubleshooting_run_service,
 )
@@ -43,6 +44,7 @@ class FakeRunService:
         self._result = result
         self._error = error
         self.messages: list[str] = []
+        self.response_languages: list[ResponseLanguage | None] = []
         self.conversation_contexts: list[object] = []
         self.policies: list[ResolvedRunPolicy] = []
         self.internal_target_available = True
@@ -73,8 +75,8 @@ class FakeRunService:
         response_language: ResponseLanguage | None = None,
         conversation_context: tuple[object, ...] = (),
     ) -> AgentRunResult:
-        del response_language
         self.messages.append(message)
+        self.response_languages.append(response_language)
         self.conversation_contexts.append(conversation_context)
         self.policies.append(run_policy)
         if self._error is not None:
@@ -169,6 +171,8 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
         "answer",
         "investigation_steps",
         "next_steps",
+        "identifiers",
+        "documents",
         "tool_calls",
         "approval_request",
     }
@@ -189,6 +193,8 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
         "Check station S04.",
         "Search documentation for QUALITY-09.",
     ]
+    assert payload["identifiers"] == []
+    assert payload["documents"] == []
     assert payload["tool_calls"] == [
         {"tool": "get_product_history", "arguments": {"product_id": "P4711"}}
     ]
@@ -199,6 +205,30 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
 
     assert stored_response.status_code == 200
     assert stored_response.json() == payload
+
+
+@pytest.mark.parametrize(
+    ("message", "selected_language"),
+    (
+        ("Untersuche P4711 an S04.", "EN"),
+        ("Investigate P4711 at S04.", "DE"),
+    ),
+)
+def test_explicit_response_language_overrides_request_detection(
+    message: str, selected_language: str
+) -> None:
+    service = FakeRunService(result=_success_result())
+    response = TestClient(create_app(service)).post(
+        "/api/v1/runs",
+        json={
+            "message": message,
+            "response_language": selected_language,
+            "user_clearance": "CONFIDENTIAL",
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.response_languages == [ResponseLanguage(selected_language)]
 
 
 def test_public_run_response_accepts_the_maintenance_ticket_read_trajectory() -> None:
@@ -302,6 +332,59 @@ def test_investigation_history_groups_follow_ups_filters_clearance_and_exports_p
     assert b"Recommended Investigation Actions" in pdf.content
     assert b"Check station S04." in pdf.content
     assert b"Traceback" not in pdf.content
+
+
+def test_pdf_renders_supported_markdown_and_structured_references_without_raw_syntax() -> (
+    None
+):
+    result = AgentRunResult(
+        status=AgentRunStatus.SUCCESS,
+        final_answer=(
+            "### Heading\n\n**bold** and *italic* with `QUALITY-09`.\n\n"
+            "- first item\n- second item\n\n"
+            "| Column | Value |\n| --- | --- |\n| State | OPEN |"
+        ),
+        identifiers=({"value": "QUALITY-09", "type": "error_code"},),
+        documents=(
+            {
+                "document_id": "quality-procedure",
+                "title": "Quality Procedure",
+                "format": "markdown",
+            },
+        ),
+        tool_call_count=0,
+    )
+    client = TestClient(create_app(FakeRunService(result=result)))
+    run = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate QUALITY-09.", "user_clearance": "CONFIDENTIAL"},
+    ).json()
+
+    pdf = client.get(
+        f"/api/v1/investigations/{run['investigation_id']}/pdf?user_clearance=CONFIDENTIAL"
+    )
+    history = client.get(
+        f"/api/v1/investigations/{run['investigation_id']}?user_clearance=CONFIDENTIAL"
+    )
+
+    assert pdf.status_code == 200
+    assert history.status_code == 200
+    assert history.json()["turns"][0]["identifiers"] == [
+        {"value": "QUALITY-09", "type": "error_code"}
+    ]
+    assert history.json()["turns"][0]["documents"] == [
+        {
+            "document_id": "quality-procedure",
+            "title": "Quality Procedure",
+            "format": "markdown",
+        }
+    ]
+    assert b"Heading" in pdf.content
+    assert b"bold" in pdf.content
+    assert b"Quality Procedure" in pdf.content
+    assert b"### Heading" not in pdf.content
+    assert b"**bold**" not in pdf.content
+    assert b"| Column |" not in pdf.content
 
 
 def test_create_run_uses_fastapi_validation_for_invalid_request() -> None:
@@ -579,6 +662,59 @@ def test_unexpected_failure_does_not_expose_internal_details(error: Exception) -
         "message": "The agent run could not be completed.",
     }
     assert "secret" not in response.text
+
+
+def test_exception_group_logs_sanitized_inner_diagnostic_and_persists_failure(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    store = InMemoryAgentRunStore()
+    app = _create_app(
+        FakeRunService(
+            error=ExceptionGroup(
+                "unsafe outer details",
+                [
+                    ExceptionGroup(
+                        "unsafe nested details",
+                        [
+                            ValueError(
+                                "prompt=do not log; document contents=do not log; "
+                                "token=do not log"
+                            )
+                        ],
+                    )
+                ],
+            )
+        ),
+        run_store=store,
+    )
+    monkeypatch.setattr(
+        "industrial_ai_agent.infrastructure.api.app.uuid4", lambda: run_id
+    )
+    caplog.set_level(
+        logging.ERROR, logger="industrial_ai_agent.api.failure_diagnostics"
+    )
+
+    response = TestClient(app).post("/api/v1/runs", json=_confidential_request())
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "code": "internal_error",
+        "message": "The agent run could not be completed.",
+    }
+    stored = asyncio.run(store.get(run_id))
+    assert stored is not None
+    assert stored.status is RunStatus.FAILED
+    assert stored.error_code == "internal_error"
+    assert "exception_group=ExceptionGroup" in caplog.text
+    assert "exception_type=ValueError" in caplog.text
+    assert "operation=langgraph_execution" in caplog.text
+    assert "error_code=invalid_runtime_value" in caplog.text
+    assert "invalid runtime value" in caplog.text
+    assert "prompt=do not log" not in caplog.text
+    assert "document contents=do not log" not in caplog.text
+    assert "token=do not log" not in caplog.text
 
 
 def test_openapi_contains_only_public_run_contracts() -> None:

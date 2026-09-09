@@ -23,8 +23,8 @@
       <section class="result-panel" aria-labelledby="result-title">
         <header class="investigation-header">
           <div class="investigation-title">
-            <p class="panel-kicker">INVESTIGATION</p>
-            <h2 id="result-title">No active investigation</h2>
+            <p class="panel-kicker">CHAT</p>
+            <h2 id="result-title">No active chat</h2>
             <p class="investigation-context" id="investigation-context">Ask about a production issue, station, product, maintenance ticket, or available documentation.</p>
           </div>
           <div class="toolbar-controls">
@@ -37,9 +37,16 @@
                 <option value="RESTRICTED">RESTRICTED</option>
               </select>
             </label>
+            <label class="clearance-control" for="response-language" title="Language for the next agent response.">
+              <span>Response language</span>
+              <select id="response-language" name="response-language">
+                <option value="DE">Deutsch</option>
+                <option value="EN" selected>English</option>
+              </select>
+            </label>
             <span class="status-badge" data-status="idle" id="run-status" hidden></span>
             <button id="export-pdf-button" type="button" disabled>Export as PDF</button>
-            <button class="secondary-button" id="new-investigation-button" type="button">New Investigation</button>
+            <button class="secondary-button" id="new-investigation-button" type="button">New Chat</button>
           </div>
         </header>
 
@@ -56,7 +63,7 @@
 
         <div class="conversation-history empty-state" id="conversation-history" aria-live="polite" aria-relevant="additions text">
           <div class="empty-investigation">
-            <h3>Start a new investigation</h3>
+            <h3>Start a new chat</h3>
             <p>Ask about a production issue, station, product, maintenance ticket, or available documentation.</p>
           </div>
         </div>
@@ -65,7 +72,7 @@
           <label for="composer-message">Message</label>
           <textarea id="composer-message" name="composer-message" rows="3" placeholder="Ask a troubleshooting question..." required></textarea>
           <div class="composer-actions">
-            <button id="composer-button" type="submit">Start Investigation</button>
+            <button id="composer-button" type="submit">Send</button>
           </div>
         </form>
 

@@ -73,9 +73,9 @@ test("renders a single-composer investigation workspace", async (t) => {
     const { document } = await loadApp();
 
     assert.equal(document.querySelectorAll("textarea").length, 1);
-    assert.equal(document.querySelector("#result-title")?.textContent, "No active investigation");
+    assert.equal(document.querySelector("#result-title")?.textContent, "No active chat");
     assert.equal(document.querySelector("#composer-message")?.disabled, false);
-    assert.equal(document.querySelector("#composer-button")?.textContent, "Start Investigation");
+    assert.equal(document.querySelector("#composer-button")?.textContent, "Send");
     assert.equal(document.querySelector("#export-pdf-button")?.disabled, true);
     assert.equal(document.querySelector("#user-clearance")?.closest(".toolbar-controls") !== null, true);
     assert.equal(document.querySelector("#run-status")?.hidden, true);
@@ -101,6 +101,7 @@ test("renders a single-composer investigation workspace", async (t) => {
       assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
       assert.equal(bodies[0].investigation_id, undefined);
       assert.equal(bodies[0].user_clearance, "RESTRICTED");
+      assert.equal(bodies[0].response_language, "EN");
       assert.deepEqual(
         [...document.querySelectorAll(".conversation-message .turn-label")].map((node) => node.textContent),
         ["You", "Agent", "You", "Agent"],
@@ -236,7 +237,7 @@ test("renders a single-composer investigation workspace", async (t) => {
       await settle();
 
       assert.equal(historyRequests, 1);
-      assert.equal(document.querySelector("#result-title")?.textContent, "Investigation");
+      assert.equal(document.querySelector("#result-title")?.textContent, "Chat");
       assert.equal(document.querySelectorAll(".next-step-action").length, 3);
       assert.equal(document.querySelectorAll(".investigation-summary tbody tr").length, 3);
       assert.equal(document.querySelector("#composer-button")?.textContent, "Send");
@@ -325,8 +326,8 @@ test("renders a single-composer investigation workspace", async (t) => {
       const requestsBeforeReset = getRequests;
       document.querySelector("#new-investigation-button").click();
 
-      assert.equal(document.querySelector("#result-title")?.textContent, "No active investigation");
-      assert.equal(document.querySelector("#composer-button")?.textContent, "Start Investigation");
+      assert.equal(document.querySelector("#result-title")?.textContent, "No active chat");
+      assert.equal(document.querySelector("#composer-button")?.textContent, "Send");
       assert.equal(document.querySelector("#composer-message")?.disabled, false);
       assert.equal(document.querySelector("#export-pdf-button")?.disabled, true);
       assert.equal(document.querySelectorAll(".conversation-message").length, 0);
@@ -338,6 +339,113 @@ test("renders a single-composer investigation workspace", async (t) => {
 
       assert.equal(submittedRuns.length, 2);
       assert.equal(submittedRuns[1].investigation_id, undefined);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("uses the selected response language only for the newly submitted run and restores it", async () => {
+    const bodies = [];
+    const { document, window, restoreFetch } = await loadApp((url, options = {}) => {
+      if (String(url).includes("/api/v1/runs")) {
+        bodies.push(JSON.parse(options.body));
+        return jsonResponse(runResponse());
+      }
+      return jsonResponse(INVESTIGATION);
+    });
+    try {
+      document.querySelector("#response-language").value = "DE";
+      document.querySelector("#response-language").dispatchEvent(new window.Event("change"));
+      submit(document, window);
+      await settle();
+      assert.equal(bodies[0].response_language, "DE");
+      assert.equal(
+        JSON.parse(window.sessionStorage.getItem("industrial-ai-agent.active-investigation")).responseLanguage,
+        "DE",
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("sends with Enter, preserves Shift+Enter, and does not send while composing", async () => {
+    const bodies = [];
+    const { document, window, restoreFetch } = await loadApp((url, options = {}) => {
+      if (String(url).includes("/api/v1/runs")) {
+        bodies.push(JSON.parse(options.body));
+        return jsonResponse(runResponse());
+      }
+      return jsonResponse(INVESTIGATION);
+    });
+    try {
+      const composer = document.querySelector("#composer-message");
+      composer.value = "Investigate P4711.";
+      composer.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await settle();
+      assert.equal(bodies.length, 1);
+
+      composer.value = "Keep editing";
+      composer.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }));
+      assert.equal(bodies.length, 1);
+      assert.equal(composer.value, "Keep editing");
+
+      composer.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }));
+      assert.equal(bodies.length, 1);
+      composer.value = "   ";
+      composer.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      assert.equal(bodies.length, 1);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("renders only declared references and inserts identifier follow-ups without sending", async () => {
+    const referenced = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
+    referenced.turns[0].answer = "QUALITY-09 affects station S04. Untrusted-99 is not a reference.";
+    referenced.turns[0].identifiers = [
+      { value: "QUALITY-09", type: "error_code" },
+      { value: "S04", type: "station" },
+    ];
+    referenced.turns[0].documents = [
+      {
+        document_id: "DOC-001",
+        title: "S04 QUALITY-09 Troubleshooting Procedure",
+        format: "application/pdf",
+      },
+      {
+        document_id: "DOC-002",
+        title: "Quality Inspection Workflow",
+        format: "markdown",
+      },
+    ];
+    let requests = 0;
+    const { document, window, restoreFetch } = await loadApp((url) => {
+      if (String(url).includes("/api/v1/runs")) requests += 1;
+      return jsonResponse(referenced);
+    }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: "DE" });
+    try {
+      await settle();
+      assert.equal(document.querySelectorAll(".identifier-reference").length, 2);
+      const documentReferences = [...document.querySelectorAll(".document-reference")];
+      assert.deepEqual(
+        documentReferences.map((reference) => reference.textContent),
+        ["S04 QUALITY-09 Troubleshooting Procedure", "Quality Inspection Workflow"],
+      );
+      assert.equal(documentReferences.some((reference) => reference.textContent === "Document"), false);
+      assert.equal(document.querySelectorAll(".structured-reference").length, 4);
+      assert.equal(document.querySelector(".agent-answer")?.textContent.includes("Untrusted-99"), true);
+
+      document.querySelector(".identifier-reference").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      const investigate = [...document.querySelectorAll(".reference-action")].find((button) => button.textContent === "Untersuchen");
+      investigate.click();
+      assert.equal(
+        document.querySelector("#composer-message").value,
+        "Investigate P4711 at S04.\nUntersuche QUALITY-09 genauer.",
+      );
+      assert.equal(requests, 0);
+
+      document.querySelector(".document-reference").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      assert.deepEqual([...document.querySelectorAll(".reference-action")].map((button) => [button.textContent, button.disabled]), [["Open", true], ["Download", true]]);
     } finally {
       restoreFetch();
     }
@@ -357,7 +465,7 @@ test("keeps a full-width workspace and responsive toolbar contract in CSS", asyn
 
 async function loadApp(fetchImplementation = null, activeInvestigation = null) {
   const dom = new JSDOM(`<!doctype html><html><body>
-    <section class="result-panel"><h2 id="result-title"></h2><p id="investigation-context"></p><div class="toolbar-controls"><label class="clearance-control"><select id="user-clearance"><option value="PUBLIC">PUBLIC</option><option value="INTERNAL">INTERNAL</option><option value="RESTRICTED" selected>RESTRICTED</option></select></label><span id="run-status" hidden></span><button id="export-pdf-button" type="button"></button><button id="new-investigation-button" type="button"></button></div><dl id="investigation-metadata"><dd id="investigation-runs"></dd><dd id="investigation-tools"></dd></dl><div id="conversation-history"></div><form id="composer-form"><textarea id="composer-message">Investigate P4711 at S04.</textarea><button id="composer-button" type="submit">Start Investigation</button></form><p id="error-message" hidden></p></section>
+    <section class="result-panel"><h2 id="result-title"></h2><p id="investigation-context"></p><div class="toolbar-controls"><label class="clearance-control"><select id="user-clearance"><option value="PUBLIC">PUBLIC</option><option value="INTERNAL">INTERNAL</option><option value="RESTRICTED" selected>RESTRICTED</option></select></label><label class="clearance-control"><select id="response-language"><option value="DE">Deutsch</option><option value="EN" selected>English</option></select></label><span id="run-status" hidden></span><button id="export-pdf-button" type="button"></button><button id="new-investigation-button" type="button"></button></div><dl id="investigation-metadata"><dd id="investigation-runs"></dd><dd id="investigation-tools"></dd></dl><div id="conversation-history"></div><form id="composer-form"><textarea id="composer-message">Investigate P4711 at S04.</textarea><button id="composer-button" type="submit">Send</button></form><p id="error-message" hidden></p></section>
   </body></html>`, { url: "http://localhost:8080" });
   const originalFetch = globalThis.fetch;
   Object.assign(globalThis, { document: dom.window.document, window: dom.window });

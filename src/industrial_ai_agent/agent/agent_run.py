@@ -16,6 +16,8 @@ MAX_TOOL_CALLS = 4
 MAX_NEXT_STEPS = 5
 MAX_NEXT_STEP_LENGTH = 500
 MAX_INVESTIGATION_STEP_FINDING_LENGTH = 1_000
+MAX_IDENTIFIER_REFERENCES = 12
+MAX_DOCUMENT_REFERENCES = 5
 _FORBIDDEN_ACTION_SECTION_TITLES = frozenset(
     {
         "recommended actions",
@@ -82,6 +84,42 @@ class AgentRunStatus(StrEnum):
     LIMIT_REACHED = "LIMIT_REACHED"
 
 
+class IdentifierType(StrEnum):
+    """Closed technical-reference types that the UI can handle deterministically."""
+
+    ERROR_CODE = "error_code"
+    STATION = "station"
+    PRODUCT = "product"
+    MAINTENANCE_TICKET = "maintenance_ticket"
+
+
+class IdentifierReference(BaseModel):
+    """A canonical identifier derived from authorized run evidence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    value: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=2, max_length=64)
+    ]
+    type: IdentifierType
+
+
+class DocumentReference(BaseModel):
+    """Bounded, non-secret metadata for a document returned by retrieval."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    document_id: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)
+    ]
+    title: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)
+    ]
+    format: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+    ] = "document"
+
+
 class FinalAgentOutput(BaseModel):
     """Bounded user-facing result emitted after the final model decision."""
 
@@ -92,6 +130,12 @@ class FinalAgentOutput(BaseModel):
         default=(), max_length=MAX_TOOL_CALLS
     )
     next_steps: tuple[NextStep, ...] = Field(default=(), max_length=MAX_NEXT_STEPS)
+    identifiers: tuple[IdentifierReference, ...] = Field(
+        default=(), max_length=MAX_IDENTIFIER_REFERENCES
+    )
+    documents: tuple[DocumentReference, ...] = Field(
+        default=(), max_length=MAX_DOCUMENT_REFERENCES
+    )
 
     @classmethod
     def from_model_text(cls, text: str) -> Self:
@@ -217,6 +261,12 @@ class AgentRunResult(BaseModel):
         default=(), max_length=MAX_TOOL_CALLS
     )
     next_steps: tuple[NextStep, ...] = Field(default=(), max_length=MAX_NEXT_STEPS)
+    identifiers: tuple[IdentifierReference, ...] = Field(
+        default=(), max_length=MAX_IDENTIFIER_REFERENCES
+    )
+    documents: tuple[DocumentReference, ...] = Field(
+        default=(), max_length=MAX_DOCUMENT_REFERENCES
+    )
     tool_call_count: int = Field(ge=0, le=MAX_TOOL_CALLS)
     executed_tool_calls: tuple[ExecutedToolCall, ...] = ()
     model_profile_name: str | None = None
@@ -249,6 +299,10 @@ class AgentRunResult(BaseModel):
                 raise ValueError("LIMIT_REACHED cannot contain a final answer")
             if self.next_steps:
                 raise ValueError("LIMIT_REACHED cannot contain next steps")
+            if self.identifiers:
+                raise ValueError("LIMIT_REACHED cannot contain identifiers")
+            if self.documents:
+                raise ValueError("LIMIT_REACHED cannot contain documents")
             if self.investigation_steps:
                 raise ValueError("LIMIT_REACHED cannot contain investigation steps")
             if self.tool_call_count != MAX_TOOL_CALLS:

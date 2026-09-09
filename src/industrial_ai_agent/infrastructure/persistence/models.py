@@ -179,6 +179,8 @@ class AgentRunRecord(Base):
         JSON, default=list
     )
     next_steps: Mapped[list[str]] = mapped_column(JSON, default=list)
+    identifiers: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    documents: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
     error_code: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)
     tool_call_summary: Mapped[list[dict[str, object]]] = mapped_column(JSON)

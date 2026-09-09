@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, Self
 
 from openai import OpenAI
+from pydantic import BaseModel
 
 from industrial_ai_agent.agent.llm import (
     FinishReason,
@@ -85,7 +86,10 @@ class OpenAICompatibleLLMClient:
 
         choice = completion.choices[0]
         return LLMResponse(
-            text=choice.message.content,
+            text=_response_text(
+                choice.message,
+                structured_output=request.response_format is not None,
+            ),
             tool_calls=tuple(
                 _parse_tool_call(tool_call)
                 for tool_call in (choice.message.tool_calls or ())
@@ -139,6 +143,42 @@ def _parse_tool_call(tool_call: Any) -> LLMToolCall:
         name=tool_call.function.name,
         arguments=arguments,
     )
+
+
+def _response_text(message: Any, *, structured_output: bool) -> str | None:
+    """Normalize documented OpenAI-compatible response content representations."""
+    parsed = getattr(message, "parsed", None)
+    if parsed is not None:
+        return _serialized_structured_content(parsed)
+
+    content = getattr(message, "content", None)
+    if content is None or isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return _text_blocks_content(content)
+    if structured_output and isinstance(content, Mapping):
+        return _serialized_structured_content(content)
+    raise TypeError("LLM response content must be text or documented text blocks")
+
+
+def _serialized_structured_content(content: object) -> str:
+    if isinstance(content, BaseModel):
+        content = content.model_dump(mode="json")
+    if not isinstance(content, Mapping):
+        raise TypeError("Parsed structured LLM response must be an object")
+    return json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+
+
+def _text_blocks_content(content: list[object]) -> str:
+    blocks: list[str] = []
+    for block in content:
+        if not isinstance(block, Mapping) or block.get("type") != "text":
+            raise TypeError("LLM response content blocks must be text blocks")
+        text = block.get("text")
+        if not isinstance(text, str):
+            raise TypeError("LLM response text block must contain text")
+        blocks.append(text)
+    return "".join(blocks)
 
 
 def _parse_usage(usage: Any) -> LLMUsage | None:

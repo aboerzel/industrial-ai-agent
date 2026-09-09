@@ -1,5 +1,6 @@
 """FastAPI routes for the external Industrial AI Agent application boundary."""
 
+import logging
 from datetime import UTC, datetime
 from typing import NoReturn
 from uuid import UUID, uuid4
@@ -37,6 +38,7 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
 from industrial_ai_agent.infrastructure.api.demo_security import (
     DemoSecurityContextResolver,
 )
+from industrial_ai_agent.infrastructure.api.failure_diagnostics import summarize_failure
 from industrial_ai_agent.infrastructure.api.investigation_pdf import (
     render_investigation_pdf,
 )
@@ -68,6 +70,7 @@ from industrial_ai_agent.infrastructure.api.schemas import (
 from industrial_ai_agent.infrastructure.telemetry import Telemetry, instrument_fastapi
 
 API_PREFIX = "/api/v1"
+_FAILURE_LOGGER = logging.getLogger("industrial_ai_agent.api.failure_diagnostics")
 
 
 class _ApiRunError(Exception):
@@ -94,6 +97,7 @@ def create_app(
     )
     app.state.run_service = run_service
     app.state.run_store = run_store
+    app.state.telemetry = telemetry
     app.state.classification_policy = AgentRunClassificationPolicy()
     app.state.demo_security_context_resolver = DemoSecurityContextResolver()
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
@@ -128,7 +132,11 @@ def create_app(
         summary="Start one server-classified troubleshooting run",
     )
     async def create_run(payload: CreateRunRequest, request: Request) -> RunResponse:
-        response_language = detect_response_language(payload.message)
+        # API clients that do not send a language retain the established deterministic
+        # fallback. Browser clients always send this field explicitly.
+        response_language = payload.response_language or detect_response_language(
+            payload.message
+        )
         security_context = _demo_security_context(request).resolve(
             payload.user_clearance
         )
@@ -314,7 +322,10 @@ def create_app(
                 ),
             )
         # noinspection PyBroadException
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001 - public API must sanitize failures.
+            _record_internal_failure(
+                run_id=run_id, error=error, telemetry=_telemetry(request)
+            )
             await store.fail(run_id, "internal_error")
             _raise_api_run_error(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -352,6 +363,10 @@ def _run_service(request: Request) -> AgentRunService:
 
 def _run_store(request: Request) -> AgentRunStore:
     return request.app.state.run_store
+
+
+def _telemetry(request: Request) -> Telemetry | None:
+    return request.app.state.telemetry
 
 
 def _classification_policy(request: Request) -> AgentRunClassificationPolicy:
@@ -442,7 +457,10 @@ async def _start_run(
                 "mcp_service_unavailable", response_language
             ),
         )
-    except Exception:  # noqa: BLE001 - public API must sanitize unexpected errors.
+    except Exception as error:  # noqa: BLE001 - public API must sanitize unexpected errors.
+        _record_internal_failure(
+            run_id=run_id, error=error, telemetry=_telemetry(request)
+        )
         await store.fail(run_id, "internal_error")
         _raise_api_run_error(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -459,6 +477,37 @@ async def _start_run(
     return _to_run_response(await store.complete(run_id, result))
 
 
+def _record_internal_failure(
+    *, run_id: UUID, error: BaseException, telemetry: Telemetry | None
+) -> None:
+    """Log only bounded diagnostics for an unexpected LangGraph/runtime failure."""
+    diagnostics = summarize_failure(error)
+    exception_group = (
+        type(error).__name__ if isinstance(error, BaseExceptionGroup) else None
+    )
+    for index, diagnostic in enumerate(diagnostics):
+        _FAILURE_LOGGER.error(
+            "agent.run.failed run_id=%s exception_group=%s inner_index=%d "
+            "exception_type=%s operation=%s error_code=%s sanitized_reason=%s",
+            run_id,
+            exception_group,
+            index,
+            diagnostic.exception_type,
+            diagnostic.operation,
+            diagnostic.safe_error_code,
+            diagnostic.sanitized_reason,
+        )
+    if telemetry is not None and diagnostics:
+        primary = diagnostics[0]
+        telemetry.set_current_span_attributes(
+            {
+                "error.type": primary.exception_type,
+                "error.code": primary.safe_error_code,
+                "error.stage": primary.operation,
+            }
+        )
+
+
 def _to_run_response(record: StoredAgentRun) -> RunResponse:
     result = record.result
     return RunResponse(
@@ -472,6 +521,8 @@ def _to_run_response(record: StoredAgentRun) -> RunResponse:
         else None,
         investigation_steps=_to_investigation_steps(result),
         next_steps=_to_next_steps(result),
+        identifiers=_to_identifiers(result),
+        documents=_to_documents(result),
         tool_calls=_to_tool_calls(result),
         approval_request=_to_approval_request(record.approval_request),
     )
@@ -514,6 +565,8 @@ def _to_investigation_turn(record: StoredAgentRun) -> InvestigationTurnResponse:
         answer=sanitize_public_text(result.final_answer) if result else None,
         investigation_steps=_to_investigation_steps(result),
         next_steps=_to_next_steps(result),
+        identifiers=_to_identifiers(result),
+        documents=_to_documents(result),
         tool_calls=_to_tool_calls(result),
         created_at=_as_iso(record.created_at),
         updated_at=_as_iso(record.updated_at),
@@ -605,6 +658,38 @@ def _to_next_steps(result: AgentRunResult | None) -> tuple[str, ...]:
         sanitized
         for step in result.next_steps
         if (sanitized := sanitize_public_text(step)) is not None
+    )
+
+
+def _to_identifiers(result: AgentRunResult | None):
+    if result is None:
+        return ()
+    from industrial_ai_agent.infrastructure.api.schemas import (
+        IdentifierReferenceResponse,
+        IdentifierTypeResponse,
+    )
+
+    return tuple(
+        IdentifierReferenceResponse(
+            value=reference.value,
+            type=IdentifierTypeResponse(reference.type.value),
+        )
+        for reference in result.identifiers
+    )
+
+
+def _to_documents(result: AgentRunResult | None):
+    if result is None:
+        return ()
+    from industrial_ai_agent.infrastructure.api.schemas import DocumentReferenceResponse
+
+    return tuple(
+        DocumentReferenceResponse(
+            document_id=reference.document_id,
+            title=sanitize_public_text(reference.title) or reference.document_id,
+            format=reference.format,
+        )
+        for reference in result.documents
     )
 
 

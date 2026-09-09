@@ -18,7 +18,10 @@ from industrial_ai_agent.agent.agent_run import (
     InvestigationStep,
 )
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
+    MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
     LangGraphTroubleshootingAgent,
+    _deduplicate_document_references,
+    _document_references_from_observation,
     _resolve_investigation_steps,
 )
 from industrial_ai_agent.agent.llm import (
@@ -31,6 +34,7 @@ from industrial_ai_agent.agent.mcp_tool_provider import McpToolProvider, McpTool
 from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
+from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 
 
@@ -68,6 +72,73 @@ class ReadRecordingMcpToolProvider:
         )
 
 
+class DocumentationRecordingMcpToolProvider:
+    @asynccontextmanager
+    async def open_session(self) -> AsyncIterator[McpToolSession]:
+        async def search_documentation(query: str) -> str:
+            assert query == "QUALITY-09 S04"
+            return (
+                '{"classification":"CONFIDENTIAL","results":[{"document_id":"DOC-QUALITY-09",'
+                '"metadata":{"document_title":"S04 QUALITY-09 Troubleshooting '
+                'Procedure","format":"markdown"}}]}'
+            )
+
+        yield McpToolSession(
+            tools=(
+                StructuredTool.from_function(
+                    coroutine=search_documentation,
+                    name="search_documentation",
+                    description="Search technical documentation.",
+                ),
+            ),
+            discovered_tool_names=("search_documentation",),
+            server_name="fake_knowledge_mcp",
+            server_version="test",
+            protocol_version="test",
+            tool_policies=(ToolPolicy("search_documentation", ToolOperation.READ),),
+        )
+
+
+class ThreeTurnMcpToolProvider:
+    @asynccontextmanager
+    async def open_session(self) -> AsyncIterator[McpToolSession]:
+        async def get_machine_status(station_id: str) -> str:
+            assert station_id == "S04"
+            return '{"classification":"CONFIDENTIAL","station_id":"S04"}'
+
+        async def search_documentation(query: str) -> str:
+            assert query == "QUALITY-09"
+            return (
+                '{"classification":"CONFIDENTIAL","results":['
+                '{"document_id":"DOC-QUALITY-09","metadata":{'
+                '"document_title":"S04 QUALITY-09 Troubleshooting Procedure",'
+                '"format":"markdown"}}]}'
+            )
+
+        yield McpToolSession(
+            tools=(
+                StructuredTool.from_function(
+                    coroutine=get_machine_status,
+                    name="get_machine_status",
+                    description="Get machine status.",
+                ),
+                StructuredTool.from_function(
+                    coroutine=search_documentation,
+                    name="search_documentation",
+                    description="Search technical documentation.",
+                ),
+            ),
+            discovered_tool_names=("get_machine_status", "search_documentation"),
+            server_name="fake_factory_and_knowledge_mcp",
+            server_version="test",
+            protocol_version="test",
+            tool_policies=(
+                ToolPolicy("get_machine_status", ToolOperation.READ),
+                ToolPolicy("search_documentation", ToolOperation.READ),
+            ),
+        )
+
+
 def test_final_agent_output_preserves_german_next_steps_and_technical_ids() -> None:
     output = FinalAgentOutput.model_validate(
         {
@@ -97,6 +168,123 @@ def test_final_agent_output_preserves_english_next_steps_and_technical_ids() -> 
     )
 
     assert output.next_steps[-1] == "Search technical documentation for PROTO-COMM-07."
+
+
+def test_final_agent_output_bounds_typed_references() -> None:
+    output = FinalAgentOutput.model_validate(
+        {
+            "answer": "S04 reports QUALITY-09 for P4711.",
+            "identifiers": [
+                {"value": "S04", "type": "station"},
+                {"value": "QUALITY-09", "type": "error_code"},
+            ],
+            "documents": [
+                {
+                    "document_id": "s04-quality-procedure",
+                    "title": "S04 Quality Procedure",
+                    "format": "markdown",
+                }
+            ],
+        }
+    )
+
+    assert [reference.value for reference in output.identifiers] == [
+        "S04",
+        "QUALITY-09",
+    ]
+    assert output.documents[0].document_id == "s04-quality-procedure"
+
+
+def test_document_references_use_catalog_titles_and_deduplicate_by_document_id() -> (
+    None
+):
+    documents = _document_references_from_observation(
+        """{
+          "results": [
+            {
+              "document_id": "DOC-001",
+              "metadata": {
+                "title": "Document",
+                "document_title": "S04 QUALITY-09 Troubleshooting Procedure",
+                "mime_type": "application/pdf"
+              }
+            },
+            {
+              "document_id": "DOC-002",
+              "metadata": {
+                "title": "Quality Inspection Workflow",
+                "format": "markdown"
+              }
+            },
+            {
+              "document_id": "DOC-001",
+              "metadata": {
+                "title": "Document",
+                "document_title": "S04 QUALITY-09 Troubleshooting Procedure",
+                "mime_type": "application/pdf"
+              }
+            }
+          ]
+        }"""
+    )
+
+    references = _deduplicate_document_references(documents)
+
+    assert [
+        (reference.document_id, reference.title, reference.format)
+        for reference in references
+    ] == [
+        (
+            "DOC-001",
+            "S04 QUALITY-09 Troubleshooting Procedure",
+            "application/pdf",
+        ),
+        ("DOC-002", "Quality Inspection Workflow", "markdown"),
+    ]
+    assert all(reference.title != "Document" for reference in references)
+
+
+def test_document_reference_without_authorized_name_uses_document_id_fallback() -> None:
+    references = _document_references_from_observation(
+        '{"results":[{"document_id":"DOC-003","metadata":{"format":"markdown"}}]}'
+    )
+
+    assert [
+        (reference.document_id, reference.title, reference.format)
+        for reference in references
+    ] == [("DOC-003", "Document DOC-003", "markdown")]
+
+
+def test_document_reference_compacts_an_overlong_known_mime_type() -> None:
+    references = _document_references_from_observation(
+        """{
+          "results": [
+            {
+              "document_id": "DOC-004",
+              "metadata": {
+                "document_title": "S04 QUALITY-09 Troubleshooting Procedure",
+                "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              }
+            }
+          ]
+        }"""
+    )
+
+    assert [
+        (reference.document_id, reference.title, reference.format)
+        for reference in references
+    ] == [("DOC-004", "S04 QUALITY-09 Troubleshooting Procedure", "docx")]
+
+
+def test_model_prompt_does_not_ask_for_a_json_pseudo_tool_call() -> None:
+    assert (
+        "return only the configured JSON object"
+        not in MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
+    )
+    assert "return narrative Markdown only; do not emit JSON" in (
+        MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
+    )
+    assert "Copy technical identifiers exactly" in MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
 
 
 def test_final_agent_output_allows_no_next_steps() -> None:
@@ -308,6 +496,12 @@ def test_multi_loop_final_output_retains_structured_next_steps() -> None:
         "Check station S04.",
         "Search technical documentation for QUALITY-09.",
     )
+    assert [
+        (reference.value, reference.type.value) for reference in result.identifiers
+    ] == [
+        ("P4711", "product"),
+        ("S04", "station"),
+    ]
     assert len(client.requests) == 3
     finalization_request = client.requests[-1]
     assert finalization_request.response_format is not None
@@ -365,7 +559,7 @@ def test_structured_finalizer_replaces_observed_action_list_with_next_steps() ->
     assert client.requests[-1].response_format is not None
 
 
-def test_unsupported_profile_rejects_action_sections_instead_of_falling_back() -> None:
+def test_unsupported_profile_uses_safe_narrative_for_reserved_action_sections() -> None:
     client = FakeLLMClient(
         responses=[
             LLMResponse(
@@ -380,8 +574,10 @@ def test_unsupported_profile_rejects_action_sections_instead_of_falling_back() -
         run_classification=DataClassification.CONFIDENTIAL,
     )
 
-    with pytest.raises(FinalAgentOutputContractError):
-        asyncio.run(agent.aanswer_via_mcp("Investigate P4711 at S04."))
+    result = asyncio.run(agent.aanswer_via_mcp("Investigate P4711 at S04."))
+
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.final_answer == "The authorized check is complete."
 
 
 def test_structured_finalizer_preserves_an_empty_next_steps_list() -> None:
@@ -416,6 +612,259 @@ def test_structured_finalizer_preserves_an_empty_next_steps_list() -> None:
     )
     assert result.next_steps == ()
     assert result.investigation_steps == ()
+
+
+@pytest.mark.parametrize("finalizer_text", (None, ""))
+def test_structured_finalizer_retains_valid_draft_when_provider_returns_no_text(
+    finalizer_text: str | None,
+) -> None:
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text="The investigation is complete and no additional checks are useful.",
+                finish_reason=FinishReason.STOP,
+            ),
+            LLMResponse(text=finalizer_text, finish_reason=FinishReason.STOP),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(agent.aanswer_via_mcp("Is any further investigation useful?"))
+
+    assert result.final_answer == (
+        "The investigation is complete and no additional checks are useful."
+    )
+    assert result.next_steps == ()
+    assert result.investigation_steps == ()
+
+
+@pytest.mark.parametrize(
+    "invalid_finalizer_text",
+    (
+        "{",
+        '{"answer":42}',
+        '{"answer":"Summary","unexpected":true}',
+    ),
+)
+def test_structured_finalizer_retains_valid_draft_when_provider_returns_invalid_shape(
+    invalid_finalizer_text: str,
+) -> None:
+    draft = "S04 reports QUALITY-09."
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(text=draft, finish_reason=FinishReason.STOP),
+            LLMResponse(text=invalid_finalizer_text, finish_reason=FinishReason.STOP),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(agent.aanswer_via_mcp("Investigate QUALITY-09 at S04."))
+
+    assert result.final_answer == draft
+    assert result.next_steps == ()
+    assert result.investigation_steps == ()
+    assert '{"answer"' not in (result.final_answer or "")
+
+
+def test_structured_finalizer_unwraps_one_valid_nested_contract() -> None:
+    nested = (
+        '{"answer":"{\\"answer\\":\\"S04 reports QUALITY-09.\\",'
+        '\\"next_steps\\":[\\"Check station S04.\\"]}",'
+        '"next_steps":[]}'
+    )
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text="S04 reports QUALITY-09.", finish_reason=FinishReason.STOP
+            ),
+            LLMResponse(text=nested, finish_reason=FinishReason.STOP),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(agent.aanswer_via_mcp("Investigate QUALITY-09 at S04."))
+
+    assert result.final_answer == "S04 reports QUALITY-09."
+    assert result.next_steps == ("Check station S04.",)
+
+
+def test_invalid_structured_finalizer_keeps_system_derived_references() -> None:
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="documentation",
+                        name="search_documentation",
+                        arguments={"query": "QUALITY-09 S04"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text="S04 reports QUALITY-09.", finish_reason=FinishReason.STOP
+            ),
+            LLMResponse(text='{"answer":42}', finish_reason=FinishReason.STOP),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(
+            McpToolProvider, DocumentationRecordingMcpToolProvider()
+        ),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(agent.aanswer_via_mcp("Investigate QUALITY-09 at S04."))
+
+    assert result.final_answer == "S04 reports QUALITY-09."
+    assert [(step.step, step.action) for step in result.investigation_steps] == [
+        (1, "search_documentation")
+    ]
+    assert {reference.value for reference in result.identifiers} >= {
+        "QUALITY-09",
+        "S04",
+    }
+    assert [
+        (reference.document_id, reference.title, reference.format)
+        for reference in result.documents
+    ] == [("DOC-QUALITY-09", "S04 QUALITY-09 Troubleshooting Procedure", "markdown")]
+
+
+def test_three_turn_follow_up_keeps_tool_trajectory_and_references_per_run() -> None:
+    provider = cast(McpToolProvider, ThreeTurnMcpToolProvider())
+
+    def run_agent(
+        responses: list[LLMResponse],
+        request: str,
+        context: tuple[ConversationTurn, ...] = (),
+        *,
+        supports_structured_output: bool = True,
+    ) -> AgentRunResult:
+        agent = LangGraphTroubleshootingAgent(
+            LLMClientChatModel(
+                FakeLLMClient(responses),
+                ModelProfile("local_quality"),
+                supports_structured_output=supports_structured_output,
+            ),
+            mcp_tool_provider=provider,
+            run_classification=DataClassification.CONFIDENTIAL,
+        )
+        return asyncio.run(
+            agent.aanswer_via_mcp(
+                request,
+                response_language=ResponseLanguage.EN,
+                conversation_context=context,
+            )
+        )
+
+    first = run_agent(
+        [
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="status-1",
+                        name="get_machine_status",
+                        arguments={"station_id": "S04"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(text="S04 was checked.", finish_reason=FinishReason.STOP),
+            LLMResponse(
+                text='{"answer":"S04 was checked.","next_steps":[]}',
+                finish_reason=FinishReason.STOP,
+            ),
+        ],
+        "Status S04.",
+    )
+    second = run_agent(
+        [
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="documentation-2",
+                        name="search_documentation",
+                        arguments={"query": "QUALITY-09"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text="QUALITY-09 documentation was checked.",
+                finish_reason=FinishReason.STOP,
+            ),
+            LLMResponse(
+                text=(
+                    '{"answer":"QUALITY-09 documentation was checked.","next_steps":[]}'
+                ),
+                finish_reason=FinishReason.STOP,
+            ),
+        ],
+        "Investigate QUALITY-09 in more detail.",
+        (ConversationTurn("Status S04.", first.final_answer),),
+    )
+    third = run_agent(
+        [
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="status-3",
+                        name="get_machine_status",
+                        arguments={"station_id": "S04"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text="S04 was checked.\n\n### Next Steps\n\n- Check station S04.",
+                finish_reason=FinishReason.STOP,
+            ),
+        ],
+        "Check the current status of station S04.",
+        (
+            ConversationTurn("Status S04.", first.final_answer),
+            ConversationTurn(
+                "Investigate QUALITY-09 in more detail.", second.final_answer
+            ),
+        ),
+        supports_structured_output=False,
+    )
+
+    assert [result.status for result in (first, second, third)] == [
+        AgentRunStatus.SUCCESS,
+        AgentRunStatus.SUCCESS,
+        AgentRunStatus.SUCCESS,
+    ]
+    assert [call.tool for call in third.executed_tool_calls] == ["get_machine_status"]
+    assert third.tool_call_count == 1
+    assert third.final_answer == "The authorized check is complete."
+    assert third.documents == ()
+    assert {reference.value for reference in third.identifiers} == {"S04"}
 
 
 def test_structured_finalizer_preserves_german_language_and_identifiers() -> None:

@@ -134,13 +134,17 @@ def test_attribute_allowlist_drops_tool_results_tokens_and_unknown_values() -> N
     attributes = safe_attributes(
         {
             "mcp.server": "factory",
+            "error.stage": "final_output_normalization",
             "tool_result": "sensitive data",
             "bearer_token": "secret",
             "unknown.attribute": "not governed",
         }
     )
 
-    assert attributes == {"mcp.server": "factory"}
+    assert attributes == {
+        "mcp.server": "factory",
+        "error.stage": "final_output_normalization",
+    }
 
 
 def test_mcp_http_hook_injects_w3c_context_without_changing_authorization() -> None:

@@ -49,6 +49,7 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "data.classification",
         "embedding.model",
         "error.code",
+        "error.stage",
         "error.type",
         "execution.zone",
         "cost.api_usd",
@@ -220,6 +221,10 @@ class Telemetry:
             getattr(span, "name", ""), attributes
         ).items():
             span.set_attribute(key, value)
+
+    def set_current_span_attributes(self, attributes: Mapping[str, object]) -> None:
+        """Add allowlisted metadata to the active span without exposing payloads."""
+        self.set_span_attributes(trace.get_current_span(), attributes)
 
     def shutdown(self) -> None:
         """Flush optional telemetry before an API process exits; never raise to business code."""

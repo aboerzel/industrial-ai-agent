@@ -9,12 +9,18 @@ export class ApiClientError extends Error {
   }
 }
 
-export async function createRun(message, userClearance, investigationId = null) {
+export async function createRun(
+  message,
+  userClearance,
+  responseLanguage,
+  investigationId = null,
+) {
   return request("/api/v1/runs", {
     method: "POST",
     body: JSON.stringify({
       message,
       user_clearance: userClearance,
+      response_language: responseLanguage,
       ...(investigationId ? { investigation_id: investigationId } : {}),
     }),
   });
@@ -94,7 +100,7 @@ async function request(path, options = {}, validator = isRunResponse) {
 function isRunResponse(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "investigation_steps", "next_steps", "tool_calls", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "approval_request"]) &&
     isUuid(value.run_id) &&
     (value.investigation_id === undefined || isUuid(value.investigation_id)) &&
     (value.investigation_sequence === undefined || (Number.isInteger(value.investigation_sequence) && value.investigation_sequence > 0)) &&
@@ -103,6 +109,8 @@ function isRunResponse(value) {
     (value.answer === undefined || value.answer === null || isBoundedString(value.answer, 8_000)) &&
     (value.investigation_steps === undefined || isInvestigationSteps(value.investigation_steps)) &&
     (value.next_steps === undefined || isNextSteps(value.next_steps)) &&
+    (value.identifiers === undefined || isIdentifierReferences(value.identifiers)) &&
+    (value.documents === undefined || isDocumentReferences(value.documents)) &&
     (value.tool_calls === undefined ||
       (Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall))) &&
     (value.approval_request === undefined ||
@@ -126,7 +134,7 @@ function isInvestigationResponse(value) {
 function isInvestigationTurn(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "investigation_steps", "next_steps", "tool_calls", "created_at", "updated_at", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "created_at", "updated_at", "approval_request"]) &&
     isUuid(value.run_id) && Number.isInteger(value.sequence) && value.sequence > 0 &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
@@ -135,6 +143,8 @@ function isInvestigationTurn(value) {
     (value.answer === null || value.answer === undefined || isBoundedString(value.answer, 8_000)) &&
     (value.investigation_steps === undefined || isInvestigationSteps(value.investigation_steps)) &&
     (value.next_steps === undefined || isNextSteps(value.next_steps)) &&
+    (value.identifiers === undefined || isIdentifierReferences(value.identifiers)) &&
+    (value.documents === undefined || isDocumentReferences(value.documents)) &&
     Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall) &&
     (value.approval_request === null || value.approval_request === undefined || isApprovalRequest(value.approval_request))
   );
@@ -177,6 +187,25 @@ function isInvestigationSteps(value) {
       isPublicToolName(step.action) &&
       isBoundedString(step.finding, 1_000, true),
     )
+  );
+}
+
+function isIdentifierReferences(value) {
+  return Array.isArray(value) && value.length <= 12 && value.every((reference) =>
+    isRecord(reference) &&
+    hasOnlyKeys(reference, ["value", "type"]) &&
+    isBoundedString(reference.value, 64, true) &&
+    ["error_code", "station", "product", "maintenance_ticket"].includes(reference.type),
+  );
+}
+
+function isDocumentReferences(value) {
+  return Array.isArray(value) && value.length <= 5 && value.every((reference) =>
+    isRecord(reference) &&
+    hasOnlyKeys(reference, ["document_id", "title", "format"]) &&
+    isBoundedString(reference.document_id, 128, true) &&
+    isBoundedString(reference.title, 256, true) &&
+    isBoundedString(reference.format, 64, true),
   );
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from enum import StrEnum
@@ -26,9 +27,12 @@ from industrial_ai_agent.agent.agent_run import (
     MAX_TOOL_CALLS,
     AgentRunResult,
     AgentRunStatus,
+    DocumentReference,
     ExecutedToolCall,
     FinalAgentOutput,
     FinalAgentOutputContractError,
+    IdentifierReference,
+    IdentifierType,
     InvalidToolArgumentsError,
     InvestigationStep,
     MissingLLMResponseTextError,
@@ -72,26 +76,19 @@ MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "search, or explicit factory-discovery request, do not call a tool. Give safe general considerations or ask for the "
     "missing scope. Format final troubleshooting answers in Markdown where applicable. "
     "Use `### Likely Root Cause` where applicable. "
-    "When you make the final response, return only the configured JSON object with an "
-    "`answer` Markdown string, a bounded `investigation_steps` list, and a bounded "
-    "`next_steps` string list. `investigation_steps` records completed tool observations; "
-    "each entry must use the exact step number and canonical tool name supplied by the "
-    "system, with a concise finding based only on that tool observation. Never invent, "
-    "rename, omit, reorder, or add tool steps. Put ALL concrete, "
-    "user-executable follow-up prompts exclusively in `next_steps`, in the selected "
-    "response language, with technical identifiers unchanged. Do not put concrete follow-up "
-    "prompts into `answer` as a Markdown list. Do not include `Recommended Actions`, "
+    "When you make the final response, return narrative Markdown only; do not emit JSON. "
+    "The system, not you, finalizes an `answer` Markdown string, a bounded "
+    "`investigation_steps` list, references, and user-executable follow-up prompts "
+    "from the authorized trajectory. `investigation_steps` records completed tool "
+    "observations; each entry uses the exact step number and canonical tool name "
+    "supplied by the system. Never invent, rename, omit, reorder, or add tool steps. "
+    "Put ALL concrete user-executable follow-up prompts exclusively in `next_steps`; "
+    "do not place them in the narrative answer. Copy technical identifiers exactly as they "
+    "appear in authorized evidence; do not alter their punctuation or case. Do not put concrete follow-up prompts "
+    "into `answer` as a Markdown list. Do not include `Recommended Actions`, "
     "`Recommended Investigation Actions`, `Next Steps`, `Suggested Actions`, `Empfohlene "
     "Maßnahmen`, `Empfohlene Untersuchungsschritte`, `Nächste Schritte`, "
-    "`Handlungsempfehlungen`, or equivalent follow-up sections in `answer`. Use an empty "
-    "`next_steps` list only when no meaningful "
-    "follow-up investigation is warranted; do not invent actions just to populate it. Each "
-    "next step must be a self-contained request suitable for the next user turn, including "
-    "relevant identifiers where useful. Bad: `Review Product History`. Better: `Review the "
-    'recent product history of P4711 for recurring quality issues.` Bad JSON: `{"answer": '
-    '"### Recommended Actions\\n- Check S04","next_steps":[]}`. Good JSON: '
-    '`{"answer":"S04 is the primary quality failure point.","investigation_steps":[],"next_steps":["Check '
-    'the current fault state of station S04."]}`. Do not include Investigation Summary, '
+    "`Handlungsempfehlungen`, or equivalent follow-up sections in `answer`. Do not include Investigation Summary, "
     "Investigation Steps, Tool Summary, Tool Calls, Untersuchungsschritte, "
     "Untersuchungsübersicht, or an executed-tool Markdown table in `answer`; the UI renders "
     "the structured investigation summary. Lists in `answer` may explain evidence, but must not enumerate "
@@ -159,6 +156,8 @@ class TroubleshootingGraphState(TypedDict):
     final_answer: str | None
     investigation_steps: tuple[InvestigationStep, ...]
     next_steps: tuple[str, ...]
+    identifiers: tuple[IdentifierReference, ...]
+    documents: tuple[DocumentReference, ...]
     pending_action: dict[str, str] | None
     approval_result: ApprovalDecision | None
     model_profile_name: str
@@ -177,6 +176,8 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     final_answer: str | None
     investigation_steps: tuple[dict[str, object], ...]
     next_steps: tuple[str, ...]
+    identifiers: tuple[dict[str, object], ...]
+    documents: tuple[dict[str, object], ...]
     pending_action: dict[str, str] | None
     approval_result: str | None
     model_profile_name: str
@@ -273,6 +274,8 @@ class LangGraphTroubleshootingAgent:
             final_answer=state["final_answer"],
             investigation_steps=state["investigation_steps"],
             next_steps=state["next_steps"],
+            identifiers=state["identifiers"],
+            documents=state["documents"],
             tool_call_count=state["executed_tool_count"],
             executed_tool_calls=state["executed_tool_calls"],
             model_profile_name=self._chat_model.model_profile.name,
@@ -443,13 +446,15 @@ class LangGraphTroubleshootingAgent:
                         _authorized_tool_observations(state),
                     )
                 )
-                normalized_response = to_llm_response(normalized_message)
-                if normalized_response.tool_calls or normalized_response.text is None:
-                    raise FinalAgentOutputContractError(
-                        "Final output normalizer did not return text-only structured output"
-                    )
-                final_output = _validated_final_output(normalized_response.text)
-                final_messages.append(normalized_message)
+                normalized_output = _normalized_final_output_or_draft(
+                    normalized_message, draft=final_output
+                )
+                if normalized_output is not final_output:
+                    final_output = normalized_output
+                    final_messages.append(normalized_message)
+            final_output = _with_safe_narrative(
+                final_output, ResponseLanguage(state["response_language"])
+            )
             final_output.require_no_action_sections()
             final_output.require_no_investigation_summary_sections()
             investigation_steps = _resolve_investigation_steps(
@@ -457,6 +462,7 @@ class LangGraphTroubleshootingAgent:
                 final_output.investigation_steps,
                 ResponseLanguage(state["response_language"]),
             )
+            identifiers, documents = _derive_structured_references(state)
             return {
                 "messages": final_messages,
                 "run_status": AgentRunStatus.SUCCESS.value,
@@ -465,6 +471,10 @@ class LangGraphTroubleshootingAgent:
                     step.model_dump() for step in investigation_steps
                 ),
                 "next_steps": final_output.next_steps,
+                "identifiers": tuple(
+                    reference.model_dump() for reference in identifiers
+                ),
+                "documents": tuple(reference.model_dump() for reference in documents),
             }
         if state["executed_tool_count"] == MAX_TOOL_CALLS:
             return {
@@ -550,7 +560,7 @@ class LangGraphTroubleshootingAgent:
         return {
             "messages": [
                 ToolMessage(
-                    content=str(result),
+                    content=_serialized_tool_observation(result),
                     tool_call_id=_require_tool_call_id(tool_call.get("id")),
                 )
             ],
@@ -675,6 +685,7 @@ class LangGraphTroubleshootingAgent:
         investigation_steps = _resolve_investigation_steps(
             state["executed_tool_calls"], (), response_language
         )
+        identifiers, documents = _derive_structured_references(state)
         return {
             "pending_action": None,
             "run_status": AgentRunStatus.SUCCESS.value,
@@ -688,6 +699,8 @@ class LangGraphTroubleshootingAgent:
                 step.model_dump() for step in investigation_steps
             ),
             "next_steps": (),
+            "identifiers": tuple(reference.model_dump() for reference in identifiers),
+            "documents": tuple(reference.model_dump() for reference in documents),
         }
 
     @asynccontextmanager
@@ -721,6 +734,8 @@ class LangGraphTroubleshootingAgent:
             "final_answer": None,
             "investigation_steps": (),
             "next_steps": (),
+            "identifiers": (),
+            "documents": (),
             "pending_action": None,
             "approval_result": None,
             "model_profile_name": self._chat_model.model_profile.name,
@@ -813,6 +828,14 @@ class LangGraphTroubleshootingAgent:
                 for step in state.get("investigation_steps", ())
             ),
             "next_steps": tuple(state.get("next_steps", ())),
+            "identifiers": tuple(
+                IdentifierReference.model_validate(reference)
+                for reference in state.get("identifiers", ())
+            ),
+            "documents": tuple(
+                DocumentReference.model_validate(reference)
+                for reference in state.get("documents", ())
+            ),
             "pending_action": state["pending_action"],
             "approval_result": (
                 ApprovalDecision(raw_approval) if raw_approval is not None else None
@@ -934,6 +957,174 @@ def _authorized_tool_observations(
     return tuple(observations)
 
 
+_STATION_IDENTIFIER_PATTERN = re.compile(r"\bS\d{2,3}\b", re.IGNORECASE)
+_PRODUCT_IDENTIFIER_PATTERN = re.compile(r"\bP\d{4}\b", re.IGNORECASE)
+_MAINTENANCE_TICKET_PATTERN = re.compile(r"\bMT-[A-F0-9]{10}\b", re.IGNORECASE)
+_ERROR_CODE_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b", re.IGNORECASE)
+_COMPACT_DOCUMENT_FORMATS = {
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+}
+
+
+def _derive_structured_references(
+    state: CheckpointedTroubleshootingGraphState,
+) -> tuple[tuple[IdentifierReference, ...], tuple[DocumentReference, ...]]:
+    """Derive public references solely from the current authorized trajectory.
+
+    This intentionally does not inspect model-produced Markdown. A reference can only
+    be published when it was present in the submitted request, canonical tool
+    arguments, or an observation returned by an already-authorized tool call.
+    """
+    evidence: list[str] = []
+    evidence.extend(
+        str(message.content)
+        for message in state["messages"]
+        if isinstance(message, HumanMessage)
+    )
+    tool_messages = [
+        message for message in state["messages"] if isinstance(message, ToolMessage)
+    ]
+    documents: list[DocumentReference] = []
+    for index, call in enumerate(state["executed_tool_calls"]):
+        arguments = call.get("arguments")
+        if isinstance(arguments, dict):
+            evidence.extend(_string_values(arguments))
+        if index >= len(tool_messages):
+            continue
+        observation = str(tool_messages[index].content)
+        evidence.append(observation)
+        if call.get("tool") == "search_documentation":
+            documents.extend(_document_references_from_observation(observation))
+
+    identifiers = _identifier_references_from_evidence(evidence)
+    return identifiers, _deduplicate_document_references(documents)
+
+
+def _identifier_references_from_evidence(
+    evidence: list[str],
+) -> tuple[IdentifierReference, ...]:
+    found: list[IdentifierReference] = []
+    for value in evidence:
+        matches = sorted(
+            (
+                (match.start(), reference_type, match.group(0).upper())
+                for pattern, reference_type in (
+                    (_MAINTENANCE_TICKET_PATTERN, IdentifierType.MAINTENANCE_TICKET),
+                    (_STATION_IDENTIFIER_PATTERN, IdentifierType.STATION),
+                    (_PRODUCT_IDENTIFIER_PATTERN, IdentifierType.PRODUCT),
+                    (_ERROR_CODE_PATTERN, IdentifierType.ERROR_CODE),
+                )
+                for match in pattern.finditer(value)
+            ),
+            key=lambda item: item[0],
+        )
+        for _, reference_type, normalized in matches:
+            if reference_type is IdentifierType.ERROR_CODE and normalized.startswith(
+                "MT-"
+            ):
+                continue
+            reference = IdentifierReference(value=normalized, type=reference_type)
+            if reference not in found:
+                found.append(reference)
+            if len(found) == 12:
+                return tuple(found)
+    return tuple(found)
+
+
+def _document_references_from_observation(observation: str) -> list[DocumentReference]:
+    """Keep only catalog metadata from a successful structured search result."""
+    try:
+        payload = json.loads(observation)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        return []
+    documents: list[DocumentReference] = []
+    for result in payload["results"]:
+        if not isinstance(result, dict):
+            continue
+        document_id = result.get("document_id")
+        metadata = result.get("metadata")
+        if not isinstance(document_id, str) or not isinstance(metadata, dict):
+            continue
+        normalized_document_id = document_id.strip()
+        if not normalized_document_id:
+            continue
+        title = _document_reference_title(result, metadata, normalized_document_id)
+        document_format = _document_reference_format(metadata)
+        documents.append(
+            DocumentReference(
+                document_id=normalized_document_id,
+                title=title,
+                format=document_format,
+            )
+        )
+    return documents
+
+
+def _document_reference_title(
+    result: dict[object, object], metadata: dict[object, object], document_id: str
+) -> str:
+    """Select the canonical authorized document name, never a chunk heading."""
+    for source, field in (
+        (metadata, "document_title"),
+        (result, "document_title"),
+        (metadata, "title"),
+        (result, "title"),
+        (metadata, "document_name"),
+        (result, "document_name"),
+    ):
+        value = source.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return f"Document {document_id}"
+
+
+def _document_reference_format(metadata: dict[object, object]) -> str:
+    for field in ("format", "mime_type"):
+        value = metadata.get(field)
+        if isinstance(value, str) and value.strip():
+            normalized = value.strip()
+            if len(normalized) <= 64:
+                return normalized
+            return _COMPACT_DOCUMENT_FORMATS.get(normalized.lower(), "document")
+    return "document"
+
+
+def _deduplicate_document_references(
+    documents: list[DocumentReference],
+) -> tuple[DocumentReference, ...]:
+    unique: list[DocumentReference] = []
+    document_ids: set[str] = set()
+    for document in documents:
+        if document.document_id in document_ids:
+            continue
+        document_ids.add(document.document_id)
+        unique.append(document)
+        if len(unique) == 5:
+            break
+    return tuple(unique)
+
+
+def _string_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [item for child in value.values() for item in _string_values(child)]
+    if isinstance(value, (list, tuple)):
+        return [item for child in value for item in _string_values(child)]
+    return []
+
+
+def _serialized_tool_observation(result: object) -> str:
+    """Keep structured MCP result shape available to the deterministic final projection."""
+    if isinstance(result, (dict, list, tuple)):
+        return json.dumps(result, ensure_ascii=False, default=str)
+    return str(result)
+
+
 def _resolve_investigation_steps(
     executed_tool_calls: tuple[dict[str, object], ...],
     proposed_steps: tuple[InvestigationStep, ...],
@@ -979,6 +1170,55 @@ def _validated_final_output(text: str) -> FinalAgentOutput:
         raise FinalAgentOutputContractError(
             "Final output normalizer returned an invalid structured response"
         ) from error
+
+
+def _normalized_final_output_or_draft(
+    message: AIMessage,
+    *,
+    draft: FinalAgentOutput,
+) -> FinalAgentOutput:
+    """Accept only a valid structured finalizer result, otherwise retain the draft.
+
+    The first final response was already parsed into ``draft``. Reusing it for an
+    empty or invalid structured-normalizer response preserves a validated narrative
+    while deterministic code remains responsible for steps and references below.
+    """
+    response = to_llm_response(message)
+    candidate = draft
+    if not response.tool_calls and response.text and response.text.strip():
+        try:
+            candidate = _validated_final_output(response.text)
+        except FinalAgentOutputContractError:
+            pass
+    return candidate
+
+
+def _with_safe_narrative(
+    output: FinalAgentOutput, response_language: ResponseLanguage
+) -> FinalAgentOutput:
+    """Replace only a model-produced reserved section with a safe final narrative.
+
+    The normalizer may be unavailable or may itself return an invalid object. In that
+    case the initial draft remains usable only when it also satisfies the presentation
+    contract. We do not extract or rewrite Markdown sections; a reserved section is
+    replaced with a localized, evidence-neutral sentence while structured fields stay
+    available for deterministic trajectory validation.
+    """
+    if not (
+        output.forbidden_action_sections()
+        or output.forbidden_investigation_summary_sections()
+    ):
+        return output
+    answer = (
+        "Die autorisierte Prüfung ist abgeschlossen."
+        if response_language is ResponseLanguage.DE
+        else "The authorized check is complete."
+    )
+    return FinalAgentOutput(
+        answer=answer,
+        investigation_steps=output.investigation_steps,
+        next_steps=output.next_steps,
+    )
 
 
 def _require_pending_action(

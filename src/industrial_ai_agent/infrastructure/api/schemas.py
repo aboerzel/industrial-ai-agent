@@ -13,6 +13,8 @@ from pydantic import (
     field_validator,
 )
 
+from industrial_ai_agent.agent.response_language import ResponseLanguage
+
 
 class RunStatus(StrEnum):
     RUNNING = "running"
@@ -55,6 +57,13 @@ class CreateRunRequest(BaseModel):
     user_clearance: DemoUserClearance = Field(
         default=DemoUserClearance.PUBLIC,
         description="Demo-only simulated user clearance; it never sets run classification.",
+    )
+    response_language: ResponseLanguage | None = Field(
+        default=None,
+        description=(
+            "Explicit response language for this run. When omitted, the server uses "
+            "deterministic request-language detection."
+        ),
     )
     investigation_id: UUID | None = Field(
         default=None,
@@ -106,6 +115,30 @@ class InvestigationStepResponse(BaseModel):
     finding: Annotated[str, StringConstraints(min_length=1, max_length=1_000)]
 
 
+class IdentifierTypeResponse(StrEnum):
+    ERROR_CODE = "error_code"
+    STATION = "station"
+    PRODUCT = "product"
+    MAINTENANCE_TICKET = "maintenance_ticket"
+
+
+class IdentifierReferenceResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    value: Annotated[str, StringConstraints(min_length=2, max_length=64)]
+    type: IdentifierTypeResponse
+
+
+class DocumentReferenceResponse(BaseModel):
+    """Authorized retrieval metadata; it deliberately has no storage location."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    document_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    title: Annotated[str, StringConstraints(min_length=1, max_length=256)]
+    format: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+
+
 class ApprovalRequestResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -144,6 +177,10 @@ class RunResponse(BaseModel):
     next_steps: tuple[
         Annotated[str, StringConstraints(min_length=1, max_length=500)], ...
     ] = Field(default=(), max_length=5)
+    identifiers: tuple[IdentifierReferenceResponse, ...] = Field(
+        default=(), max_length=12
+    )
+    documents: tuple[DocumentReferenceResponse, ...] = Field(default=(), max_length=5)
     tool_calls: tuple[ToolCallResponse, ...] = ()
     approval_request: ApprovalRequestResponse | None = None
 
@@ -164,6 +201,10 @@ class InvestigationTurnResponse(BaseModel):
     next_steps: tuple[
         Annotated[str, StringConstraints(min_length=1, max_length=500)], ...
     ] = Field(default=(), max_length=5)
+    identifiers: tuple[IdentifierReferenceResponse, ...] = Field(
+        default=(), max_length=12
+    )
+    documents: tuple[DocumentReferenceResponse, ...] = Field(default=(), max_length=5)
     tool_calls: tuple[ToolCallResponse, ...] = ()
     created_at: str | None = None
     updated_at: str | None = None

@@ -655,6 +655,64 @@ dd {
   color: #155f3b;
 }
 
+.structured-reference {
+  display: inline;
+  border-bottom: 1px dashed #176b4b;
+  color: #155f3b;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.document-reference {
+  border-bottom-color: #8b5c1d;
+  color: #7a4d0b;
+}
+
+.structured-reference:focus-visible {
+  outline: 3px solid #b9d8ca;
+  outline-offset: 2px;
+}
+
+.reference-popover {
+  display: inline-flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin: 4px 6px 4px 0;
+  vertical-align: middle;
+}
+
+.reference-action {
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid #7ea48f;
+  color: #155f3b;
+  background: #eef6f1;
+  font-size: 0.75rem;
+}
+
+.reference-action:hover:not(:disabled) {
+  color: #ffffff;
+  background: #176b4b;
+}
+
+.document-references {
+  margin-top: 16px;
+  border-top: 1px solid #dde5e1;
+  padding-top: 12px;
+}
+
+.document-references h4 {
+  margin: 0 0 8px;
+  color: #155f3b;
+  font-size: 0.86rem;
+  text-transform: uppercase;
+}
+
+.document-references ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
 .error-message {
   margin: 0;
   border-top: 1px solid #d8928d;

@@ -11,6 +11,7 @@ const composerForm = document.querySelector("#composer-form");
 const composerMessage = document.querySelector("#composer-message");
 const composerButton = document.querySelector("#composer-button");
 const userClearance = document.querySelector("#user-clearance");
+const responseLanguage = document.querySelector("#response-language");
 const newInvestigationButton = document.querySelector("#new-investigation-button");
 const history = document.querySelector("#conversation-history");
 const runStatus = document.querySelector("#run-status");
@@ -31,6 +32,23 @@ composerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await submitRequest(composerMessage.value.trim());
 });
+
+composerMessage.addEventListener("keydown", (event) => {
+  if (
+    event.key !== "Enter" ||
+    event.shiftKey ||
+    event.isComposing ||
+    isSubmitting ||
+    !composerMessage.value.trim()
+  ) {
+    return;
+  }
+  event.preventDefault();
+  composerForm.requestSubmit();
+});
+
+userClearance.addEventListener("change", persistUiState);
+responseLanguage.addEventListener("change", persistUiState);
 
 newInvestigationButton.addEventListener("click", () => {
   if (isSubmitting) return;
@@ -55,6 +73,11 @@ async function restoreActiveInvestigation() {
 
   currentInvestigationId = activeInvestigation.investigationId;
   userClearance.value = activeInvestigation.userClearance;
+  responseLanguage.value = activeInvestigation.responseLanguage;
+  if (!activeInvestigation.investigationId) {
+    renderEmptyInvestigation();
+    return;
+  }
   try {
     await reloadInvestigation();
   } catch {
@@ -78,6 +101,7 @@ async function submitRequest(message) {
     const result = await createRun(
       message,
       userClearance.value,
+      responseLanguage.value,
       currentInvestigationId,
     );
     currentInvestigationId = result.investigation_id;
@@ -102,7 +126,7 @@ function renderEmptyInvestigation() {
   currentInvestigationId = null;
   pendingAgentTurn = null;
   clearActiveInvestigation();
-  resultTitle.textContent = "No active investigation";
+  resultTitle.textContent = "No active chat";
   investigationContext.textContent =
     "Ask about a production issue, station, product, maintenance ticket, or available documentation.";
   investigationMetadata.hidden = true;
@@ -117,8 +141,8 @@ function renderInvestigation(investigation) {
   hideError();
   pendingAgentTurn = null;
   currentInvestigationId = investigation.investigation_id;
-  persistActiveInvestigation(currentInvestigationId, userClearance.value);
-  resultTitle.textContent = "Investigation";
+  persistActiveInvestigation(currentInvestigationId);
+  resultTitle.textContent = "Chat";
   investigationContext.textContent = investigationContextFor(investigation.turns);
   investigationRuns.textContent = String(investigation.run_count);
   investigationTools.textContent = String(investigation.tool_call_count);
@@ -135,15 +159,23 @@ function renderInvestigation(investigation) {
   syncControls();
 }
 
-function persistActiveInvestigation(investigationId, clearance) {
+function persistActiveInvestigation(investigationId) {
   window.sessionStorage.setItem(
     ACTIVE_INVESTIGATION_STORAGE_KEY,
-    JSON.stringify({ investigationId, userClearance: clearance }),
+    JSON.stringify({
+      investigationId,
+      userClearance: userClearance.value,
+      responseLanguage: responseLanguage.value,
+    }),
   );
 }
 
 function clearActiveInvestigation() {
-  window.sessionStorage.removeItem(ACTIVE_INVESTIGATION_STORAGE_KEY);
+  persistActiveInvestigation(null);
+}
+
+function persistUiState() {
+  persistActiveInvestigation(currentInvestigationId);
 }
 
 function readActiveInvestigation() {
@@ -153,14 +185,15 @@ function readActiveInvestigation() {
     );
     if (
       !stored ||
-      typeof stored.investigationId !== "string" ||
+      (stored.investigationId !== null && typeof stored.investigationId !== "string") ||
       !["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(
         stored.userClearance,
-      )
+      ) ||
+      !["DE", "EN"].includes(stored.responseLanguage ?? "EN")
     ) {
       return null;
     }
-    return stored;
+    return { ...stored, responseLanguage: stored.responseLanguage ?? "EN" };
   } catch {
     return null;
   }
@@ -168,7 +201,7 @@ function readActiveInvestigation() {
 
 function renderPendingConversation(message, { replace }) {
   hideError();
-  resultTitle.textContent = "Investigation";
+  resultTitle.textContent = "Chat";
   if (replace) {
     investigationContext.textContent = "Starting a new investigation.";
     investigationMetadata.hidden = true;
@@ -202,7 +235,7 @@ function createEmptyState() {
   const emptyState = document.createElement("div");
   emptyState.className = "empty-investigation";
   const title = document.createElement("h3");
-  title.textContent = "Start a new investigation";
+  title.textContent = "Start a new chat";
   const detail = document.createElement("p");
   detail.textContent =
     "Ask about a production issue, station, product, maintenance ticket, or available documentation.";
@@ -244,6 +277,7 @@ function renderAgentTurn(turn) {
   const answer = document.createElement("div");
   answer.className = "agent-answer";
   renderAgentAnswer(answer, turn.answer ?? "No final answer recorded.");
+  linkStructuredReferences(answer, turn, responseLanguage.value);
   article.append(answer);
   const investigationSteps = renderInvestigationSteps(
     turn.investigation_steps ?? [],
@@ -252,6 +286,8 @@ function renderAgentTurn(turn) {
   if (investigationSteps) article.append(investigationSteps);
   const nextSteps = renderNextSteps(turn.next_steps ?? [], turn.response_language);
   if (nextSteps) article.append(nextSteps);
+  const documents = renderAdditionalDocuments(turn.documents ?? [], turn.answer ?? "", responseLanguage.value);
+  if (documents) article.append(documents);
   article.append(renderTools(turn.tool_calls));
 
   const metadata = document.createElement("p");
@@ -342,6 +378,159 @@ function renderNextSteps(nextSteps, responseLanguage) {
   return section;
 }
 
+function linkStructuredReferences(answer, turn, selectedLanguage) {
+  const references = [
+    ...(turn.documents ?? []).map((reference) => ({
+      ...reference,
+      kind: "document",
+      value: reference.title,
+    })),
+    ...(turn.identifiers ?? []).map((reference) => ({
+      ...reference,
+      kind: "identifier",
+    })),
+  ].filter((reference) => reference.value);
+  if (!references.length) return;
+
+  const matcher = new RegExp(
+    references
+      .map((reference) => escapeRegExp(reference.value))
+      .sort((left, right) => right.length - left.length)
+      .join("|"),
+    "g",
+  );
+  const lookup = new Map(references.map((reference) => [reference.value, reference]));
+  const walker = document.createTreeWalker(answer, window.NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (!node.parentElement?.closest("a, button, .structured-reference")) textNodes.push(node);
+  }
+  for (const node of textNodes) {
+    const source = node.textContent ?? "";
+    matcher.lastIndex = 0;
+    if (!matcher.test(source)) continue;
+    matcher.lastIndex = 0;
+    const fragment = document.createDocumentFragment();
+    let start = 0;
+    for (const match of source.matchAll(matcher)) {
+      const value = match[0];
+      const index = match.index ?? 0;
+      fragment.append(document.createTextNode(source.slice(start, index)));
+      const reference = lookup.get(value);
+      if (reference) fragment.append(createReferenceControl(reference, selectedLanguage));
+      else fragment.append(document.createTextNode(value));
+      start = index + value.length;
+    }
+    fragment.append(document.createTextNode(source.slice(start)));
+    node.replaceWith(fragment);
+  }
+}
+
+function createReferenceControl(reference, selectedLanguage) {
+  const control = document.createElement("span");
+  control.className = `structured-reference ${reference.kind}-reference`;
+  control.tabIndex = 0;
+  control.setAttribute("role", "button");
+  control.textContent = reference.value;
+  control.title = reference.kind === "document" ? "Document reference" : "Reference actions";
+  const openMenu = () => showReferenceMenu(control, reference, selectedLanguage);
+  control.addEventListener("click", openMenu);
+  control.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openMenu();
+    }
+  });
+  return control;
+}
+
+function showReferenceMenu(anchor, reference, selectedLanguage) {
+  document.querySelectorAll(".reference-popover").forEach((menu) => menu.remove());
+  const menu = document.createElement("div");
+  menu.className = "reference-popover";
+  menu.setAttribute("role", "menu");
+  if (reference.kind === "document") {
+    const unavailable = selectedLanguage === "DE"
+      ? "Sicherer Dokumentzugriff ist noch nicht konfiguriert."
+      : "Secure document access is not configured yet.";
+    for (const label of ["Open", "Download"]) {
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "reference-action";
+      action.textContent = label;
+      action.disabled = true;
+      action.title = unavailable;
+      menu.append(action);
+    }
+  } else {
+    for (const actionDefinition of identifierActions(reference, selectedLanguage)) {
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "reference-action";
+      action.textContent = actionDefinition.label;
+      action.addEventListener("click", () => {
+        if (actionDefinition.prompt) useAsFollowUp(actionDefinition.prompt);
+        if (actionDefinition.copy) void copyIdentifier(reference.value);
+        menu.remove();
+      });
+      menu.append(action);
+    }
+  }
+  anchor.after(menu);
+}
+
+function renderAdditionalDocuments(documents, answer, selectedLanguage) {
+  const unlinked = documents.filter((documentReference) => !answer.includes(documentReference.title));
+  if (!unlinked.length) return null;
+  const section = document.createElement("section");
+  section.className = "document-references";
+  const title = document.createElement("h4");
+  title.textContent = selectedLanguage === "DE" ? "Referenzen" : "References";
+  const list = document.createElement("ul");
+  for (const reference of unlinked) {
+    const item = document.createElement("li");
+    item.append(createReferenceControl({ ...reference, kind: "document", value: reference.title }, selectedLanguage));
+    list.append(item);
+  }
+  section.append(title, list);
+  return section;
+}
+
+function identifierActions(reference, language) {
+  const german = language === "DE";
+  const actionsByType = {
+    error_code: [
+      [german ? "Untersuchen" : "Investigate", german ? `Untersuche ${reference.value} genauer.` : `Investigate ${reference.value} in more detail.`],
+      [german ? "Dokumentation suchen" : "Search documentation", german ? `Suche technische Dokumentation zu ${reference.value}.` : `Search technical documentation for ${reference.value}.`],
+    ],
+    station: [
+      [german ? "Station untersuchen" : "Investigate station", german ? `Untersuche Station ${reference.value} genauer.` : `Investigate station ${reference.value} in more detail.`],
+      [german ? "Aktuellen Status prüfen" : "Check current status", german ? `Prüfe den aktuellen Status von Station ${reference.value}.` : `Check the current status of station ${reference.value}.`],
+    ],
+    product: [
+      [german ? "Produkt untersuchen" : "Investigate product", german ? `Untersuche Produkt ${reference.value} genauer.` : `Investigate product ${reference.value} in more detail.`],
+      [german ? "Produkthistorie anzeigen" : "Show product history", german ? `Zeige die Produkthistorie von ${reference.value}.` : `Show the product history for ${reference.value}.`],
+    ],
+    maintenance_ticket: [
+      [german ? "Ticket prüfen" : "Inspect ticket", german ? `Prüfe Wartungsticket ${reference.value}.` : `Inspect maintenance ticket ${reference.value}.`],
+    ],
+  };
+  const actions = actionsByType[reference.type] ?? [];
+  return [
+    ...actions.map(([label, prompt]) => ({ label, prompt })),
+    { label: german ? "Kopieren" : "Copy", copy: true },
+  ];
+}
+
+async function copyIdentifier(value) {
+  if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function createTurnLabel(label) {
   const heading = document.createElement("h3");
   heading.className = "turn-label";
@@ -420,7 +609,7 @@ function setSubmitting() {
   isSubmitting = true;
   composerMessage.disabled = true;
   composerButton.disabled = true;
-  composerButton.textContent = "Investigating...";
+  composerButton.textContent = "Sending...";
   newInvestigationButton.disabled = true;
 }
 
@@ -428,10 +617,10 @@ function syncControls() {
   const hasInvestigation = Boolean(currentInvestigationId);
   composerMessage.disabled = isSubmitting;
   composerButton.disabled = isSubmitting;
-  composerButton.textContent = hasInvestigation ? "Send" : "Start Investigation";
+  composerButton.textContent = "Send";
   newInvestigationButton.disabled = isSubmitting;
   exportPdfButton.disabled = !hasInvestigation;
-  for (const action of history.querySelectorAll(".next-step-action")) {
+  for (const action of history.querySelectorAll(".next-step-action, .reference-action")) {
     action.disabled = isSubmitting;
   }
 }

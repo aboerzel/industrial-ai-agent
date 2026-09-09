@@ -119,6 +119,72 @@ def test_passes_supported_structured_output_request_to_provider() -> None:
     assert fake_client.completions.parameters["reasoning_effort"] == "none"
 
 
+def test_normalizes_provider_parsed_structured_response_object() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=None,
+                    parsed={"answer": "S04 reports QUALITY-09.", "next_steps": []},
+                    tool_calls=None,
+                ),
+                finish_reason="stop",
+            )
+        ]
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(supports_structured_output=True),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(completion),
+    )
+
+    response = client.chat(
+        LOCAL_QUALITY_PROFILE,
+        LLMRequest(
+            messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
+            response_format=LLMResponseFormat(
+                json_schema=LLMJsonSchema(name="test_response", schema_definition={})
+            ),
+        ),
+    )
+
+    assert response.text == '{"answer":"S04 reports QUALITY-09.","next_steps":[]}'
+
+
+def test_normalizes_provider_text_content_blocks() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=[
+                        {"type": "text", "text": '{"answer":"S04 '},
+                        {"type": "text", "text": 'reports QUALITY-09."}'},
+                    ],
+                    tool_calls=None,
+                ),
+                finish_reason="stop",
+            )
+        ]
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(supports_structured_output=True),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(completion),
+    )
+
+    response = client.chat(
+        LOCAL_QUALITY_PROFILE,
+        LLMRequest(
+            messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
+            response_format=LLMResponseFormat(
+                json_schema=LLMJsonSchema(name="test_response", schema_definition={})
+            ),
+        ),
+    )
+
+    assert response.text == '{"answer":"S04 reports QUALITY-09."}'
+
+
 def test_rejects_structured_output_for_unsupported_profile() -> None:
     completion = SimpleNamespace(choices=[])
     client = OpenAICompatibleLLMClient(
