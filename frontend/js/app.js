@@ -17,10 +17,6 @@ const responseLanguage = document.querySelector("#response-language");
 const newInvestigationButton = document.querySelector("#new-investigation-button");
 const history = document.querySelector("#conversation-history");
 const runStatus = document.querySelector("#run-status");
-const investigationRuns = document.querySelector("#investigation-runs");
-const investigationTools = document.querySelector("#investigation-tools");
-const investigationMetadata = document.querySelector("#investigation-metadata");
-const investigationContext = document.querySelector("#investigation-context");
 const resultTitle = document.querySelector("#result-title");
 const exportPdfButton = document.querySelector("#export-pdf-button");
 const errorMessage = document.querySelector("#error-message");
@@ -128,10 +124,7 @@ function renderEmptyInvestigation() {
   currentInvestigationId = null;
   pendingAgentTurn = null;
   clearActiveInvestigation();
-  resultTitle.textContent = "No active chat";
-  investigationContext.textContent =
-    "Ask about a production issue, station, product, maintenance ticket, or available documentation.";
-  investigationMetadata.hidden = true;
+  resultTitle.textContent = "Investigation";
   hideStatus();
   history.classList.add("empty-state");
   history.replaceChildren(createEmptyState());
@@ -144,11 +137,7 @@ function renderInvestigation(investigation) {
   pendingAgentTurn = null;
   currentInvestigationId = investigation.investigation_id;
   persistActiveInvestigation(currentInvestigationId);
-  resultTitle.textContent = "Chat";
-  investigationContext.textContent = investigationContextFor(investigation.turns);
-  investigationRuns.textContent = String(investigation.run_count);
-  investigationTools.textContent = String(investigation.tool_call_count);
-  investigationMetadata.hidden = false;
+  resultTitle.textContent = "Investigation";
   setStatus(investigation.status);
   history.classList.remove("empty-state");
   history.replaceChildren(
@@ -203,10 +192,8 @@ function readActiveInvestigation() {
 
 function renderPendingConversation(message, { replace }) {
   hideError();
-  resultTitle.textContent = "Chat";
+  resultTitle.textContent = "Investigation";
   if (replace) {
-    investigationContext.textContent = "Starting a new investigation.";
-    investigationMetadata.hidden = true;
     history.replaceChildren();
   }
   history.classList.remove("empty-state");
@@ -368,7 +355,7 @@ function renderNextSteps(nextSteps, responseLanguage) {
     const action = document.createElement("button");
     action.type = "button";
     action.className = "next-step-action";
-    action.textContent = "▶";
+    action.append(createIcon("arrow-right"));
     action.setAttribute("aria-label", label);
     action.title = label;
     action.addEventListener("click", () => useAsFollowUp(nextStep));
@@ -491,10 +478,12 @@ function renderDocuments(documents, selectedLanguage) {
     documentTitle.textContent = reference.title;
     const open = createDocumentAction(
       selectedLanguage === "DE" ? "Öffnen" : "Open",
+      "open",
       () => openDocument(reference.document_id, userClearance.value),
     );
     const download = createDocumentAction(
       selectedLanguage === "DE" ? "Herunterladen" : "Download",
+      "download",
       () => downloadDocument(reference.document_id, userClearance.value),
     );
     item.append(documentTitle, open, download);
@@ -504,11 +493,12 @@ function renderDocuments(documents, selectedLanguage) {
   return section;
 }
 
-function createDocumentAction(label, action) {
+function createDocumentAction(label, icon, action) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "reference-action document-action";
-  button.textContent = label;
+  button.title = label;
+  button.append(createIcon(icon), document.createTextNode(label));
   button.disabled = isSubmitting;
   button.addEventListener("click", async () => {
     if (isSubmitting) return;
@@ -560,6 +550,22 @@ function createTurnLabel(label) {
   heading.className = "turn-label";
   heading.textContent = label;
   return heading;
+}
+
+function createIcon(name) {
+  const paths = {
+    "arrow-right": "M5 12h14m-6-6 6 6-6 6",
+    open: "M14 4h6v6m0-6-9 9M18 13v6H4V5h6",
+    download: "M12 3v12m-5-5 5 5 5-5M5 21h14",
+  };
+  const namespace = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(namespace, "svg");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  const path = document.createElementNS(namespace, "path");
+  path.setAttribute("d", paths[name]);
+  icon.append(path);
+  return icon;
 }
 
 function createTurnError(message) {
@@ -633,7 +639,8 @@ function setSubmitting() {
   isSubmitting = true;
   composerMessage.disabled = true;
   composerButton.disabled = true;
-  composerButton.textContent = "Sending...";
+  composerButton.setAttribute("aria-label", "Sending message");
+  composerButton.title = "Sending message";
   newInvestigationButton.disabled = true;
 }
 
@@ -641,7 +648,8 @@ function syncControls() {
   const hasInvestigation = Boolean(currentInvestigationId);
   composerMessage.disabled = isSubmitting;
   composerButton.disabled = isSubmitting;
-  composerButton.textContent = "Send";
+  composerButton.setAttribute("aria-label", "Send message");
+  composerButton.title = "Send message";
   newInvestigationButton.disabled = isSubmitting;
   exportPdfButton.disabled = !hasInvestigation;
   for (const action of history.querySelectorAll(".next-step-action, .reference-action")) {
@@ -680,17 +688,6 @@ function statusLabel(status) {
     .split("_")
     .map((part) => `${part[0].toUpperCase()}${part.slice(1)}`)
     .join(" ");
-}
-
-function investigationContextFor(turns) {
-  const identifiers = [
-    ...new Set(
-      (turns[0]?.request.match(/\b(?:P\d+|S\d{2,3})\b/g) ?? []).map(
-        (identifier) => identifier.toUpperCase(),
-      ),
-    ),
-  ];
-  return identifiers.length ? identifiers.join(" / ") : "Active investigation";
 }
 
 function scrollHistoryToLatest() {

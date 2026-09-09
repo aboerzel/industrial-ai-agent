@@ -21,61 +21,61 @@ but cannot confirm a cause. All records and documents are synthetic.
 
 ## 1. Factory Discovery
 
-| Use Case / Scenario | Query | User Clearance | Expected Result |
+| Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
-| Public station discovery | Which stations are available? | PUBLIC | Returns only S01 and S05 and no hidden count or other station name. |
-| Internal station discovery | Which stations are available? | INTERNAL | Returns S01, S02, S03, and S05; does not disclose S04 or S07. |
-| Restricted station discovery | Which stations are available? | RESTRICTED | Returns all six stations, including S07. |
-| Public product discovery | Which products are available? | PUBLIC | Returns only P4101 and P4102, both with final status COMPLETED. |
-| Internal product discovery | Which products are available? | INTERNAL | Adds P4900 and P4901 but not confidential/restricted products. |
-| Station orientation | What do you know about station S02? | INTERNAL | Returns its visible Positioning overview and current RUNNING state. |
-| Product orientation | What do you know about product P4801? | CONFIDENTIAL | Returns its latest completed state and visible path; its warning is not final status. |
+| Public station discovery | List the production stations available to me in this demo. | PUBLIC | Returns only S01 and S05 and no hidden count or other station name. |
+| Internal station discovery | Provide a complete overview of the production stations available to me. | INTERNAL | Returns S01, S02, S03, and S05; does not disclose S04 or S07. |
+| Restricted station discovery | List all production stations available to me, including their station IDs. | RESTRICTED | Returns all six stations, including S07. |
+| Public product discovery | List the products available to me and summarize their final status. | PUBLIC | Returns only P4101 and P4102, both with final status COMPLETED. |
+| Internal product discovery | Provide an overview of the products available to me and their final status. | INTERNAL | Adds P4900 and P4901 but not confidential/restricted products. |
+| Station orientation | Provide an overview of station S02, including its current status and role in production. | INTERNAL | Returns its visible Positioning overview and current RUNNING state. |
+| Product orientation | Investigate product P4801 and summarize its visible production path and latest status. | CONFIDENTIAL | Returns its latest completed state and visible path; its warning is not final status. |
 
 ## 2. Production Status
 
-| Use Case / Scenario | Query | User Clearance | Expected Result |
+| Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
-| Available stations | Which stations are currently available? | INTERNAL | Identifies visible running S01, S02, S03, and S05 only. |
-| Restricted status | What is the current status of S07? | RESTRICTED | Returns FAULTED and PROTO-COMM-07 in a RESTRICTED run. |
-| Recent failures | Which products recently failed? | CONFIDENTIAL | Returns visible failed P4711 and P4811; P9001 is absent. |
-| Products at station | Which products passed through S04? | CONFIDENTIAL | The bounded S04 overview returns visible P4811, P4801, and P4711. |
-| Successful product | What happened to P4101? | PUBLIC | Shows completed public S01 and S05 trajectory. |
-| Explicit product failure | What happened to P4901? | INTERNAL | Shows completed S01 and explicit POSITION-ENC-02 failure at S02. |
+| Available stations | Identify the production stations currently available and report their operational status. | INTERNAL | Identifies visible running S01, S02, S03, and S05 only. |
+| Restricted status | Check the current status of station S07 and explain any reported fault or error code. | RESTRICTED | Returns FAULTED and PROTO-COMM-07 in a RESTRICTED run. |
+| Recent failures | Identify recently failed products and summarize their visible failure status. | CONFIDENTIAL | Returns visible failed P4711 and P4811; P9001 is absent. |
+| Products at station | List the products that passed through station S04 and summarize their visible processing status. | CONFIDENTIAL | The bounded S04 overview returns visible P4811, P4801, and P4711. |
+| Successful product | Investigate the production history of P4101 and summarize its completed path. | PUBLIC | Shows completed public S01 and S05 trajectory. |
+| Explicit product failure | Investigate what happened to product P4901 and explain its final processing status and any error. | INTERNAL | Shows completed S01 and explicit POSITION-ENC-02 failure at S02. |
 
 ## 3. Product Investigation
 
-| Use Case / Scenario | Query | User Clearance | Expected Result |
+| Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
-| P4711 history | What happened to P4711? | CONFIDENTIAL | Shows S01 completion, S02 POSITION-ENC-02 warning, S03 completion, and S04 QUALITY-09 failure chronologically. |
-| Higher user, lower run | Investigate why P4711 failed at S04. | RESTRICTED | Resolves CONFIDENTIAL run/RLS ceiling, not RESTRICTED; public-cloud routing remains possible. |
-| Confidential denial | Investigate P4711 at S04. | INTERNAL | Returns neutral `requested_data_unavailable`; no model call or existence disclosure. |
-| Warning relevance | Are there warnings in P4711's history relevant to the later failure? | CONFIDENTIAL | Separates S02 warning from S04 failure; any causal link is explicitly an inference. |
+| P4711 history | Investigate the complete production history of P4711. Summarize its station sequence, inspection results, warnings, and final error. | CONFIDENTIAL | Shows S01 completion, S02 POSITION-ENC-02 warning, S03 completion, and S04 QUALITY-09 failure chronologically. |
+| Higher user, lower run | Investigate why product P4711 failed at station S04. Check the relevant product history, inspection results, and error codes, and use the available documentation if needed. | RESTRICTED | Resolves CONFIDENTIAL run/RLS ceiling, not RESTRICTED; public-cloud routing remains possible. |
+| Confidential denial | Investigate the available history and failure details for product P4711 at station S04. | INTERNAL | Returns neutral `requested_data_unavailable`; no model call or existence disclosure. |
+| Warning relevance | Review P4711's production history and assess whether earlier warnings are relevant to its later failure at station S04. | CONFIDENTIAL | Separates S02 warning from S04 failure; any causal link is explicitly an inference. |
 
 ## 4. Knowledge & Documentation
 
-| Use Case / Scenario | Query | User Clearance | Expected Result |
+| Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
-| QUALITY-09 lookup | What does QUALITY-09 mean? | CONFIDENTIAL | Returns eligible documentation with source/chunk provenance. |
-| Positioning procedure | How should POSITION-ENC-02 be investigated? | CONFIDENTIAL | Returns eligible troubleshooting material without proving P4711's cause. |
-| S04 documents | Which documentation is available for station S04? | CONFIDENTIAL | Returns only matching documents visible at the run ceiling. |
-| Restricted denial | Find documentation for P9001 at S07. | CONFIDENTIAL | Neutral unavailable behavior; no restricted title, content, or count leaks. |
+| QUALITY-09 lookup | Explain QUALITY-09 using the available technical documentation, and summarize what the error means. | CONFIDENTIAL | Returns eligible documentation with source/chunk provenance. |
+| Positioning procedure | Explain how to investigate POSITION-ENC-02 using the available technical documentation. | CONFIDENTIAL | Returns eligible troubleshooting material without proving P4711's cause. |
+| S04 documents | Find the technical documentation available for station S04 and summarize the relevant troubleshooting guidance. | CONFIDENTIAL | Returns only matching documents visible at the run ceiling. |
+| Restricted denial | Search the available documentation for product P9001 at station S07 and summarize any accessible guidance. | CONFIDENTIAL | Neutral unavailable behavior; no restricted title, content, or count leaks. |
 
 ## 5. Cross-source Investigations
 
-| Use Case / Scenario | Query | User Clearance | Expected Result |
+| Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
-| History plus knowledge | Which station did P4711 fail at and what does the error code mean? | CONFIDENTIAL | Combines product history and documentation; evidence and explanation are distinguishable. |
-| Warning plus state | Are P4711 warnings relevant, and what is the current state of the station where it failed? | CONFIDENTIAL | Combines product history with S04 status and labels inference. |
-| Restricted cross-source | Investigate P9001 at S07 and use available documentation. | RESTRICTED | Combines restricted history, status, and documentation; lower-clearance users cannot discover it. |
+| History plus knowledge | Investigate where P4711 failed and explain the reported error code. Use the relevant product history and documentation. | CONFIDENTIAL | Combines product history and documentation; evidence and explanation are distinguishable. |
+| Warning plus state | Review P4711's previous warnings and the current state of the station where it failed. Clearly distinguish observations from inferences. | CONFIDENTIAL | Combines product history with S04 status and labels inference. |
+| Restricted cross-source | Investigate product P9001 at station S07. Review its production history, current station status, and available documentation, then summarize the findings. | RESTRICTED | Combines restricted history, status, and documentation; lower-clearance users cannot discover it. |
 
 ## 6. Restricted Data
 
-| Use Case / Scenario | Query | User Clearance | Expected Result |
+| Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
-| Product non-leakage | What do you know about product P9001? | CONFIDENTIAL | Neutral unavailable/not-found semantics without identifier details, count, or required clearance. |
-| Station non-leakage | What do you know about station S07? | CONFIDENTIAL | Neutral unavailable/not-found semantics without restricted state or count. |
-| Ticket lookup | Show me ticket MT-6EA0DEF5515A. | CONFIDENTIAL | Uses `get_maintenance_ticket` to return only the visible ticket projection. User-facing text remains English even when structured ticket values use technical English. |
-| Ticket non-leakage | Zeige mir das Ticket MT-6EA0DEF5515A. | INTERNAL | An unknown or RLS-hidden ticket produces the same neutral unavailable result, without summary, station, status, classification, or required-clearance disclosure. User-facing text remains German. |
+| Product non-leakage | Provide the information available to me about product P9001, including its current or final status if accessible. | CONFIDENTIAL | Neutral unavailable/not-found semantics without identifier details, count, or required clearance. |
+| Station non-leakage | Provide the information available to me about station S07, including its current status if accessible. | CONFIDENTIAL | Neutral unavailable/not-found semantics without restricted state or count. |
+| Ticket lookup | Show the available details for maintenance ticket MT-6EA0DEF5515A and summarize its visible status and affected equipment. | CONFIDENTIAL | Uses `get_maintenance_ticket` to return only the visible ticket projection. User-facing text remains English even when structured ticket values use technical English. |
+| Ticket non-leakage | Show the available details for maintenance ticket MT-6EA0DEF5515A and summarize its visible status and affected equipment. | INTERNAL | An unknown or RLS-hidden ticket produces the same neutral unavailable result, without summary, station, status, classification, or required-clearance disclosure. User-facing text remains German. |
 
 ## 7. Root-Cause Analysis
 
@@ -86,12 +86,12 @@ telemetry are intentionally excluded. The current local access policy grants
 `codex-development` `READ_RCA` at INTERNAL clearance, so it can analyze only
 RLS-visible INTERNAL runs.
 
-| Use Case / Scenario | Query | User Clearance | Expected Result |
+| Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
-| RCA overview | 1. UI: `What happened to P4901?` at INTERNAL. 2. MCP: `analyze_run(run_id, focus="overview")`. | INTERNAL | Reports observed run lifecycle/tool metadata and source completeness. It does not expose P4901 payloads or emit CONFIRMED_RUN_CAUSE. |
-| RCA failure | 1. Create a genuine failed INTERNAL run through an actual bounded service failure. 2. Find it with `runtime_mcp.list_recent_agent_runs(status="failed")`. 3. Call `analyze_run(run_id, focus="failure")`. | INTERNAL | Reports OBSERVED failed runtime/span/tool locations and limitations. A failure location is not a confirmed cause; no telemetry is manufactured. |
-| RCA performance | 1. Execute a genuine INTERNAL UI run with Tempo/Langfuse enabled. 2. Call `analyze_run(run_id, focus="performance")`. | INTERNAL | When trace timing can be attributed to components, reports the dominant measured component and its share, never “slow”, abnormal, or a root cause. Missing sources or unattributable timings yield partial/insufficient evidence. |
-| Confidential RCA boundary | Analyze a CONFIDENTIAL P4711 run with `codex-development`. | INTERNAL | Runtime RLS returns neutral unavailable before telemetry lookup; a run ID is not authority. |
+| RCA overview | Create an INTERNAL investigation for product P4901, then analyze the resulting run with an RCA overview and summarize the observed run lifecycle, tool usage, and source completeness. | INTERNAL | Reports observed run lifecycle/tool metadata and source completeness. It does not expose P4901 payloads or emit CONFIRMED_RUN_CAUSE. |
+| RCA failure | Create a genuine failed INTERNAL investigation through a bounded service failure. Analyze the resulting run with an RCA failure focus and summarize only observed failure locations and limitations. | INTERNAL | Reports OBSERVED failed runtime/span/tool locations and limitations. A failure location is not a confirmed cause; no telemetry is manufactured. |
+| RCA performance | Run an INTERNAL investigation with tracing enabled. Analyze the resulting run with an RCA performance focus and summarize measured component timing if available. | INTERNAL | When trace timing can be attributed to components, reports the dominant measured component and its share, never “slow”, abnormal, or a root cause. Missing sources or unattributable timings yield partial/insufficient evidence. |
+| Confidential RCA boundary | Attempt to analyze a CONFIDENTIAL P4711 investigation run using codex-development access and report only the information available to you. | INTERNAL | Runtime RLS returns neutral unavailable before telemetry lookup; a run ID is not authority. |
 
 ## 8. Execution Notes
 

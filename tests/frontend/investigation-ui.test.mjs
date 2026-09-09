@@ -73,9 +73,9 @@ test("renders a single-composer investigation workspace", async (t) => {
     const { document } = await loadApp();
 
     assert.equal(document.querySelectorAll("textarea").length, 1);
-    assert.equal(document.querySelector("#result-title")?.textContent, "No active chat");
+    assert.equal(document.querySelector("#result-title")?.textContent, "Investigation");
     assert.equal(document.querySelector("#composer-message")?.disabled, false);
-    assert.equal(document.querySelector("#composer-button")?.textContent, "Send");
+    assert.equal(document.querySelector("#composer-button")?.getAttribute("aria-label"), "Send message");
     assert.equal(document.querySelector("#export-pdf-button")?.disabled, true);
     assert.equal(document.querySelector("#user-clearance")?.closest(".toolbar-controls") !== null, true);
     assert.equal(document.querySelector("#run-status")?.hidden, true);
@@ -96,7 +96,7 @@ test("renders a single-composer investigation workspace", async (t) => {
       submit(document, window);
       await settle();
 
-      assert.equal(document.querySelector("#composer-button")?.textContent, "Send");
+      assert.equal(document.querySelector("#composer-button")?.getAttribute("aria-label"), "Send message");
       assert.equal(document.querySelector("#composer-message")?.disabled, false);
       assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
       assert.equal(bodies[0].investigation_id, undefined);
@@ -115,9 +115,8 @@ test("renders a single-composer investigation workspace", async (t) => {
       assert.equal(bodies[1].investigation_id, INVESTIGATION_ID);
       assert.equal(bodies[1].user_clearance, "INTERNAL");
       assert.equal(document.querySelectorAll("textarea").length, 1);
-      assert.equal(document.querySelector("#investigation-context")?.textContent, "P4711 / S04");
-      assert.equal(document.querySelector("#investigation-runs")?.textContent, "2");
-      assert.equal(document.querySelector("#investigation-tools")?.textContent, "3");
+      assert.equal(document.querySelector("#result-title")?.textContent, "Investigation");
+      assert.equal(document.querySelector("#investigation-metadata"), null);
 
       const details = [...document.querySelectorAll(".agent-turn .tool-details")];
       assert.equal(details[0].open, false);
@@ -237,10 +236,10 @@ test("renders a single-composer investigation workspace", async (t) => {
       await settle();
 
       assert.equal(historyRequests, 1);
-      assert.equal(document.querySelector("#result-title")?.textContent, "Chat");
+      assert.equal(document.querySelector("#result-title")?.textContent, "Investigation");
       assert.equal(document.querySelectorAll(".next-step-action").length, 3);
       assert.equal(document.querySelectorAll(".investigation-summary tbody tr").length, 3);
-      assert.equal(document.querySelector("#composer-button")?.textContent, "Send");
+      assert.equal(document.querySelector("#composer-button")?.getAttribute("aria-label"), "Send message");
     } finally {
       restoreFetch();
     }
@@ -326,8 +325,8 @@ test("renders a single-composer investigation workspace", async (t) => {
       const requestsBeforeReset = getRequests;
       document.querySelector("#new-investigation-button").click();
 
-      assert.equal(document.querySelector("#result-title")?.textContent, "No active chat");
-      assert.equal(document.querySelector("#composer-button")?.textContent, "Send");
+      assert.equal(document.querySelector("#result-title")?.textContent, "Investigation");
+      assert.equal(document.querySelector("#composer-button")?.getAttribute("aria-label"), "Send message");
       assert.equal(document.querySelector("#composer-message")?.disabled, false);
       assert.equal(document.querySelector("#export-pdf-button")?.disabled, true);
       assert.equal(document.querySelectorAll(".conversation-message").length, 0);
@@ -520,13 +519,39 @@ test("keeps a full-width workspace and responsive toolbar contract in CSS", asyn
   assert.match(css, /\.toolbar-controls/);
   assert.match(css, /overflow-y: auto/);
   assert.match(css, /@media \(max-width: 520px\)/);
-  assert.match(css, /\.shell \{\n  width: 100%;\n  max-width: none;/);
+  assert.match(css, /\.shell \{[\s\S]*?width: 100%;[\s\S]*?max-width: none;/);
   assert.doesNotMatch(css, /max-width: 1440px/);
+  assert.match(css, /\.toolbar-selectors/);
+  assert.match(css, /\.toolbar-actions/);
+  assert.match(css, /data-status="completed_with_attention"/);
+  assert.match(css, /data-status="failed"/);
+  assert.match(css, /data-status="running"/);
+  assert.match(css, /min-width: 76px/);
+  assert.match(css, /--color-turn-agent: #2f6b5b;/);
+  assert.match(css, /--color-turn-running: #28576e;/);
+  assert.match(css, /--color-turn-error: #7c302d;/);
+  assert.match(css, /\.agent-turn \{ border-left: 3px solid var\(--color-turn-agent\)/);
+  assert.match(css, /\.agent-turn\.is-pending \{ border-left-color: var\(--color-turn-running-border\)/);
+  assert.match(css, /\.agent-turn\.is-error \{ border-left-color: var\(--color-turn-error-border\)/);
+  assert.doesNotMatch(css, /\.agent-turn \{[^}]*#b55a29/);
+});
+
+test("uses one workspace heading and accessible compact actions in the shipped page", async () => {
+  const index = await readFile(new URL("../../frontend/index.html", import.meta.url), "utf8");
+
+  assert.match(index, /<h2 id="result-title">Investigation<\/h2>/);
+  assert.doesNotMatch(index, />CHAT</);
+  assert.doesNotMatch(index, />Chat</);
+  assert.doesNotMatch(index, /Active investigation/);
+  assert.doesNotMatch(index, /investigation-metadata|investigation-runs|investigation-tools/);
+  assert.match(index, /class="toolbar-selectors"/);
+  assert.match(index, /class="toolbar-actions"/);
+  assert.match(index, /id="composer-button" type="submit" aria-label="Send message" title="Send message"/);
 });
 
 async function loadApp(fetchImplementation = null, activeInvestigation = null) {
   const dom = new JSDOM(`<!doctype html><html><body>
-    <section class="result-panel"><h2 id="result-title"></h2><p id="investigation-context"></p><div class="toolbar-controls"><label class="clearance-control"><select id="user-clearance"><option value="PUBLIC">PUBLIC</option><option value="INTERNAL">INTERNAL</option><option value="CONFIDENTIAL">CONFIDENTIAL</option><option value="RESTRICTED" selected>RESTRICTED</option></select></label><label class="clearance-control"><select id="response-language"><option value="DE">Deutsch</option><option value="EN" selected>English</option></select></label><span id="run-status" hidden></span><button id="export-pdf-button" type="button"></button><button id="new-investigation-button" type="button"></button></div><dl id="investigation-metadata"><dd id="investigation-runs"></dd><dd id="investigation-tools"></dd></dl><div id="conversation-history"></div><form id="composer-form"><textarea id="composer-message">Investigate P4711 at S04.</textarea><button id="composer-button" type="submit">Send</button></form><p id="error-message" hidden></p></section>
+    <section class="result-panel"><h2 id="result-title"></h2><div class="toolbar-controls"><div class="toolbar-selectors"><label class="clearance-control"><select id="user-clearance"><option value="PUBLIC">PUBLIC</option><option value="INTERNAL">INTERNAL</option><option value="CONFIDENTIAL">CONFIDENTIAL</option><option value="RESTRICTED" selected>RESTRICTED</option></select></label><label class="clearance-control"><select id="response-language"><option value="DE">Deutsch</option><option value="EN" selected>English</option></select></label></div><div class="toolbar-actions"><span id="run-status" hidden></span><button id="export-pdf-button" type="button"></button><button id="new-investigation-button" type="button"></button></div></div><div id="conversation-history"></div><form id="composer-form"><textarea id="composer-message">Investigate P4711 at S04.</textarea><button id="composer-button" type="submit" aria-label="Send message" title="Send message"></button></form><p id="error-message" hidden></p></section>
   </body></html>`, { url: "http://localhost:8080" });
   const originalFetch = globalThis.fetch;
   Object.assign(globalThis, { document: dom.window.document, window: dom.window });

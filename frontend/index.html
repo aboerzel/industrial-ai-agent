@@ -23,43 +23,40 @@
       <section class="result-panel" aria-labelledby="result-title">
         <header class="investigation-header">
           <div class="investigation-title">
-            <p class="panel-kicker">CHAT</p>
-            <h2 id="result-title">No active chat</h2>
-            <p class="investigation-context" id="investigation-context">Ask about a production issue, station, product, maintenance ticket, or available documentation.</p>
+            <h2 id="result-title">Investigation</h2>
           </div>
           <div class="toolbar-controls">
-            <label class="clearance-control" for="user-clearance" title="Demo access level for the next request.">
-              <span>Demo clearance</span>
-              <select id="user-clearance" name="user-clearance">
-                <option value="PUBLIC" selected>PUBLIC</option>
-                <option value="INTERNAL">INTERNAL</option>
-                <option value="CONFIDENTIAL">CONFIDENTIAL</option>
-                <option value="RESTRICTED">RESTRICTED</option>
-              </select>
-            </label>
-            <label class="clearance-control" for="response-language" title="Language for the next agent response.">
-              <span>Response language</span>
-              <select id="response-language" name="response-language">
-                <option value="DE">Deutsch</option>
-                <option value="EN" selected>English</option>
-              </select>
-            </label>
-            <span class="status-badge" data-status="idle" id="run-status" hidden></span>
-            <button id="export-pdf-button" type="button" disabled>Export as PDF</button>
-            <button class="secondary-button" id="new-investigation-button" type="button">New Chat</button>
+            <div class="toolbar-selectors">
+              <label class="clearance-control" for="user-clearance" title="Demo access level for the next request.">
+                <span>Demo clearance</span>
+                <select id="user-clearance" name="user-clearance">
+                  <option value="PUBLIC" selected>PUBLIC</option>
+                  <option value="INTERNAL">INTERNAL</option>
+                  <option value="CONFIDENTIAL">CONFIDENTIAL</option>
+                  <option value="RESTRICTED">RESTRICTED</option>
+                </select>
+              </label>
+              <label class="clearance-control" for="response-language" title="Language for the next agent response.">
+                <span>Response language</span>
+                <select id="response-language" name="response-language">
+                  <option value="DE">Deutsch</option>
+                  <option value="EN" selected>English</option>
+                </select>
+              </label>
+            </div>
+            <div class="toolbar-actions">
+              <span class="status-badge" data-status="idle" id="run-status" hidden></span>
+              <button class="compact-button" id="export-pdf-button" type="button" disabled title="Export investigation as PDF">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6zM14 2v5h5M12 11v7m-3-3 3 3 3-3" /></svg>
+                <span>PDF</span>
+              </button>
+              <button class="secondary-button compact-button" id="new-investigation-button" type="button" title="Start a new chat">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+                <span>New Chat</span>
+              </button>
+            </div>
           </div>
         </header>
-
-        <dl class="investigation-metadata" id="investigation-metadata" hidden>
-          <div>
-            <dt>Runs</dt>
-            <dd id="investigation-runs">0</dd>
-          </div>
-          <div>
-            <dt>Tools</dt>
-            <dd id="investigation-tools">0</dd>
-          </div>
-        </dl>
 
         <div class="conversation-history empty-state" id="conversation-history" aria-live="polite" aria-relevant="additions text">
           <div class="empty-investigation">
@@ -70,9 +67,12 @@
 
         <form class="composer-form" id="composer-form">
           <label for="composer-message">Message</label>
-          <textarea id="composer-message" name="composer-message" rows="3" placeholder="Ask a troubleshooting question..." required></textarea>
-          <div class="composer-actions">
-            <button id="composer-button" type="submit">Send</button>
+          <div class="composer-input-row">
+            <textarea id="composer-message" name="composer-message" rows="3" placeholder="Ask a troubleshooting question..." required></textarea>
+            <button id="composer-button" type="submit" aria-label="Send message" title="Send message">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m3 11 18-8-8 18-2-8zM11 13l10-10" /></svg>
+              <span class="visually-hidden">Send</span>
+            </button>
           </div>
         </form>
 

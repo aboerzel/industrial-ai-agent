@@ -39,15 +39,29 @@ def test_frontend_nginx_configuration_serves_es_module_mime_types() -> None:
 
 
 def test_frontend_workspace_uses_a_full_width_scrollable_conversation() -> None:
+    index = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
     css = (FRONTEND_ROOT / "css" / "app.css").read_text(encoding="utf-8")
 
-    assert ".shell {\n  width: 100%;\n  max-width: none;" in css
-    assert ".result-panel {\n  min-width: 0;" in css
+    assert ".shell {" in css
+    assert "width: 100%;" in css
+    assert "max-width: none;" in css
+    assert ".result-panel {" in css
+    assert "min-width: 0;" in css
     assert "grid-template-columns" not in css
     assert "max-width: 1440px;" not in css
     assert ".conversation-history {" in css
     assert "overflow-y: auto;" in css
     assert ".toolbar-controls {" in css
+    assert ".toolbar-selectors" in css
+    assert ".toolbar-actions" in css
+    assert 'data-status="completed_with_attention"' in css
+    assert 'data-status="failed"' in css
+    assert 'data-status="running"' in css
+    assert '<h2 id="result-title">Investigation</h2>' in index
+    assert ">CHAT<" not in index
+    assert "Active investigation" not in index
+    assert "investigation-metadata" not in index
+    assert 'aria-label="Send message"' in index
 
 
 def test_frontend_http_transport_is_isolated_to_api_module() -> None:
