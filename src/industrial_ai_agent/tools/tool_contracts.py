@@ -4,6 +4,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from industrial_ai_agent.domain.maintenance_ticket import MAINTENANCE_TICKET_ID_PATTERN
+
 ProductIdentifier = Annotated[
     str,
     StringConstraints(strip_whitespace=True, pattern=r"^P[0-9]{4,}$"),
@@ -14,7 +16,7 @@ StationIdentifier = Annotated[
 ]
 MaintenanceTicketIdentifier = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, pattern=r"^MT-[A-F0-9]{12}$"),
+    StringConstraints(strip_whitespace=True, pattern=MAINTENANCE_TICKET_ID_PATTERN),
 ]
 ToolCallIdentifier = Annotated[
     str,

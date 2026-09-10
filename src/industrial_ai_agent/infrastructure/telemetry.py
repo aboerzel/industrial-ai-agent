@@ -106,6 +106,8 @@ _METRIC_ATTRIBUTE_KEYS = frozenset(
     {
         "approval.decision",
         "data.classification",
+        "error.code",
+        "error.stage",
         "execution.zone",
         "mcp.operation",
         "mcp.server",
@@ -278,8 +280,11 @@ class Telemetry:
             except BaseException as error:
                 span.set_attribute("operation.status", "failure")
                 self._set_langfuse_success(span, success=False)
-                span.set_attribute("error.type", type(error).__name__)
+                span.set_attribute("error.type", _telemetry_error_type(error))
                 span.set_attribute("error.code", sanitized_error_code(error))
+                error_stage = getattr(error, "error_stage", None)
+                if isinstance(error_stage, str) and error_stage == "llm_provider":
+                    span.set_attribute("error.stage", error_stage)
                 span.set_status(Status(StatusCode.ERROR, sanitized_error_code(error)))
                 raise
             finally:
@@ -569,6 +574,18 @@ def sanitized_error_code(error: BaseException) -> str:
     value = getattr(error, "code", None)
     if isinstance(value, str) and value.isidentifier() and len(value) <= 80:
         return value
+    return type(error).__name__
+
+
+def _telemetry_error_type(error: BaseException) -> str:
+    """Keep provider type observability bounded without accepting arbitrary text."""
+    provider_error_type = getattr(error, "provider_error_type", None)
+    if isinstance(provider_error_type, str) and provider_error_type in {
+        "APIConnectionError",
+        "APIStatusError",
+        "RateLimitError",
+    }:
+        return provider_error_type
     return type(error).__name__
 
 

@@ -101,7 +101,20 @@ def user_facing_error_message(
         "no_eligible_model": "No eligible model is available for this request.",
         "model_egress_denied": "Model execution is not permitted for this request.",
         "mcp_service_unavailable": "A required MCP service is unavailable.",
+        "llm_rate_limit": (
+            "The language model is temporarily unavailable because its usage limit "
+            "has been reached. Please try again later."
+        ),
+        "llm_quota_exceeded": (
+            "The language model is temporarily unavailable because its usage limit "
+            "has been reached. Please try again later."
+        ),
+        "llm_provider_unavailable": (
+            "The language model provider is temporarily unavailable. Please try "
+            "again later."
+        ),
         "internal_error": "The agent run could not be completed.",
+        "agent_execution_timeout": "The agent run exceeded its execution time limit.",
     }
     german = {
         "requested_data_unavailable": "Die angeforderten Daten sind nicht verfügbar.",
@@ -111,7 +124,20 @@ def user_facing_error_message(
         "no_eligible_model": "Für diese Anfrage ist kein geeignetes Modell verfügbar.",
         "model_egress_denied": "Die Modellausführung ist für diese Anfrage nicht zulässig.",
         "mcp_service_unavailable": "Ein erforderlicher MCP-Service ist nicht verfügbar.",
+        "llm_rate_limit": (
+            "Das Sprachmodell ist aufgrund eines Nutzungslimits vorübergehend nicht "
+            "verfügbar. Bitte versuchen Sie es später erneut."
+        ),
+        "llm_quota_exceeded": (
+            "Das Sprachmodell ist aufgrund eines Nutzungslimits vorübergehend nicht "
+            "verfügbar. Bitte versuchen Sie es später erneut."
+        ),
+        "llm_provider_unavailable": (
+            "Der Anbieter des Sprachmodells ist vorübergehend nicht verfügbar. Bitte "
+            "versuchen Sie es später erneut."
+        ),
         "internal_error": "Der Agent-Run konnte nicht abgeschlossen werden.",
+        "agent_execution_timeout": "Der Agent-Run hat sein Ausfuehrungszeitlimit ueberschritten.",
     }
     messages = german if response_language is ResponseLanguage.DE else english
     return messages.get(error_code, messages["internal_error"])

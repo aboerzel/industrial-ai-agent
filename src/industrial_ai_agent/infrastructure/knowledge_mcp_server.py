@@ -6,13 +6,14 @@ from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
 from mcp.types import ToolAnnotations
 
 from industrial_ai_agent.application.mcp_access import McpPermission
+from industrial_ai_agent.domain.reranker import Reranker
 from industrial_ai_agent.domain.security import (
     DEMO_ENGINEER_SECURITY_CONTEXT,
     DataClassification,
@@ -170,6 +171,7 @@ class ClearanceAwareDocumentationSearchFactory:
         reranker_local_files_only: bool,
         document_root: Path,
         telemetry: Telemetry | None = None,
+        reranker: Reranker | None = None,
     ) -> None:
         self._database_url = database_url
         self._embedding_base_url = embedding_base_url
@@ -177,8 +179,27 @@ class ClearanceAwareDocumentationSearchFactory:
         self._reranker_local_files_only = reranker_local_files_only
         self._document_root = document_root
         self._telemetry = telemetry
+        self._reranker = reranker
+        self._ingestor: Any | None = None
         self._cache: dict[SecurityContext, DocumentationSearchCapability] = {}
         self._lock = Lock()
+
+    def warm_up(self) -> None:
+        """Build every demo-clearance projection before the HTTP server is ready."""
+        for client_id, clearance in (
+            ("industrial-agent-public", DataClassification.PUBLIC),
+            ("industrial-agent-internal", DataClassification.INTERNAL),
+            ("industrial-agent", DataClassification.CONFIDENTIAL),
+            ("industrial-agent-restricted", DataClassification.RESTRICTED),
+        ):
+            self.for_context(
+                SecurityContext(
+                    subject_id=client_id,
+                    roles=(client_id,),
+                    clearance=clearance,
+                    authenticated=True,
+                )
+            )
 
     def for_context(
         self, security_context: SecurityContext
@@ -195,7 +216,6 @@ class ClearanceAwareDocumentationSearchFactory:
         self, security_context: SecurityContext
     ) -> DocumentationSearchCapability:
         from industrial_ai_agent.infrastructure.docling_ingestion import (
-            DoclingDocumentIngestor,
             eligible_catalog_documents,
         )
         from industrial_ai_agent.infrastructure.knowledge_retrieval_composition import (
@@ -210,7 +230,7 @@ class ClearanceAwareDocumentationSearchFactory:
             PostgreSqlSessionFactory(self._database_url), security_context
         ).list_documents()
         eligible_catalog = eligible_catalog_documents(catalog, security_context)
-        ingestor = DoclingDocumentIngestor(self._document_root)
+        ingestor = self._shared_ingestor()
         chunks = tuple(
             chunk
             for document in eligible_catalog
@@ -222,8 +242,40 @@ class ClearanceAwareDocumentationSearchFactory:
             reranker_device=self._reranker_device,
             reranker_local_files_only=self._reranker_local_files_only,
             telemetry=self._telemetry,
+            reranker=self._shared_reranker(),
         )
         return DocumentationSearchCapability(retriever)
+
+    def _shared_ingestor(self) -> Any:
+        """Create Docling once; clearance filtering still happens before ingestion."""
+        if self._ingestor is None:
+            from industrial_ai_agent.infrastructure.docling_ingestion import (
+                DoclingDocumentIngestor,
+            )
+
+            self._ingestor = DoclingDocumentIngestor(self._document_root)
+        return self._ingestor
+
+    def _shared_reranker(self) -> Reranker:
+        """Create the heavy local model once while the factory lock is held."""
+        if self._reranker is None:
+            from industrial_ai_agent.infrastructure.observed_knowledge_retrieval import (
+                ObservedReranker,
+            )
+            from industrial_ai_agent.infrastructure.sentence_transformers_reranker import (
+                DEFAULT_RERANKER_MODEL,
+                SentenceTransformersCrossEncoderReranker,
+            )
+
+            self._reranker = ObservedReranker(
+                SentenceTransformersCrossEncoderReranker(
+                    device=self._reranker_device,
+                    local_files_only=self._reranker_local_files_only,
+                ),
+                telemetry=self._telemetry,
+                model=DEFAULT_RERANKER_MODEL,
+            )
+        return cast(Reranker, self._reranker)
 
 
 def create_secure_knowledge_mcp_server(
@@ -254,6 +306,7 @@ def create_secure_knowledge_mcp_server(
             authenticated=False,
         )
     )
+    search_factory.warm_up()
     server: MCPServer
 
     async def listed_tools():

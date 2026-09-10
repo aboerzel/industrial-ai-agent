@@ -2,6 +2,7 @@ import asyncio
 import logging
 from uuid import UUID
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,6 +13,7 @@ from industrial_ai_agent.agent.agent_run import (
     ExecutedToolCall,
     InvestigationStep,
 )
+from industrial_ai_agent.agent.llm import LLMProviderError, LLMProviderErrorCode
 from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
 from industrial_ai_agent.agent.model_routing import NoEligibleModelError
 from industrial_ai_agent.agent.response_language import ResponseLanguage
@@ -112,6 +114,7 @@ def create_app(
     *,
     allowed_origins: tuple[str, ...] = (),
     document_content_reader: FakeDocumentContentReader | None = None,
+    execution_timeout_seconds: float = 60.0,
 ):
     """Keep the in-memory adapter explicit and isolated to API unit tests."""
     return _create_app(
@@ -119,7 +122,24 @@ def create_app(
         run_store=InMemoryAgentRunStore(),
         allowed_origins=allowed_origins,
         document_content_reader=document_content_reader,
+        execution_timeout_seconds=execution_timeout_seconds,
     )
+
+
+class DelayedRunService(FakeRunService):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.cancelled_calls = 0
+        self.completed_calls = 0
+
+    async def run_with_policy(self, *args, **kwargs):
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            self.cancelled_calls += 1
+            raise
+        self.completed_calls += 1
+        return await super().run_with_policy(*args, **kwargs)
 
 
 def test_health_returns_ok() -> None:
@@ -129,6 +149,94 @@ def test_health_returns_ok() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_execution_timeout_persists_terminal_sanitized_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    store = InMemoryAgentRunStore()
+    service = DelayedRunService(result=_success_result())
+    app = _create_app(
+        service,
+        run_store=store,
+        execution_timeout_seconds=0.001,
+    )
+    monkeypatch.setattr(
+        "industrial_ai_agent.infrastructure.api.app.uuid4", lambda: run_id
+    )
+
+    response = TestClient(app).post("/api/v1/runs", json=_confidential_request())
+
+    assert response.status_code == 504
+    assert response.json() == {
+        "code": "agent_execution_timeout",
+        "message": "The agent run exceeded its execution time limit.",
+    }
+    stored = asyncio.run(store.get(run_id))
+    assert stored is not None
+    assert stored.status is RunStatus.FAILED
+    assert stored.error_code == "agent_execution_timeout"
+    assert stored.result is None
+    assert service.cancelled_calls == 1
+    assert service.completed_calls == 0
+    assert service.messages == []
+
+    # wait_for awaits cancellation before returning, so a late completion cannot
+    # overwrite the terminal failure or execute the delayed agent path.
+    asyncio.run(asyncio.sleep(0))
+    history = TestClient(app).get(
+        f"/api/v1/investigations/{run_id}?user_clearance=CONFIDENTIAL"
+    )
+    assert history.status_code == 200
+    assert history.json()["turns"][0]["status"] == "failed"
+    assert history.json()["turns"][0]["error"] == {
+        "code": "agent_execution_timeout",
+        "message": "The agent run exceeded its execution time limit.",
+    }
+
+
+def test_provider_failure_is_terminal_and_following_request_remains_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ProviderFailureThenSuccessService(FakeRunService):
+        def __init__(self) -> None:
+            super().__init__(result=_success_result())
+            self.calls = 0
+
+        async def run_with_policy(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise LLMProviderError(
+                    LLMProviderErrorCode.RATE_LIMIT,
+                    provider_error_type="RateLimitError",
+                )
+            return await super().run_with_policy(*args, **kwargs)
+
+    run_ids = iter(
+        (
+            UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+            UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+        )
+    )
+    monkeypatch.setattr(
+        "industrial_ai_agent.infrastructure.api.app.uuid4", lambda: next(run_ids)
+    )
+    store = InMemoryAgentRunStore()
+    client = TestClient(
+        _create_app(ProviderFailureThenSuccessService(), run_store=store)
+    )
+
+    blocked = client.post("/api/v1/runs", json=_confidential_request())
+    recovered = client.post("/api/v1/runs", json=_confidential_request())
+
+    assert blocked.status_code == 503
+    assert blocked.json()["code"] == "llm_rate_limit"
+    assert recovered.status_code == 200
+    failed_run = asyncio.run(store.get(UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")))
+    assert failed_run is not None
+    assert failed_run.status is RunStatus.FAILED
+    assert failed_run.error_code == "llm_rate_limit"
 
 
 def test_cors_allows_only_configured_development_origin() -> None:
@@ -198,6 +306,7 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
         "identifiers",
         "documents",
         "tool_calls",
+        "error",
         "approval_request",
     }
     assert RunResponse.model_validate(payload).model_dump(mode="json") == payload
@@ -222,6 +331,7 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
     assert payload["tool_calls"] == [
         {"tool": "get_product_history", "arguments": {"product_id": "P4711"}}
     ]
+    assert payload["error"] is None
     assert payload["approval_request"] is None
     assert service.messages == ["Investigate product P4711."]
 
@@ -661,6 +771,123 @@ def test_restricted_demo_user_runs_restricted_case_with_restricted_policy() -> N
     assert service.policies[0].mcp_client_identity == "industrial-agent-restricted"
 
 
+@pytest.mark.parametrize(
+    ("message", "clearance", "classification"),
+    (
+        (
+            "Liste die mir verfügbaren Produkte auf und fasse ihren Endstatus zusammen.",
+            "PUBLIC",
+            "PUBLIC",
+        ),
+        (
+            "Gib mir einen Überblick über die mir verfügbaren Produkte und ihren Endstatus.",
+            "INTERNAL",
+            "INTERNAL",
+        ),
+        (
+            "Untersuche Produkt P4801 und fasse seinen sichtbaren Produktionspfad zusammen.",
+            "CONFIDENTIAL",
+            "CONFIDENTIAL",
+        ),
+        (
+            "Ermittle die kürzlich fehlgeschlagenen Produkte und fasse ihren Fehlerstatus zusammen.",
+            "CONFIDENTIAL",
+            "CONFIDENTIAL",
+        ),
+        (
+            "Untersuche die Produktionshistorie von P4101.",
+            "PUBLIC",
+            "PUBLIC",
+        ),
+    ),
+)
+def test_german_product_requests_use_their_authorized_run_scope(
+    message: str, clearance: str, classification: str
+) -> None:
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"message": message, "user_clearance": clearance},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data_classification"] == classification
+    assert service.policies[0].data_classification.name == classification
+
+
+def test_confidential_ticket_lookup_uses_the_bounded_ticket_trajectory() -> None:
+    result = AgentRunResult(
+        status=AgentRunStatus.SUCCESS,
+        final_answer="Das Ticket ist sichtbar.",
+        tool_call_count=1,
+        executed_tool_calls=(
+            ExecutedToolCall(
+                tool="get_maintenance_ticket",
+                arguments={"ticket_id": "MT-S02-20260117"},
+            ),
+        ),
+    )
+    service = FakeRunService(result=result)
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Zeige die verfügbaren Details zum Wartungsticket MT-S02-20260117.",
+            "user_clearance": "CONFIDENTIAL",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data_classification"] == "CONFIDENTIAL"
+    assert response.json()["tool_calls"] == [
+        {
+            "tool": "get_maintenance_ticket",
+            "arguments": {"ticket_id": "MT-S02-20260117"},
+        }
+    ]
+    assert service.response_languages == [ResponseLanguage.DE]
+    assert service.policies[0].data_classification is DataClassification.CONFIDENTIAL
+
+
+def test_internal_ticket_lookup_is_neutral_and_indistinguishable_from_unknown_ticket() -> (
+    None
+):
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    hidden_response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Zeige das Wartungsticket MT-S02-20260117.",
+            "user_clearance": "INTERNAL",
+        },
+    )
+    unknown_response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Zeige das Wartungsticket MT-S99-20991231.",
+            "user_clearance": "INTERNAL",
+        },
+    )
+
+    assert hidden_response.status_code == unknown_response.status_code == 404
+    assert (
+        hidden_response.json()
+        == unknown_response.json()
+        == {
+            "code": "requested_data_unavailable",
+            "message": "Die angeforderten Daten sind nicht verfügbar.",
+        }
+    )
+    assert "MT-S02-20260117" not in hidden_response.text
+    assert "CONFIDENTIAL" not in hidden_response.text
+    assert service.messages == []
+    assert service.policies == []
+
+
 def test_structured_internal_diagnostic_uses_only_server_resolved_policy() -> None:
     service = FakeRunService(result=_success_result())
     app = create_app(service)
@@ -780,6 +1007,97 @@ def test_mcp_unavailability_maps_to_service_unavailable() -> None:
         "code": "mcp_service_unavailable",
         "message": "A required MCP service is unavailable.",
     }
+
+
+@pytest.mark.parametrize(
+    ("code", "language", "message"),
+    (
+        (
+            LLMProviderErrorCode.RATE_LIMIT,
+            "EN",
+            (
+                "The language model is temporarily unavailable because its usage "
+                "limit has been reached. Please try again later."
+            ),
+        ),
+        (
+            LLMProviderErrorCode.QUOTA_EXCEEDED,
+            "DE",
+            (
+                "Das Sprachmodell ist aufgrund eines Nutzungslimits vorübergehend "
+                "nicht verfügbar. Bitte versuchen Sie es später erneut."
+            ),
+        ),
+        (
+            LLMProviderErrorCode.PROVIDER_UNAVAILABLE,
+            "EN",
+            (
+                "The language model provider is temporarily unavailable. Please try "
+                "again later."
+            ),
+        ),
+    ),
+)
+def test_llm_provider_limit_is_sanitized_persisted_and_available_in_history(
+    code: LLMProviderErrorCode,
+    language: str,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    store = InMemoryAgentRunStore()
+    app = _create_app(
+        FakeRunService(
+            error=LLMProviderError(
+                code,
+                provider_error_type="RateLimitError",
+            )
+        ),
+        run_store=store,
+    )
+    monkeypatch.setattr(
+        "industrial_ai_agent.infrastructure.api.app.uuid4", lambda: run_id
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/runs",
+        json={
+            **_confidential_request(),
+            "response_language": language,
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"code": code.value, "message": message}
+    assert "RateLimitError" not in response.text
+    stored = asyncio.run(store.get(run_id))
+    assert stored is not None
+    assert stored.status is RunStatus.FAILED
+    assert stored.error_code == code.value
+
+    history = TestClient(app).get(
+        f"/api/v1/investigations/{run_id}?user_clearance=CONFIDENTIAL"
+    )
+
+    assert history.status_code == 200
+    assert history.json()["turns"][0]["error"] == {
+        "code": code.value,
+        "message": message,
+    }
+
+
+def test_unrelated_http_429_remains_an_internal_error() -> None:
+    external_error = httpx.HTTPStatusError(
+        "non-LLM 429 must not become a provider limit",
+        request=httpx.Request("GET", "https://unrelated.example.test/resource"),
+        response=httpx.Response(429),
+    )
+    client = TestClient(create_app(FakeRunService(error=external_error)))
+
+    response = client.post("/api/v1/runs", json=_confidential_request())
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"
 
 
 def test_streamable_http_connection_failure_maps_to_service_unavailable(

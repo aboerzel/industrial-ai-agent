@@ -154,7 +154,7 @@ async function request(path, options = {}, validator = isRunResponse) {
 function isRunResponse(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "error", "approval_request"]) &&
     isUuid(value.run_id) &&
     (value.investigation_id === undefined || isUuid(value.investigation_id)) &&
     (value.investigation_sequence === undefined || (Number.isInteger(value.investigation_sequence) && value.investigation_sequence > 0)) &&
@@ -167,6 +167,7 @@ function isRunResponse(value) {
     (value.documents === undefined || isDocumentReferences(value.documents)) &&
     (value.tool_calls === undefined ||
       (Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall))) &&
+    (value.error === undefined || value.error === null || isApiErrorResponse(value.error)) &&
     (value.approval_request === undefined ||
       value.approval_request === null ||
       isApprovalRequest(value.approval_request))
@@ -188,7 +189,7 @@ function isInvestigationResponse(value) {
 function isInvestigationTurn(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "created_at", "updated_at", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "error", "created_at", "updated_at", "approval_request"]) &&
     isUuid(value.run_id) && Number.isInteger(value.sequence) && value.sequence > 0 &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
@@ -200,6 +201,7 @@ function isInvestigationTurn(value) {
     (value.identifiers === undefined || isIdentifierReferences(value.identifiers)) &&
     (value.documents === undefined || isDocumentReferences(value.documents)) &&
     Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall) &&
+    (value.error === null || value.error === undefined || isApiErrorResponse(value.error)) &&
     (value.approval_request === null || value.approval_request === undefined || isApprovalRequest(value.approval_request))
   );
 }
@@ -208,8 +210,8 @@ function isApiErrorResponse(value) {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, ["code", "message"]) &&
-    typeof value.code === "string" &&
-    typeof value.message === "string"
+    isBoundedString(value.code, 80, true) &&
+    isBoundedString(value.message, 500, true)
   );
 }
 

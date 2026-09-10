@@ -186,6 +186,23 @@ def test_restricted_task_excludes_public_profile_below_its_maximum() -> None:
     assert profile_names(eligible) == ("local_quality",)
 
 
+def test_restricted_information_routes_to_local_fast_without_public_egress() -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+    requirements = (
+        AgentRunClassificationPolicy()
+        .resolve(AgentRunProfile.RESTRICTED_INFORMATION)
+        .task_requirements
+    )
+
+    selected = DeterministicModelRouter().route(
+        requirements, configuration.get_routing_profiles()
+    )
+
+    assert selected == ModelProfile("local_fast")
+
+
 def test_public_deployment_is_preferred_after_security_eligibility() -> None:
     candidates = (
         make_profile("local_expensive", cost=CostClass.HIGH),

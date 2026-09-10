@@ -4,6 +4,7 @@ from time import perf_counter
 
 from industrial_ai_agent.agent.llm import (
     LLMClient,
+    LLMProviderError,
     LLMRequest,
     LLMResponse,
     ModelProfile,
@@ -58,6 +59,15 @@ class ObservedLLMClient:
                     ),
                 )
                 return response
+        except LLMProviderError as error:
+            status = "failure"
+            attributes.update(
+                {
+                    "error.code": error.code,
+                    "error.stage": error.error_stage,
+                }
+            )
+            raise
         except Exception:
             status = "failure"
             raise

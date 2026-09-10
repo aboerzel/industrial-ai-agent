@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
+from industrial_ai_agent.domain.reranker import Reranker
 from industrial_ai_agent.infrastructure.hybrid_knowledge_retriever import (
     HybridKnowledgeRetriever,
 )
@@ -40,6 +41,7 @@ def create_reranked_knowledge_retriever(
     reranker_device: str | None = None,
     reranker_local_files_only: bool = True,
     telemetry: Telemetry | None = None,
+    reranker: Reranker | None = None,
 ) -> KnowledgeRetriever:
     """Assemble the immutable BM25, semantic, RRF, and reranker baseline."""
     embedding_client = ObservedEmbeddingClient(
@@ -77,7 +79,8 @@ def create_reranked_knowledge_retriever(
     )
     return RerankedKnowledgeRetriever(
         candidate_retriever=hybrid_retriever,
-        reranker=ObservedReranker(
+        reranker=reranker
+        or ObservedReranker(
             SentenceTransformersCrossEncoderReranker(
                 device=reranker_device,
                 local_files_only=reranker_local_files_only,

@@ -31,6 +31,29 @@ class FinishReason(StrEnum):
     UNKNOWN = "unknown"
 
 
+class LLMProviderErrorCode(StrEnum):
+    """Closed provider-failure categories safe to cross the LLM port."""
+
+    RATE_LIMIT = "llm_rate_limit"
+    QUOTA_EXCEEDED = "llm_quota_exceeded"
+    PROVIDER_UNAVAILABLE = "llm_provider_unavailable"
+
+
+class LLMProviderError(RuntimeError):
+    """A known provider failure without provider payload or response details."""
+
+    def __init__(
+        self,
+        code: LLMProviderErrorCode,
+        *,
+        provider_error_type: str,
+    ) -> None:
+        super().__init__("LLM provider request failed")
+        self.code = code.value
+        self.error_stage = "llm_provider"
+        self.provider_error_type = provider_error_type
+
+
 class LLMToolCall(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

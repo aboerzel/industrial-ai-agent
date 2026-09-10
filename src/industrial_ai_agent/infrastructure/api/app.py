@@ -1,5 +1,6 @@
 """FastAPI routes for the external Industrial AI Agent application boundary."""
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import NoReturn
@@ -10,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult, DocumentReference
+from industrial_ai_agent.agent.llm import LLMProviderError
 from industrial_ai_agent.agent.model_egress import (
     DataClassificationBoundaryError,
     ModelEgressDeniedError,
@@ -76,6 +78,21 @@ from industrial_ai_agent.infrastructure.telemetry import Telemetry, instrument_f
 
 API_PREFIX = "/api/v1"
 _FAILURE_LOGGER = logging.getLogger("industrial_ai_agent.api.failure_diagnostics")
+_PERSISTED_RUN_ERROR_CODES = frozenset(
+    {
+        "internal_error",
+        "llm_provider_unavailable",
+        "llm_quota_exceeded",
+        "llm_rate_limit",
+        "mcp_service_unavailable",
+        "model_egress_denied",
+        "no_eligible_model",
+        "agent_execution_timeout",
+    }
+)
+_SAFE_PROVIDER_ERROR_TYPES = frozenset(
+    {"APIConnectionError", "APIStatusError", "RateLimitError"}
+)
 
 
 class _ApiRunError(Exception):
@@ -92,6 +109,7 @@ def create_app(
     allowed_origins: tuple[str, ...] = (),
     telemetry: Telemetry | None = None,
     document_content_reader: AuthorizedDocumentContentReader | None = None,
+    execution_timeout_seconds: float = 60.0,
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
     app = FastAPI(
@@ -101,7 +119,10 @@ def create_app(
             "Local/demo HTTP boundary for confidential industrial troubleshooting runs."
         ),
     )
+    if execution_timeout_seconds <= 0:
+        raise ValueError("execution_timeout_seconds must be positive")
     app.state.run_service = run_service
+    app.state.execution_timeout_seconds = execution_timeout_seconds
     app.state.run_store = run_store
     app.state.telemetry = telemetry
     app.state.classification_policy = AgentRunClassificationPolicy()
@@ -318,6 +339,7 @@ def create_app(
         responses={
             status.HTTP_404_NOT_FOUND: {"model": ApiErrorResponse},
             status.HTTP_409_CONFLICT: {"model": ApiErrorResponse},
+            status.HTTP_504_GATEWAY_TIMEOUT: {"model": ApiErrorResponse},
         },
         summary="Approve or reject the pending maintenance action",
     )
@@ -352,14 +374,26 @@ def create_app(
                 ),
             )
         try:
-            execution = await service.resume(
-                run_id=run_id,
-                model_profile=claimed.model_profile,
-                data_classification=claimed.data_classification,
-                run_profile=claimed.run_profile,
-                decision=payload.decision.value,
+            execution = await asyncio.wait_for(
+                service.resume(
+                    run_id=run_id,
+                    model_profile=claimed.model_profile,
+                    data_classification=claimed.data_classification,
+                    run_profile=claimed.run_profile,
+                    decision=payload.decision.value,
+                ),
+                timeout=_execution_timeout_seconds(request),
             )
             return _to_run_response(await _persist_execution(store, run_id, execution))
+        except TimeoutError:
+            await store.fail(run_id, "agent_execution_timeout")
+            _raise_api_run_error(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                code="agent_execution_timeout",
+                message=user_facing_error_message(
+                    "agent_execution_timeout", claimed.response_language
+                ),
+            )
         except (ModelEgressDeniedError, DataClassificationBoundaryError):
             await store.fail(run_id, "model_egress_denied")
             _raise_api_run_error(
@@ -371,6 +405,21 @@ def create_app(
             )
         # noinspection PyBroadException
         except Exception as error:  # noqa: BLE001 - public API must sanitize failures.
+            provider_error = _provider_error_from(error)
+            if provider_error is not None:
+                await store.fail(run_id, provider_error.code)
+                _record_llm_provider_failure(
+                    run_id=run_id,
+                    error=provider_error,
+                    telemetry=_telemetry(request),
+                )
+                _raise_api_run_error(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    code=provider_error.code,
+                    message=user_facing_error_message(
+                        provider_error.code, claimed.response_language
+                    ),
+                )
             _record_internal_failure(
                 run_id=run_id, error=error, telemetry=_telemetry(request)
             )
@@ -419,6 +468,10 @@ def _telemetry(request: Request) -> Telemetry | None:
 
 def _classification_policy(request: Request) -> AgentRunClassificationPolicy:
     return request.app.state.classification_policy
+
+
+def _execution_timeout_seconds(request: Request) -> float:
+    return request.app.state.execution_timeout_seconds
 
 
 def _demo_security_context(request: Request) -> DemoSecurityContextResolver:
@@ -521,12 +574,15 @@ async def _start_run(
     conversation_context = _conversation_context(previous_runs, policy)
     try:
         if _persistent_hitl_enabled(service):
-            profile, execution = await service.start(
-                message,
-                run_id=run_id,
-                run_policy=policy,
-                response_language=response_language,
-                conversation_context=conversation_context,
+            profile, execution = await asyncio.wait_for(
+                service.start(
+                    message,
+                    run_id=run_id,
+                    run_policy=policy,
+                    response_language=response_language,
+                    conversation_context=conversation_context,
+                ),
+                timeout=_execution_timeout_seconds(request),
             )
             await store.bind_execution_context(
                 run_id,
@@ -545,16 +601,31 @@ async def _start_run(
                 )
             )
         if conversation_context:
-            result = await service.run_with_policy(
-                message,
-                run_policy=policy,
-                response_language=response_language,
-                conversation_context=conversation_context,
+            result = await asyncio.wait_for(
+                service.run_with_policy(
+                    message,
+                    run_policy=policy,
+                    response_language=response_language,
+                    conversation_context=conversation_context,
+                ),
+                timeout=_execution_timeout_seconds(request),
             )
         else:
-            result = await service.run_with_policy(
-                message, run_policy=policy, response_language=response_language
+            result = await asyncio.wait_for(
+                service.run_with_policy(
+                    message, run_policy=policy, response_language=response_language
+                ),
+                timeout=_execution_timeout_seconds(request),
             )
+    except TimeoutError:
+        await store.fail(run_id, "agent_execution_timeout")
+        _raise_api_run_error(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            code="agent_execution_timeout",
+            message=user_facing_error_message(
+                "agent_execution_timeout", response_language
+            ),
+        )
     except NoEligibleModelError:
         await store.fail(run_id, "no_eligible_model")
         _raise_api_run_error(
@@ -579,6 +650,21 @@ async def _start_run(
             ),
         )
     except Exception as error:  # noqa: BLE001 - public API must sanitize unexpected errors.
+        provider_error = _provider_error_from(error)
+        if provider_error is not None:
+            await store.fail(run_id, provider_error.code)
+            _record_llm_provider_failure(
+                run_id=run_id,
+                error=provider_error,
+                telemetry=_telemetry(request),
+            )
+            _raise_api_run_error(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                code=provider_error.code,
+                message=user_facing_error_message(
+                    provider_error.code, response_language
+                ),
+            )
         _record_internal_failure(
             run_id=run_id, error=error, telemetry=_telemetry(request)
         )
@@ -633,6 +719,56 @@ def _record_internal_failure(
         )
 
 
+def _record_llm_provider_failure(
+    *, run_id: UUID, error: LLMProviderError, telemetry: Telemetry | None
+) -> None:
+    """Record only the bounded provider category, never its response payload."""
+    error_type = (
+        error.provider_error_type
+        if error.provider_error_type in _SAFE_PROVIDER_ERROR_TYPES
+        else "ProviderError"
+    )
+    _FAILURE_LOGGER.warning(
+        "agent.run.provider_failure run_id=%s error_code=%s error_type=%s",
+        run_id,
+        error.code,
+        error_type,
+    )
+    if telemetry is not None:
+        telemetry.set_current_span_attributes(
+            {
+                "error.code": error.code,
+                "error.stage": error.error_stage,
+                "error.type": error_type,
+            }
+        )
+
+
+def _provider_error_from(error: BaseException) -> LLMProviderError | None:
+    """Accept a provider category only when every grouped leaf is that category."""
+    if isinstance(error, LLMProviderError):
+        return error
+    if not isinstance(error, BaseExceptionGroup):
+        return None
+    leaves = _exception_leaves(error)
+    provider_errors = [leaf for leaf in leaves if isinstance(leaf, LLMProviderError)]
+    if (
+        not provider_errors
+        or len(provider_errors) != len(leaves)
+        or len({provider_error.code for provider_error in provider_errors}) != 1
+    ):
+        return None
+    return provider_errors[0]
+
+
+def _exception_leaves(error: BaseException) -> tuple[BaseException, ...]:
+    if not isinstance(error, BaseExceptionGroup):
+        return (error,)
+    return tuple(
+        leaf for nested in error.exceptions for leaf in _exception_leaves(nested)
+    )
+
+
 def _to_run_response(
     record: StoredAgentRun,
     *,
@@ -653,6 +789,7 @@ def _to_run_response(
         identifiers=_to_identifiers(result),
         documents=_to_documents(documents if documents is not None else result),
         tool_calls=_to_tool_calls(result),
+        error=_to_persisted_run_error(record),
         approval_request=_to_approval_request(record.approval_request),
     )
 
@@ -709,6 +846,7 @@ def _to_investigation_turn(
         identifiers=_to_identifiers(result),
         documents=_to_documents(documents if documents is not None else result),
         tool_calls=_to_tool_calls(result),
+        error=_to_persisted_run_error(record),
         created_at=_as_iso(record.created_at),
         updated_at=_as_iso(record.updated_at),
         approval_request=_to_approval_request(record.approval_request),
@@ -784,6 +922,20 @@ def _to_approval_request(
     if payload is None:
         return None
     return ApprovalRequestResponse.model_validate(sanitize_public_value(payload))
+
+
+def _to_persisted_run_error(record: StoredAgentRun) -> ApiErrorResponse | None:
+    if record.status is not RunStatus.FAILED or record.error_code is None:
+        return None
+    code = (
+        record.error_code
+        if record.error_code in _PERSISTED_RUN_ERROR_CODES
+        else "internal_error"
+    )
+    return ApiErrorResponse(
+        code=code,
+        message=user_facing_error_message(code, record.response_language),
+    )
 
 
 def _to_tool_calls(result: AgentRunResult | None) -> tuple[ToolCallResponse, ...]:

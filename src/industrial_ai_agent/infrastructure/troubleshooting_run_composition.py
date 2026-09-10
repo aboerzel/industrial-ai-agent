@@ -9,9 +9,10 @@ from pathlib import Path
 from mcp.client.stdio import StdioServerParameters
 
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
+    MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
     LangGraphTroubleshootingAgent,
 )
-from industrial_ai_agent.agent.llm import ModelProfile
+from industrial_ai_agent.agent.llm import LLMReasoningEffort, ModelProfile
 from industrial_ai_agent.agent.model_egress import (
     EgressCheckedLLMClient,
     ModelEgressPolicy,
@@ -19,7 +20,10 @@ from industrial_ai_agent.agent.model_egress import (
 from industrial_ai_agent.agent.model_routing import (
     DeterministicModelRouter,
 )
-from industrial_ai_agent.agent.run_classification_policy import ResolvedRunPolicy
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunProfile,
+    ResolvedRunPolicy,
+)
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpBackedTroubleshootingAgent,
     RoutedTroubleshootingAgentFactory,
@@ -121,10 +125,19 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                     supports_structured_output=self._configuration.get_profile(
                         profile.name
                     ).supports_structured_output,
+                    reasoning_effort=_restricted_ollama_reasoning_effort(
+                        configuration=self._configuration,
+                        profile=profile,
+                        run_policy=run_policy,
+                    ),
                 ),
                 mcp_tool_provider=self._mcp_tool_provider_factory(run_policy),
                 checkpointer=checkpointer,
                 run_classification=run_policy.data_classification,
+                system_message=_system_message_for(run_policy),
+                normalize_structured_final_output=(
+                    run_policy.run_profile is not AgentRunProfile.RESTRICTED_INFORMATION
+                ),
             )
 
 
@@ -183,6 +196,37 @@ def create_default_troubleshooting_run_service(
             else None
         ),
     )
+
+
+def _restricted_ollama_reasoning_effort(
+    *,
+    configuration: LLMConfiguration,
+    profile: ModelProfile,
+    run_policy: ResolvedRunPolicy,
+) -> LLMReasoningEffort | None:
+    """Disable unbounded local thinking for restricted agent tool workflows."""
+    profile_config = configuration.get_profile(profile.name)
+    if (
+        run_policy.data_classification.name == "RESTRICTED"
+        and profile_config.provider.casefold() == "ollama"
+    ):
+        return LLMReasoningEffort.NONE
+    return None
+
+
+_RESTRICTED_INFORMATION_SYSTEM_MESSAGE = (
+    "You are an industrial operations assistant. Use one provided read-only tool when "
+    "its evidence is necessary. Base the concise final answer in the requested response "
+    "language only on authorized tool results. Do not invent industrial data, access "
+    "scope, or follow-up actions. "
+    "Return narrative Markdown only."
+)
+
+
+def _system_message_for(run_policy: ResolvedRunPolicy) -> str:
+    if run_policy.run_profile is AgentRunProfile.RESTRICTED_INFORMATION:
+        return _RESTRICTED_INFORMATION_SYSTEM_MESSAGE
+    return MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
 
 
 def _mcp_server_configurations(

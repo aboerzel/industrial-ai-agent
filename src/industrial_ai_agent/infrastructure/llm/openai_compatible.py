@@ -3,12 +3,14 @@ import os
 from collections.abc import Callable, Mapping
 from typing import Any, Self
 
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
 from pydantic import BaseModel
 
 from industrial_ai_agent.agent.llm import (
     FinishReason,
     LLMMessage,
+    LLMProviderError,
+    LLMProviderErrorCode,
     LLMRequest,
     LLMResponse,
     LLMToolCall,
@@ -28,6 +30,21 @@ _FINISH_REASONS = {
     "content_filter": FinishReason.CONTENT_FILTER,
 }
 _NO_AUTH_SDK_API_KEY = "not-used"
+_SDK_MAX_RETRIES = 0
+_RATE_LIMIT_CODES = frozenset({"rate_limit_exceeded", "rate_limited"})
+_QUOTA_CODES = frozenset(
+    {
+        "insufficient_quota",
+        "quota_exceeded",
+        "quota_exhausted",
+        "daily_token_limit_exceeded",
+        "daily_tokens_exceeded",
+        "token_limit_exceeded",
+        "tokens_limit_exceeded",
+        "tokens_limit_reached",
+    }
+)
+_PROVIDER_UNAVAILABLE_STATUS_CODES = frozenset({502, 503, 504})
 
 
 class OpenAICompatibleLLMClient:
@@ -51,6 +68,8 @@ class OpenAICompatibleLLMClient:
             "messages": [_serialize_message(message) for message in request.messages],
             "temperature": profile_config.temperature,
         }
+        if profile_config.max_output_tokens is not None:
+            parameters["max_tokens"] = profile_config.max_output_tokens
         if request.tools:
             parameters["tools"] = [
                 {
@@ -78,9 +97,21 @@ class OpenAICompatibleLLMClient:
                 raise ValueError(
                     "Model profile does not support reasoning-effort control"
                 )
+            # Ollama's OpenAI-compatible endpoint accepts the documented
+            # ``reasoning_effort`` field. Sending native ``think`` through
+            # ``extra_body`` leaves Qwen thinking enabled on this endpoint.
             parameters["reasoning_effort"] = request.reasoning_effort.value
 
-        completion = client.chat.completions.create(**parameters)
+        try:
+            completion = client.chat.completions.create(**parameters)
+        except Exception as error:
+            classified = _classify_provider_error(error)
+            if classified is not None:
+                raise LLMProviderError(
+                    classified,
+                    provider_error_type=type(error).__name__,
+                ) from error
+            raise
         if not completion.choices:
             raise ValueError("LLM response did not contain a choice")
 
@@ -118,6 +149,10 @@ class OpenAICompatibleLLMClient:
             self._clients[profile.name] = self._client_factory(
                 api_key=self._resolve_api_key(profile_config),
                 base_url=str(profile_config.base_url),
+                # Let the application classify a provider limit immediately. The
+                # OpenAI SDK otherwise retries 429 responses with backoff inside
+                # the bounded Agent execution deadline.
+                max_retries=_SDK_MAX_RETRIES,
             )
         return self._clients[profile.name]
 
@@ -203,6 +238,41 @@ def _token_count(usage: Any, name: str) -> int | None:
         value
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0
         else None
+    )
+
+
+def _classify_provider_error(error: Exception) -> LLMProviderErrorCode | None:
+    """Classify only recognized failures raised by this provider SDK boundary."""
+    codes = _provider_error_codes(error)
+    if codes & _QUOTA_CODES:
+        return LLMProviderErrorCode.QUOTA_EXCEEDED
+    if isinstance(error, RateLimitError):
+        return LLMProviderErrorCode.RATE_LIMIT
+    if codes & _RATE_LIMIT_CODES:
+        return LLMProviderErrorCode.RATE_LIMIT
+    if isinstance(error, APIConnectionError):
+        return LLMProviderErrorCode.PROVIDER_UNAVAILABLE
+    if (
+        isinstance(error, APIStatusError)
+        and error.status_code in _PROVIDER_UNAVAILABLE_STATUS_CODES
+    ):
+        return LLMProviderErrorCode.PROVIDER_UNAVAILABLE
+    return None
+
+
+def _provider_error_codes(error: Exception) -> frozenset[str]:
+    """Read documented structured SDK fields, never free-text provider messages."""
+    values: list[object] = [getattr(error, "code", None), getattr(error, "type", None)]
+    body = getattr(error, "body", None)
+    if isinstance(body, Mapping):
+        values.extend((body.get("code"), body.get("type")))
+        nested_error = body.get("error")
+        if isinstance(nested_error, Mapping):
+            values.extend((nested_error.get("code"), nested_error.get("type")))
+    return frozenset(
+        value.strip().casefold()
+        for value in values
+        if isinstance(value, str) and value.strip()
     )
 
 

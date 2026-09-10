@@ -134,7 +134,10 @@ def create_factory_mcp_server(
 
     @server.tool(
         name="get_station_overview",
-        description="Get a bounded overview of one visible station and recent products.",
+        description=(
+            "Get a bounded overview of one visible station, including recent visible "
+            "products and their latest processing status."
+        ),
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )

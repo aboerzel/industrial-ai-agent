@@ -349,6 +349,10 @@ def _safe_error_message(error_code: str) -> str:
         "no_eligible_model": "No eligible model is available for this request.",
         "model_egress_denied": "Model execution is not permitted for this request.",
         "mcp_service_unavailable": "A required MCP service is unavailable.",
+        "llm_rate_limit": "The language model usage limit has been reached.",
+        "llm_quota_exceeded": "The language model usage limit has been reached.",
+        "llm_provider_unavailable": "The language model provider is temporarily unavailable.",
+        "agent_execution_timeout": "The agent run exceeded its execution time limit.",
     }.get(error_code, "The agent run could not be completed.")
 
 

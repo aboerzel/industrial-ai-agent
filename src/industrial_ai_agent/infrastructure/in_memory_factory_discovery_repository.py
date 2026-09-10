@@ -44,9 +44,15 @@ class InMemoryFactoryDiscoveryRepository:
         station = self._stations.get(station_id)
         if station is None:
             return None
+        recent_product_ids = self._station_products.get(station_id, ())
         return StationOverview(
             station=station,
-            recent_product_ids=self._station_products.get(station_id, ()),
+            recent_product_ids=recent_product_ids,
+            recent_products=tuple(
+                self._products[product_id].product
+                for product_id in recent_product_ids
+                if product_id in self._products
+            ),
         )
 
     def list_products(self) -> tuple[ProductDiscovery, ...]:

@@ -68,6 +68,30 @@ const STRUCTURED_NEXT_STEPS_INVESTIGATION = {
   ],
 };
 
+const LIMIT_REACHED_INVESTIGATION = {
+  investigation_id: INVESTIGATION_ID,
+  created_at: "2026-09-08T08:00:00+00:00",
+  run_count: 1,
+  tool_call_count: 0,
+  status: "completed_with_attention",
+  turns: [{
+    ...turn(
+      FIRST_RUN_ID,
+      "Untersuche P4711.",
+      null,
+      [],
+      [],
+      1,
+      "DE",
+    ),
+    status: "failed",
+    error: {
+      code: "llm_rate_limit",
+      message: "Das Sprachmodell ist aufgrund eines Nutzungslimits vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut.",
+    },
+  }],
+};
+
 test("renders a single-composer investigation workspace", async (t) => {
   await t.test("shows an empty workspace with one enabled composer and disabled PDF export", async () => {
     const { document } = await loadApp();
@@ -245,6 +269,24 @@ test("renders a single-composer investigation workspace", async (t) => {
     }
   });
 
+  await t.test("restores an LLM limit as an amber warning after reload", async () => {
+    const { document, restoreFetch } = await loadApp(
+      () => jsonResponse(LIMIT_REACHED_INVESTIGATION),
+      { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "DE" },
+    );
+    try {
+      await settle();
+
+      const agentTurn = document.querySelector(".agent-turn");
+      assert.equal(agentTurn?.classList.contains("is-limit"), true);
+      assert.equal(agentTurn?.classList.contains("is-error"), false);
+      assert.match(agentTurn?.textContent ?? "", /LLM-Limit erreicht/);
+      assert.match(agentTurn?.textContent ?? "", /Nutzungslimits/);
+    } finally {
+      restoreFetch();
+    }
+  });
+
   await t.test("keeps legacy turns without next_steps free of action sections", async () => {
     let runRequests = 0;
     const legacyInvestigation = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
@@ -303,6 +345,30 @@ test("renders a single-composer investigation workspace", async (t) => {
       assert.match(document.querySelector(".agent-turn.is-error")?.textContent ?? "", /Investigation step failed/);
       assert.equal(document.querySelector("#run-status")?.textContent, "Failed");
       assert.equal(document.querySelector("#composer-message")?.disabled, false);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("shows a provider limit as a warning and does not retry it", async () => {
+    let requests = 0;
+    const { document, window, restoreFetch } = await loadApp((url) => {
+      if (!String(url).includes("/api/v1/runs")) return jsonResponse(INVESTIGATION);
+      requests += 1;
+      return jsonResponse({
+        code: "llm_quota_exceeded",
+        message: "The language model is temporarily unavailable because its usage limit has been reached. Please try again later.",
+      }, 503);
+    });
+    try {
+      submit(document, window);
+      await settle();
+
+      assert.equal(requests, 1);
+      assert.equal(document.querySelector(".agent-turn.is-limit") !== null, true);
+      assert.equal(document.querySelector(".agent-turn.is-error"), null);
+      assert.match(document.querySelector(".agent-turn")?.textContent ?? "", /LLM limit reached/);
+      assert.equal(document.querySelector("#run-status")?.dataset.status, "limit_reached");
     } finally {
       restoreFetch();
     }
@@ -525,14 +591,17 @@ test("keeps a full-width workspace and responsive toolbar contract in CSS", asyn
   assert.match(css, /\.toolbar-actions/);
   assert.match(css, /data-status="completed_with_attention"/);
   assert.match(css, /data-status="failed"/);
+  assert.match(css, /data-status="limit_reached"[^}]*#fff7df/);
   assert.match(css, /data-status="running"/);
   assert.match(css, /min-width: 76px/);
   assert.match(css, /--color-turn-agent: #2f6b5b;/);
   assert.match(css, /--color-turn-running: #28576e;/);
   assert.match(css, /--color-turn-error: #7c302d;/);
+  assert.match(css, /--color-turn-limit: #7b5a13;/);
   assert.match(css, /\.agent-turn \{ border-left: 3px solid var\(--color-turn-agent\)/);
   assert.match(css, /\.agent-turn\.is-pending \{ border-left-color: var\(--color-turn-running-border\)/);
   assert.match(css, /\.agent-turn\.is-error \{ border-left-color: var\(--color-turn-error-border\)/);
+  assert.match(css, /\.agent-turn\.is-limit \{ border-left-color: var\(--color-turn-limit-border\)/);
   assert.doesNotMatch(css, /\.agent-turn \{[^}]*#b55a29/);
 });
 

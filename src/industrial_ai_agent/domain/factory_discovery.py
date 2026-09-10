@@ -21,18 +21,19 @@ class StationDiscovery:
 
 
 @dataclass(frozen=True, slots=True)
-class StationOverview:
-    station: StationDiscovery
-    recent_product_ids: tuple[ProductId, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class ProductDiscovery:
     product_id: ProductId
     latest_station_id: StationId | None
     latest_status: ProductionStepStatus | None
     latest_error_code: str | None
     classification: DataClassification
+
+
+@dataclass(frozen=True, slots=True)
+class StationOverview:
+    station: StationDiscovery
+    recent_product_ids: tuple[ProductId, ...]
+    recent_products: tuple[ProductDiscovery, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

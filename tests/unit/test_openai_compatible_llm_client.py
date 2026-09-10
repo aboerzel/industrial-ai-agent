@@ -2,12 +2,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+from openai import APIStatusError, RateLimitError
 
 from industrial_ai_agent.agent.llm import (
     FinishReason,
     LLMJsonSchema,
     LLMMessage,
+    LLMProviderError,
+    LLMProviderErrorCode,
     LLMReasoningEffort,
     LLMRequest,
     LLMResponseFormat,
@@ -30,17 +34,19 @@ PUBLIC_FAST_PROFILE = ModelProfile("public_fast")
 
 
 class FakeCompletions:
-    def __init__(self, completion: SimpleNamespace) -> None:
+    def __init__(self, completion: SimpleNamespace | Exception) -> None:
         self.completion = completion
         self.parameters: dict[str, Any] | None = None
 
     def create(self, **parameters: Any) -> SimpleNamespace:
         self.parameters = parameters
+        if isinstance(self.completion, Exception):
+            raise self.completion
         return self.completion
 
 
 class FakeOpenAIClient:
-    def __init__(self, completion: SimpleNamespace) -> None:
+    def __init__(self, completion: SimpleNamespace | Exception) -> None:
         self.completions = FakeCompletions(completion)
         self.chat = SimpleNamespace(completions=self.completions)
         self.closed = False
@@ -53,12 +59,14 @@ def create_configuration(
     *,
     supports_structured_output: bool = False,
     supports_reasoning_effort: bool = False,
+    provider: str = "ollama",
+    max_output_tokens: int | None = None,
 ) -> LLMConfiguration:
     return LLMConfiguration.model_validate(
         {
             "profiles": {
                 "local_quality": {
-                    "provider": "ollama",
+                    "provider": provider,
                     "model": "qwen3.5:9b",
                     "base_url": "http://localhost:11434/v1",
                     "temperature": 0,
@@ -70,6 +78,7 @@ def create_configuration(
                     "cost_class": "LOW",
                     "supports_structured_output": supports_structured_output,
                     "supports_reasoning_effort": supports_reasoning_effort,
+                    "max_output_tokens": max_output_tokens,
                 }
             }
         }
@@ -117,6 +126,60 @@ def test_passes_supported_structured_output_request_to_provider() -> None:
         },
     }
     assert fake_client.completions.parameters["reasoning_effort"] == "none"
+    assert "extra_body" not in fake_client.completions.parameters
+
+
+def test_passes_reasoning_effort_to_non_ollama_provider() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="ok", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    fake_client = FakeOpenAIClient(completion)
+    client = OpenAICompatibleLLMClient(
+        create_configuration(supports_reasoning_effort=True, provider="groq"),
+        environment={},
+        client_factory=lambda **_: fake_client,
+    )
+
+    client.chat(
+        LOCAL_QUALITY_PROFILE,
+        LLMRequest(
+            messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
+            reasoning_effort=LLMReasoningEffort.NONE,
+        ),
+    )
+
+    assert fake_client.completions.parameters is not None
+    assert fake_client.completions.parameters["reasoning_effort"] == "none"
+
+
+def test_passes_configured_output_limit_to_provider() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="ok", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    fake_client = FakeOpenAIClient(completion)
+    client = OpenAICompatibleLLMClient(
+        create_configuration(max_output_tokens=128),
+        environment={},
+        client_factory=lambda **_: fake_client,
+    )
+
+    client.chat(
+        LOCAL_QUALITY_PROFILE,
+        LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+    )
+
+    assert fake_client.completions.parameters is not None
+    assert fake_client.completions.parameters["max_tokens"] == 128
 
 
 def test_normalizes_provider_parsed_structured_response_object() -> None:
@@ -275,6 +338,7 @@ def test_maps_chat_request_and_text_response_without_network_call() -> None:
     assert factory_arguments == {
         "api_key": "not-used",
         "base_url": "http://localhost:11434/v1",
+        "max_retries": 0,
     }
     assert fake_client.completions.parameters == {
         "model": "qwen3.5:9b",
@@ -465,6 +529,7 @@ def test_reads_authenticated_profile_api_key_from_environment_variable() -> None
     assert factory_arguments == {
         "api_key": "test-api-key-from-environment",
         "base_url": "https://llm.example.com/v1",
+        "max_retries": 0,
     }
 
 
@@ -576,6 +641,90 @@ def test_rejects_non_object_tool_call_arguments() -> None:
         client.chat(LOCAL_QUALITY_PROFILE, request)
 
 
+def test_classifies_openai_rate_limit_without_exposing_provider_message() -> None:
+    provider_error = RateLimitError(
+        "account key secret and retry details",
+        response=_provider_response(429),
+        body={"error": {"code": "rate_limit_exceeded"}},
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(provider_error),
+    )
+
+    with pytest.raises(LLMProviderError) as raised:
+        client.chat(
+            LOCAL_QUALITY_PROFILE,
+            LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+        )
+
+    assert raised.value.code == LLMProviderErrorCode.RATE_LIMIT.value
+    assert raised.value.provider_error_type == "RateLimitError"
+    assert "secret" not in str(raised.value)
+
+
+def test_classifies_known_quota_code_before_rate_limit() -> None:
+    provider_error = RateLimitError(
+        "quota detail must remain private",
+        response=_provider_response(429),
+        body={"error": {"type": "insufficient_quota"}},
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(provider_error),
+    )
+
+    with pytest.raises(LLMProviderError) as raised:
+        client.chat(
+            LOCAL_QUALITY_PROFILE,
+            LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+        )
+
+    assert raised.value.code == LLMProviderErrorCode.QUOTA_EXCEEDED.value
+
+
+def test_does_not_classify_unrecognized_provider_http_429_as_rate_limit() -> None:
+    provider_error = APIStatusError(
+        "unrelated provider 429",
+        response=_provider_response(429),
+        body={"error": {"code": "unrecognized_429"}},
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(provider_error),
+    )
+
+    with pytest.raises(APIStatusError):
+        client.chat(
+            LOCAL_QUALITY_PROFILE,
+            LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+        )
+
+
+def test_classifies_known_provider_maintenance_status_as_unavailable() -> None:
+    provider_error = APIStatusError(
+        "provider maintenance details",
+        response=_provider_response(503),
+        body=None,
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(provider_error),
+    )
+
+    with pytest.raises(LLMProviderError) as raised:
+        client.chat(
+            LOCAL_QUALITY_PROFILE,
+            LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+        )
+
+    assert raised.value.code == LLMProviderErrorCode.PROVIDER_UNAVAILABLE.value
+
+
 def test_closes_created_clients() -> None:
     completion = SimpleNamespace(
         choices=[
@@ -597,3 +746,10 @@ def test_closes_created_clients() -> None:
     client.close()
 
     assert fake_client.closed is True
+
+
+def _provider_response(status_code: int) -> httpx.Response:
+    return httpx.Response(
+        status_code,
+        request=httpx.Request("POST", "https://provider.example.test/v1/chat"),
+    )

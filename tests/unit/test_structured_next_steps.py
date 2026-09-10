@@ -142,6 +142,60 @@ class ThreeTurnMcpToolProvider:
         )
 
 
+class RestrictedCrossSourceMcpToolProvider:
+    @asynccontextmanager
+    async def open_session(self) -> AsyncIterator[McpToolSession]:
+        async def get_product_history(product_id: str) -> str:
+            assert product_id == "P9001"
+            return '{"classification":"RESTRICTED","product_id":"P9001"}'
+
+        async def get_machine_status(station_id: str) -> str:
+            assert station_id == "S07"
+            return '{"classification":"RESTRICTED","station_id":"S07"}'
+
+        async def search_documentation(query: str) -> str:
+            assert query == "PROTO-COMM-07"
+            return (
+                '{"classification":"RESTRICTED","results":['
+                '{"document_id":"DOC-PROTO-COMM-07","metadata":{'
+                '"document_title":"S07 PROTO-COMM-07 Procedure",'
+                '"format":"markdown"}}]}'
+            )
+
+        yield McpToolSession(
+            tools=(
+                StructuredTool.from_function(
+                    coroutine=get_product_history,
+                    name="get_product_history",
+                    description="Get product history.",
+                ),
+                StructuredTool.from_function(
+                    coroutine=get_machine_status,
+                    name="get_machine_status",
+                    description="Get machine status.",
+                ),
+                StructuredTool.from_function(
+                    coroutine=search_documentation,
+                    name="search_documentation",
+                    description="Search technical documentation.",
+                ),
+            ),
+            discovered_tool_names=(
+                "get_product_history",
+                "get_machine_status",
+                "search_documentation",
+            ),
+            server_name="fake_restricted_cross_source_mcp",
+            server_version="test",
+            protocol_version="test",
+            tool_policies=(
+                ToolPolicy("get_product_history", ToolOperation.READ),
+                ToolPolicy("get_machine_status", ToolOperation.READ),
+                ToolPolicy("search_documentation", ToolOperation.READ),
+            ),
+        )
+
+
 def test_final_agent_output_preserves_german_next_steps_and_technical_ids() -> None:
     output = FinalAgentOutput.model_validate(
         {
@@ -594,6 +648,116 @@ def test_multi_loop_final_output_retains_structured_next_steps() -> None:
     assert "Response language: English." in (
         finalization_request.messages[0].content or ""
     )
+
+
+def test_restricted_cross_source_tool_calls_are_not_validated_as_final_output() -> None:
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="history",
+                        name="get_product_history",
+                        arguments={"product_id": "P9001"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="status",
+                        name="get_machine_status",
+                        arguments={"station_id": "S07"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="documentation",
+                        name="search_documentation",
+                        arguments={"query": "PROTO-COMM-07"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text="The authorized cross-source investigation is complete.",
+                finish_reason=FinishReason.STOP,
+            ),
+            LLMResponse(
+                text=(
+                    '{"answer":"The authorized cross-source investigation is complete.",'
+                    '"next_steps":[]}'
+                ),
+                finish_reason=FinishReason.STOP,
+            ),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, RestrictedCrossSourceMcpToolProvider()),
+        run_classification=DataClassification.RESTRICTED,
+    )
+
+    result = asyncio.run(agent.aanswer_via_mcp("Investigate P9001 at S07."))
+
+    assert result.status is AgentRunStatus.SUCCESS
+    assert [call.tool for call in result.executed_tool_calls] == [
+        "get_product_history",
+        "get_machine_status",
+        "search_documentation",
+    ]
+    assert len(client.requests) == 5
+    assert all(request.response_format is None for request in client.requests[:4])
+    assert client.requests[-1].response_format is not None
+
+
+def test_bounded_information_run_skips_redundant_structured_finalizer() -> None:
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="history",
+                        name="get_product_history",
+                        arguments={"product_id": "P4711"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text='{"answer":"Die autorisierten Stationen wurden abgerufen.","next_steps":[]}',
+                finish_reason=FinishReason.STOP,
+            ),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_fast"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
+        run_classification=DataClassification.RESTRICTED,
+        normalize_structured_final_output=False,
+    )
+
+    result = asyncio.run(agent.aanswer_via_mcp("Untersuche P4711."))
+
+    assert result.status is AgentRunStatus.SUCCESS
+    assert result.next_steps == ()
+    assert result.final_answer == "Die autorisierten Stationen wurden abgerufen."
+    assert [step.action for step in result.investigation_steps] == [
+        "get_product_history"
+    ]
+    assert len(client.requests) == 2
 
 
 def test_structured_finalizer_replaces_observed_action_list_with_next_steps() -> None:

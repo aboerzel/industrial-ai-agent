@@ -42,6 +42,15 @@ class DataClassificationLabel(StrEnum):
     RESTRICTED = "RESTRICTED"
 
 
+class ApiErrorResponse(BaseModel):
+    """Sanitized public error; never a provider exception projection."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    code: Annotated[str, StringConstraints(min_length=1, max_length=80)]
+    message: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+
+
 class HealthResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -182,6 +191,7 @@ class RunResponse(BaseModel):
     )
     documents: tuple[DocumentReferenceResponse, ...] = Field(default=(), max_length=5)
     tool_calls: tuple[ToolCallResponse, ...] = ()
+    error: ApiErrorResponse | None = None
     approval_request: ApprovalRequestResponse | None = None
 
 
@@ -206,6 +216,7 @@ class InvestigationTurnResponse(BaseModel):
     )
     documents: tuple[DocumentReferenceResponse, ...] = Field(default=(), max_length=5)
     tool_calls: tuple[ToolCallResponse, ...] = ()
+    error: ApiErrorResponse | None = None
     created_at: str | None = None
     updated_at: str | None = None
     approval_request: ApprovalRequestResponse | None = None
@@ -220,10 +231,3 @@ class InvestigationResponse(BaseModel):
     tool_call_count: int = Field(ge=0)
     status: str
     turns: tuple[InvestigationTurnResponse, ...]
-
-
-class ApiErrorResponse(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    code: str
-    message: str

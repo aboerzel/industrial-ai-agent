@@ -16,6 +16,7 @@ from langchain_core.tools import BaseTool
 from industrial_ai_agent.agent.llm import (
     LLMClient,
     LLMMessage,
+    LLMReasoningEffort,
     LLMRequest,
     LLMResponse,
     LLMResponseFormat,
@@ -34,6 +35,7 @@ class LLMClientChatModel:
     tools: tuple[BaseTool, ...] = ()
     response_format: LLMResponseFormat | None = None
     supports_structured_output: bool = False
+    reasoning_effort: LLMReasoningEffort | None = None
 
     def bind_tools(self, tools: Sequence[BaseTool]) -> LLMClientChatModel:
         return LLMClientChatModel(
@@ -42,6 +44,7 @@ class LLMClientChatModel:
             tools=tuple(tools),
             response_format=self.response_format,
             supports_structured_output=self.supports_structured_output,
+            reasoning_effort=self.reasoning_effort,
         )
 
     def bind_response_format(
@@ -57,6 +60,7 @@ class LLMClientChatModel:
             tools=self.tools,
             response_format=response_format,
             supports_structured_output=self.supports_structured_output,
+            reasoning_effort=self.reasoning_effort,
         )
 
     def invoke(self, messages: Sequence[BaseMessage]) -> AIMessage:
@@ -66,6 +70,7 @@ class LLMClientChatModel:
                 messages=tuple(_to_internal_message(message) for message in messages),
                 tools=tuple(_to_internal_tool(tool) for tool in self.tools),
                 response_format=self.response_format,
+                reasoning_effort=self.reasoning_effort,
             ),
         )
         return _to_ai_message(response)

@@ -220,6 +220,23 @@ The deterministic analyzer remains authoritative. Optional AI reasoning receives
 - [Ollama](https://ollama.com/) running on the host, with the local models used by the Compose profiles
 - A local `.env` created from `.env.example`; provide the required local Compose values, including a 64-character hexadecimal `LANGFUSE_ENCRYPTION_KEY`, and keep the file unversioned
 
+### Local Ollama GPU Runtime
+
+GPU acceleration is not required for correctness or for the local execution-zone
+boundary: CPU fallback remains local and is supported. For interactive complex
+`local_quality` workloads, however, an NVIDIA GPU is required to meet the 60-second
+Agent deadline reliably. When Ollama runs in Docker Desktop on Windows, use the WSL 2
+backend and verify GPU-PV before running the demo:
+
+```powershell
+docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi
+```
+
+The command must show the NVIDIA GPU. A container start failure or `size_vram=0` in
+Ollama means the local runtime is CPU-degraded; it does not permit RESTRICTED data to
+fall back to a public provider. Verify Docker Desktop's WSL 2 GPU support and the
+Windows NVIDIA driver before tuning Agent timeouts or model routing.
+
 ### Full Demo
 
 Set a valid `GROQ_API_KEY` in `.env` and leave `LOCAL_ONLY_MODE=false`. This permits the

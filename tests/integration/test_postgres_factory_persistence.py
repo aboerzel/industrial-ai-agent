@@ -38,6 +38,7 @@ from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlProductHistoryRepository,
     PostgreSqlSessionFactory,
 )
+from industrial_ai_agent.tools.factory_discovery import FactoryDiscoveryCapability
 
 DATABASE_URL = os.getenv("FACTORY_DATABASE_URL")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -273,6 +274,26 @@ def test_maintenance_ticket_create_and_read_share_rls_filtered_persistence() -> 
     assert hidden is None
 
 
+def test_seeded_maintenance_ticket_is_visible_only_at_confidential_clearance() -> None:
+    assert DATABASE_URL is not None
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    ticket_id = MaintenanceTicketId("MT-S02-20260117")
+    try:
+        visible = PostgreSqlMaintenanceTicketRepository(
+            session_factory, _context(DataClassification.CONFIDENTIAL)
+        ).get_maintenance_ticket(ticket_id)
+        hidden = PostgreSqlMaintenanceTicketRepository(
+            session_factory, _context(DataClassification.INTERNAL)
+        ).get_maintenance_ticket(ticket_id)
+    finally:
+        session_factory.dispose()
+
+    assert visible is not None
+    assert visible.ticket_id == "MT-S02-20260117"
+    assert visible.classification is DataClassification.CONFIDENTIAL
+    assert hidden is None
+
+
 def test_restricted_demo_case_is_visible_only_at_restricted_clearance() -> None:
     assert DATABASE_URL is not None
     session_factory = PostgreSqlSessionFactory(DATABASE_URL)
@@ -378,6 +399,11 @@ def test_factory_discovery_applies_rls_before_entity_names_or_relationships() ->
         confidential_hidden_product = confidential.get_product_overview(
             ProductId("P9001")
         )
+        confidential_s04_overview = confidential.get_station_overview(StationId("S04"))
+        internal_s04_overview = internal.get_station_overview(StationId("S04"))
+        internal_projection = FactoryDiscoveryCapability(internal).get_station_overview(
+            "S04"
+        )
         restricted_overview = restricted.get_station_overview(StationId("S07"))
     finally:
         session_factory.dispose()
@@ -401,6 +427,30 @@ def test_factory_discovery_applies_rls_before_entity_names_or_relationships() ->
     assert public_hidden_station is None
     assert confidential_hidden_station is None
     assert confidential_hidden_product is None
+    assert confidential_s04_overview is not None
+    assert {
+        (
+            product.product_id.value,
+            product.latest_status.value if product.latest_status is not None else None,
+            product.latest_error_code,
+        )
+        for product in confidential_s04_overview.recent_products
+    } == {
+        ("P4811", "FAILED", "QUALITY-09"),
+        ("P4801", "COMPLETED", None),
+        ("P4711", "FAILED", "QUALITY-09"),
+    }
+    assert internal_s04_overview is None
+    assert internal_projection.model_dump(mode="json") == {
+        "station_id": "S04",
+        "name": "",
+        "state": None,
+        "active_error_code": None,
+        "classification": 0,
+        "found": False,
+        "recent_product_ids": [],
+        "recent_products": [],
+    }
     assert restricted_overview is not None
     assert restricted_overview.recent_product_ids == (ProductId("P9001"),)
 

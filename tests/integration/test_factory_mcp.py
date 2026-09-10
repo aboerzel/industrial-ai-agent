@@ -67,6 +67,36 @@ def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> No
         assert tool.input_schema["additionalProperties"] is False
 
 
+@pytest.mark.skipif(
+    not os.getenv("FACTORY_DATABASE_URL"),
+    reason="requires FACTORY_DATABASE_URL for the deterministic PostgreSQL seed",
+)
+def test_factory_mcp_station_overview_returns_authorized_product_statuses() -> None:
+    server = create_default_factory_mcp_server()
+
+    async def call_station_overview() -> dict[str, object]:
+        result = await server.call_tool("get_station_overview", {"station_id": "S04"})
+        assert isinstance(result, CallToolResult)
+        return result.structured_content
+
+    content = asyncio.run(call_station_overview())
+
+    assert content["found"] is True
+    assert {
+        (
+            product["product_id"],
+            product["latest_status"],
+            product["latest_error_code"],
+        )
+        for product in content["recent_products"]
+    } == {
+        ("P4811", "FAILED", "QUALITY-09"),
+        ("P4801", "COMPLETED", None),
+        ("P4711", "FAILED", "QUALITY-09"),
+    }
+    assert "P9001" not in content["recent_product_ids"]
+
+
 def test_factory_mcp_tool_handlers_delegate_to_injected_capabilities() -> None:
     product_history = _RecordingProductHistoryCapability()
     machine_status = _RecordingMachineStatusCapability()
@@ -177,18 +207,21 @@ def test_factory_mcp_reads_the_ticket_created_by_the_same_capability() -> None:
     }
 
 
-def test_factory_mcp_returns_a_bounded_not_found_ticket_result() -> None:
+@pytest.mark.parametrize("ticket_id", ("MT-FFFFFFFFFFFF", "MT-S99-20991231"))
+def test_factory_mcp_returns_a_bounded_not_found_ticket_result(
+    ticket_id: str,
+) -> None:
     server = create_default_factory_mcp_server()
 
     async def call_unknown() -> dict[str, object]:
         result = await server.call_tool(
-            "get_maintenance_ticket", {"ticket_id": "MT-FFFFFFFFFFFF"}
+            "get_maintenance_ticket", {"ticket_id": ticket_id}
         )
         assert isinstance(result, CallToolResult)
         return result.structured_content
 
     assert asyncio.run(call_unknown()) == {
-        "ticket_id": "MT-FFFFFFFFFFFF",
+        "ticket_id": ticket_id,
         "found": False,
         "status": None,
         "station_id": None,

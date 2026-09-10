@@ -194,11 +194,15 @@ class LangGraphTroubleshootingAgent:
         mcp_tool_provider: McpToolProvider | None = None,
         checkpointer: BaseCheckpointSaver[str] | None = None,
         run_classification: DataClassification | None = None,
+        system_message: str = MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+        normalize_structured_final_output: bool = True,
     ) -> None:
         self._checkpointer = checkpointer
         self._run_classification = run_classification
         self._mcp_tool_provider = mcp_tool_provider
         self._chat_model = chat_model
+        self._system_message = system_message
+        self._normalize_structured_final_output = normalize_structured_final_output
 
     async def request_tool_selection_via_mcp(
         self,
@@ -211,7 +215,7 @@ class LangGraphTroubleshootingAgent:
             ).invoke(
                 self._initial_messages(
                     user_request,
-                    system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+                    system_content=self._system_message,
                     response_language=detect_response_language(user_request),
                 )
             )
@@ -242,7 +246,7 @@ class LangGraphTroubleshootingAgent:
             state = await graph.ainvoke(
                 self._initial_state(
                     user_request,
-                    system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+                    system_content=self._system_message,
                     response_language=response_language,
                     conversation_context=conversation_context,
                 ),
@@ -303,7 +307,7 @@ class LangGraphTroubleshootingAgent:
             await graph.ainvoke(
                 self._initial_state(
                     user_request,
-                    system_content=MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
+                    system_content=self._system_message,
                     response_language=response_language,
                     conversation_context=conversation_context,
                 ),
@@ -359,7 +363,14 @@ class LangGraphTroubleshootingAgent:
         # noinspection PyTypeChecker
         builder = StateGraph(CheckpointedTroubleshootingGraphState)
         # noinspection PyTypeChecker
-        builder.add_node("model", lambda state: self._model_node(chat_model, state))
+        builder.add_node(
+            "model",
+            lambda state: self._model_node(
+                chat_model,
+                state,
+                normalize_structured_final_output=self._normalize_structured_final_output,
+            ),
+        )
         # noinspection PyTypeChecker
         # noinspection PyTypeChecker
         builder.add_node("tool", tool_node)
@@ -388,7 +399,14 @@ class LangGraphTroubleshootingAgent:
 
         # noinspection PyTypeChecker
         builder = StateGraph(CheckpointedTroubleshootingGraphState)
-        builder.add_node("model", lambda state: self._model_node(chat_model, state))
+        builder.add_node(
+            "model",
+            lambda state: self._model_node(
+                chat_model,
+                state,
+                normalize_structured_final_output=self._normalize_structured_final_output,
+            ),
+        )
         builder.add_node("tool", tool_node)
         builder.add_node(
             "prepare_action",
@@ -417,6 +435,8 @@ class LangGraphTroubleshootingAgent:
     def _model_node(
         chat_model: LangChainChatModel,
         state: CheckpointedTroubleshootingGraphState,
+        *,
+        normalize_structured_final_output: bool,
     ) -> dict[str, object]:
         message = chat_model.invoke(state["messages"])
         response = to_llm_response(message)
@@ -431,11 +451,21 @@ class LangGraphTroubleshootingAgent:
             )
             response = to_llm_response(message)
         if not response.tool_calls:
+            final_messages: list[AIMessage] = [message]
             if response.text is None:
                 raise MissingLLMResponseTextError("LLM response did not contain text")
-            final_output = FinalAgentOutput.from_model_text(response.text)
-            final_messages: list[AIMessage] = [message]
-            if chat_model.supports_structured_output:
+            # Restricted orientation runs use a deliberately compact local prompt and
+            # deterministic trajectory projection. Their model response is narrative,
+            # not an alternate structured-output contract.
+            final_output = (
+                _narrative_final_output(response.text)
+                if not normalize_structured_final_output
+                else FinalAgentOutput.from_model_text(response.text)
+            )
+            if (
+                normalize_structured_final_output
+                and chat_model.supports_structured_output
+            ):
                 normalizer = chat_model.bind_tools(()).bind_response_format(
                     _final_output_response_format()
                 )
@@ -1424,6 +1454,17 @@ def _normalized_final_output_or_draft(
         except FinalAgentOutputContractError:
             pass
     return candidate
+
+
+def _narrative_final_output(text: str) -> FinalAgentOutput:
+    """Accept only a local model's narrative field for bounded information runs."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return FinalAgentOutput(answer=text)
+    if isinstance(payload, dict) and isinstance(payload.get("answer"), str):
+        return FinalAgentOutput(answer=payload["answer"])
+    return FinalAgentOutput(answer=text)
 
 
 def _with_safe_narrative(

@@ -11,6 +11,7 @@ from industrial_ai_agent.agent.model_routing import (
     TaskRequirements,
     TaskRole,
 )
+from industrial_ai_agent.domain.maintenance_ticket import is_maintenance_ticket_id
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 
 
@@ -20,6 +21,7 @@ class AgentRunProfile(StrEnum):
     PUBLIC_INFORMATION = "PUBLIC_INFORMATION"
     INTERNAL_DIAGNOSTIC = "INTERNAL_DIAGNOSTIC"
     CONFIDENTIAL_TROUBLESHOOTING = "CONFIDENTIAL_TROUBLESHOOTING"
+    RESTRICTED_INFORMATION = "RESTRICTED_INFORMATION"
     RESTRICTED_TROUBLESHOOTING = "RESTRICTED_TROUBLESHOOTING"
 
 
@@ -49,6 +51,7 @@ PUBLIC_INFORMATION_TOOLS = frozenset(
         "get_station_overview",
         "list_products",
         "get_product_overview",
+        "get_product_history",
         "get_maintenance_ticket",
         "search_documentation",
     }
@@ -66,6 +69,37 @@ CONFIDENTIAL_TROUBLESHOOTING_TOOLS = frozenset(
         "create_maintenance_ticket",
     }
 )
+RESTRICTED_INFORMATION_TOOLS = frozenset(
+    {
+        "list_stations",
+        "get_station_overview",
+        "get_machine_status",
+    }
+)
+
+
+# This resolver is deliberately limited to the deterministic FACTORY-DEMO-01
+# catalogue. It assigns known identifiers their authoritative seed classification
+# before model routing; RLS remains the authoritative enforcement point for data.
+_DEMO_ENTITY_PROFILES = {
+    "P4101": AgentRunProfile.PUBLIC_INFORMATION,
+    "P4102": AgentRunProfile.PUBLIC_INFORMATION,
+    "P4900": AgentRunProfile.INTERNAL_DIAGNOSTIC,
+    "P4901": AgentRunProfile.INTERNAL_DIAGNOSTIC,
+    "P4711": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "P4801": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "P4802": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "P4805": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "P4811": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "P9001": AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
+    "S07": AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
+    "PROTO-COMM-07": AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
+    "S04": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "QUALITY-09": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "POSITION-ENC-02": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "S02": AgentRunProfile.INTERNAL_DIAGNOSTIC,
+    "S03": AgentRunProfile.INTERNAL_DIAGNOSTIC,
+}
 
 
 class RunClearanceDeniedError(PermissionError):
@@ -146,6 +180,15 @@ class AgentRunClassificationPolicy:
                 allowed_tool_names=CONFIDENTIAL_TROUBLESHOOTING_TOOLS,
                 mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
+        if profile is AgentRunProfile.RESTRICTED_INFORMATION:
+            return ResolvedRunPolicy(
+                run_profile=profile,
+                data_classification=classification,
+                mcp_clearance_ceiling=rls_clearance,
+                task_requirements=_information_requirements(classification),
+                allowed_tool_names=RESTRICTED_INFORMATION_TOOLS,
+                mcp_client_identity=_mcp_identity_for(rls_clearance),
+            )
         raise ValueError("Unknown agent run profile")
 
     def resolve_persisted(
@@ -172,11 +215,25 @@ def _requirements(classification: DataClassification) -> TaskRequirements:
     )
 
 
+def _information_requirements(classification: DataClassification) -> TaskRequirements:
+    """Route bounded read-only orientation through an eligible local fast profile."""
+    return TaskRequirements(
+        task_role=TaskRole.TROUBLESHOOTING,
+        required_capabilities=frozenset(
+            {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+        ),
+        minimum_quality=QualityClass.STANDARD,
+        cost_preference=CostPreference.MINIMIZE_COST,
+        data_classification=classification,
+    )
+
+
 def _profile_classification(profile: AgentRunProfile) -> DataClassification:
     return {
         AgentRunProfile.PUBLIC_INFORMATION: DataClassification.PUBLIC,
         AgentRunProfile.INTERNAL_DIAGNOSTIC: DataClassification.INTERNAL,
         AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING: DataClassification.CONFIDENTIAL,
+        AgentRunProfile.RESTRICTED_INFORMATION: DataClassification.RESTRICTED,
         AgentRunProfile.RESTRICTED_TROUBLESHOOTING: DataClassification.RESTRICTED,
     }[profile]
 
@@ -199,20 +256,18 @@ def resolve_demo_run_profile(
     an outer-demo convenience, not a general data-classification engine.
     """
     normalized = message.strip().upper()
-    if any(
-        identifier in normalized for identifier in ("P9001", "S07", "PROTO-COMM-07")
-    ):
-        return AgentRunProfile.RESTRICTED_TROUBLESHOOTING
-    if any(
-        identifier in normalized
-        for identifier in ("P4711", "S04", "QUALITY-09", "POSITION-ENC-02")
-    ):
+    if _is_ticket_lookup_request(normalized):
+        # The supported ticket creation path is CONFIDENTIAL and the deterministic
+        # seeded ticket has the same classification. Treat every syntactically valid
+        # ticket lookup as CONFIDENTIAL so hidden and unknown tickets cannot be
+        # distinguished by lower-clearance callers before the model boundary.
         return AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
-    if "P4900" in normalized or "P4901" in normalized or "S02" in normalized:
-        return AgentRunProfile.INTERNAL_DIAGNOSTIC
-    if security_context is not None and (
-        _is_discovery_request(normalized) or _is_ticket_lookup_request(normalized)
-    ):
+    if _is_restricted_information_request(normalized, security_context):
+        return AgentRunProfile.RESTRICTED_INFORMATION
+    for identifier, profile in _DEMO_ENTITY_PROFILES.items():
+        if identifier in normalized:
+            return profile
+    if security_context is not None and _is_discovery_request(normalized):
         return {
             DataClassification.PUBLIC: AgentRunProfile.PUBLIC_INFORMATION,
             DataClassification.INTERNAL: AgentRunProfile.INTERNAL_DIAGNOSTIC,
@@ -223,6 +278,36 @@ def resolve_demo_run_profile(
     return AgentRunProfile.RESTRICTED_TROUBLESHOOTING
 
 
+def _is_restricted_information_request(
+    normalized_message: str,
+    security_context: SecurityContext | None,
+) -> bool:
+    """Recognize bounded station discovery/status requests before model routing."""
+    if (
+        security_context is None
+        or security_context.clearance is not DataClassification.RESTRICTED
+    ):
+        return False
+    has_product_identifier = re.search(r"\bP\d{4}\b", normalized_message) is not None
+    is_station_discovery = (
+        "STATION" in normalized_message
+        and not has_product_identifier
+        and not any(
+            marker in normalized_message
+            for marker in ("HISTORY", "HISTORIE", "DOCUMENT", "DOKUMENT", "UNTERSUCH")
+        )
+    )
+    is_restricted_station_status = (
+        "S07" in normalized_message
+        and "STATUS" in normalized_message
+        and not any(
+            marker in normalized_message
+            for marker in ("HISTORY", "HISTORIE", "DOCUMENT", "DOKUMENT", "UNTERSUCH")
+        )
+    )
+    return is_station_discovery or is_restricted_station_status
+
+
 def _is_discovery_request(normalized_message: str) -> bool:
     return any(
         phrase in normalized_message
@@ -231,13 +316,22 @@ def _is_discovery_request(normalized_message: str) -> bool:
             "STATION",
             "PRODUCTS",
             "PRODUCT",
+            "PRODUKTE",
+            "PRODUKT",
             "AVAILABLE",
+            "VERFÜGBAR",
             "RECENTLY FAILED",
+            "KÜRZLICH FEHLGESCHLAGEN",
             "WARNINGS",
             "FAILURES",
+            "WARNUNGEN",
+            "FEHLER",
         )
     )
 
 
 def _is_ticket_lookup_request(normalized_message: str) -> bool:
-    return bool(re.search(r"\bMT-[A-F0-9]{12}\b", normalized_message))
+    return any(
+        is_maintenance_ticket_id(candidate.strip(".,;:!?()[]{}\"'"))
+        for candidate in normalized_message.split()
+    )

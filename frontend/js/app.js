@@ -106,7 +106,7 @@ async function submitRequest(message) {
     composerMessage.value = "";
     await reloadInvestigation();
   } catch (error) {
-    renderPendingFailure(publicError(error, "The agent run could not be completed."));
+    renderPendingFailure(error, responseLanguage.value);
   } finally {
     isSubmitting = false;
     syncControls();
@@ -204,19 +204,21 @@ function renderPendingConversation(message, { replace }) {
   scrollHistoryToLatest();
 }
 
-function renderPendingFailure(message) {
+function renderPendingFailure(error, selectedLanguage) {
+  const providerLimited = isProviderLimitError(error?.code);
+  const message = publicError(error, "The agent run could not be completed.");
   if (pendingAgentTurn) {
     pendingAgentTurn.classList.remove("is-pending");
-    pendingAgentTurn.classList.add("is-error");
+    pendingAgentTurn.classList.add(providerLimited ? "is-limit" : "is-error");
     pendingAgentTurn.replaceChildren(
       createTurnLabel("Agent"),
-      createTurnError(message),
+      createTurnError(error?.code, message, selectedLanguage),
     );
   } else {
     showError(message);
   }
   pendingAgentTurn = null;
-  setStatus("failed");
+  setStatus(providerLimited ? "limit_reached" : "failed", selectedLanguage);
   scrollHistoryToLatest();
 }
 
@@ -258,8 +260,15 @@ function renderAgentTurn(turn) {
   }
 
   if (turn.status === "failed") {
-    article.classList.add("is-error");
-    article.append(createTurnError("The agent run could not be completed."));
+    const providerLimited = isProviderLimitError(turn.error?.code);
+    article.classList.add(providerLimited ? "is-limit" : "is-error");
+    article.append(
+      createTurnError(
+        turn.error?.code,
+        turn.error?.message ?? "The agent run could not be completed.",
+        turn.response_language,
+      ),
+    );
     return article;
   }
 
@@ -283,7 +292,7 @@ function renderAgentTurn(turn) {
 
   const metadata = document.createElement("p");
   metadata.className = "turn-metadata";
-  metadata.textContent = [turn.data_classification, statusLabel(turn.status)]
+  metadata.textContent = [turn.data_classification, turnStatusLabel(turn)]
     .filter(Boolean)
     .join(" / ");
   article.append(metadata);
@@ -568,11 +577,12 @@ function createIcon(name) {
   return icon;
 }
 
-function createTurnError(message) {
+function createTurnError(errorCode, message, selectedLanguage) {
   const error = document.createElement("div");
-  error.className = "turn-error";
+  const providerLimited = isProviderLimitError(errorCode);
+  error.className = providerLimited ? "turn-error turn-limit" : "turn-error";
   const title = document.createElement("strong");
-  title.textContent = "Investigation step failed.";
+  title.textContent = failureTitle(errorCode, selectedLanguage);
   const detail = document.createElement("p");
   detail.textContent = message;
   error.append(title, detail);
@@ -670,10 +680,10 @@ function nextStepActionLabel(responseLanguage) {
   return responseLanguage === "DE" ? "Als Folgefrage übernehmen" : "Use as follow-up";
 }
 
-function setStatus(status) {
+function setStatus(status, selectedLanguage = responseLanguage.value) {
   runStatus.hidden = false;
   runStatus.dataset.status = status;
-  runStatus.textContent = statusLabel(status);
+  runStatus.textContent = statusLabel(status, selectedLanguage);
 }
 
 function hideStatus() {
@@ -682,12 +692,36 @@ function hideStatus() {
   runStatus.textContent = "";
 }
 
-function statusLabel(status) {
+function statusLabel(status, selectedLanguage = responseLanguage.value) {
   if (status === "running") return "Investigating";
+  if (status === "limit_reached") {
+    return selectedLanguage === "DE" ? "Limit erreicht" : "Limit reached";
+  }
   return status
     .split("_")
     .map((part) => `${part[0].toUpperCase()}${part.slice(1)}`)
     .join(" ");
+}
+
+function turnStatusLabel(turn) {
+  return isProviderLimitError(turn.error?.code)
+    ? statusLabel("limit_reached", turn.response_language)
+    : statusLabel(turn.status, turn.response_language);
+}
+
+function isProviderLimitError(errorCode) {
+  return ["llm_rate_limit", "llm_quota_exceeded", "llm_provider_unavailable"].includes(errorCode);
+}
+
+function failureTitle(errorCode, selectedLanguage) {
+  const german = selectedLanguage === "DE";
+  if (errorCode === "llm_rate_limit" || errorCode === "llm_quota_exceeded") {
+    return german ? "LLM-Limit erreicht" : "LLM limit reached";
+  }
+  if (errorCode === "llm_provider_unavailable") {
+    return german ? "LLM-Anbieter nicht verfügbar" : "LLM provider unavailable";
+  }
+  return german ? "Untersuchungsschritt fehlgeschlagen." : "Investigation step failed.";
 }
 
 function scrollHistoryToLatest() {

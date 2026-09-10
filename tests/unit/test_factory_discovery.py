@@ -71,6 +71,15 @@ def test_factory_discovery_overviews_retain_classification_and_relationships() -
     assert station.found is True
     assert station.classification is DataClassification.CONFIDENTIAL
     assert station.recent_product_ids == ("P4711",)
+    assert [product.model_dump(mode="json") for product in station.recent_products] == [
+        {
+            "product_id": "P4711",
+            "latest_station_id": "S04",
+            "latest_status": "FAILED",
+            "latest_error_code": "QUALITY-09",
+            "classification": 2,
+        }
+    ]
     assert product.found is True
     assert product.classification is DataClassification.CONFIDENTIAL
     assert product.passed_station_ids == ("S01", "S02", "S04")
@@ -90,6 +99,7 @@ def test_factory_discovery_returns_neutral_not_found_projections() -> None:
         "classification": 0,
         "found": False,
         "recent_product_ids": [],
+        "recent_products": [],
     }
     assert product.model_dump(mode="json") == {
         "product_id": "P9999",

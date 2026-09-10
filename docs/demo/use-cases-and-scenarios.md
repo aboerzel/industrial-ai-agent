@@ -46,7 +46,7 @@ but cannot confirm a cause. All records and documents are synthetic.
 
 | Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
-| P4711 history | Investigate the complete production history of P4711. Summarize its station sequence, inspection results, warnings, and final error. | CONFIDENTIAL | Shows S01 completion, S02 POSITION-ENC-02 warning, S03 completion, and S04 QUALITY-09 failure chronologically. |
+| P4711 history | Investigate the complete production history of P4711. Summarize its station sequence, warnings, and final error. | CONFIDENTIAL | Shows S01 completion, S02 POSITION-ENC-02 warning, S03 completion, and S04 QUALITY-09 failure chronologically. |
 | Higher user, lower run | Investigate why product P4711 failed at station S04. Check the relevant product history, inspection results, and error codes, and use the available documentation if needed. | RESTRICTED | Resolves CONFIDENTIAL run/RLS ceiling, not RESTRICTED; public-cloud routing remains possible. |
 | Confidential denial | Investigate the available history and failure details for product P4711 at station S04. | INTERNAL | Returns neutral `requested_data_unavailable`; no model call or existence disclosure. |
 | Warning relevance | Review P4711's production history and assess whether earlier warnings are relevant to its later failure at station S04. | CONFIDENTIAL | Separates S02 warning from S04 failure; any causal link is explicitly an inference. |
@@ -74,8 +74,8 @@ but cannot confirm a cause. All records and documents are synthetic.
 |---|---|---|---|
 | Product non-leakage | Provide the information available to me about product P9001, including its current or final status if accessible. | CONFIDENTIAL | Neutral unavailable/not-found semantics without identifier details, count, or required clearance. |
 | Station non-leakage | Provide the information available to me about station S07, including its current status if accessible. | CONFIDENTIAL | Neutral unavailable/not-found semantics without restricted state or count. |
-| Ticket lookup | Show the available details for maintenance ticket MT-6EA0DEF5515A and summarize its visible status and affected equipment. | CONFIDENTIAL | Uses `get_maintenance_ticket` to return only the visible ticket projection. User-facing text remains English even when structured ticket values use technical English. |
-| Ticket non-leakage | Show the available details for maintenance ticket MT-6EA0DEF5515A and summarize its visible status and affected equipment. | INTERNAL | An unknown or RLS-hidden ticket produces the same neutral unavailable result, without summary, station, status, classification, or required-clearance disclosure. User-facing text remains German. |
+| Ticket lookup | Show the available details for maintenance ticket MT-S02-20260117 and summarize its visible status and affected equipment. | CONFIDENTIAL | Uses `get_maintenance_ticket` to return only the visible projection of the deterministically seeded CONFIDENTIAL ticket. User-facing text remains English even when structured ticket values use technical English. |
+| Ticket non-leakage | Show the available details for maintenance ticket MT-S02-20260117 and summarize its visible status and affected equipment. | INTERNAL | An unknown or RLS-hidden ticket produces the same neutral unavailable result, without summary, station, status, classification, or required-clearance disclosure. User-facing text remains English. |
 
 ## 7. Root-Cause Analysis
 
@@ -89,13 +89,24 @@ RLS-visible INTERNAL runs.
 | Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
 | RCA overview | Create an INTERNAL investigation for product P4901, then analyze the resulting run with an RCA overview and summarize the observed run lifecycle, tool usage, and source completeness. | INTERNAL | Reports observed run lifecycle/tool metadata and source completeness. It does not expose P4901 payloads or emit CONFIRMED_RUN_CAUSE. |
-| RCA failure | Create a genuine failed INTERNAL investigation through a bounded service failure. Analyze the resulting run with an RCA failure focus and summarize only observed failure locations and limitations. | INTERNAL | Reports OBSERVED failed runtime/span/tool locations and limitations. A failure location is not a confirmed cause; no telemetry is manufactured. |
+| RCA failure focus without a failed run | Create a successful INTERNAL investigation for product P4901, then analyze the resulting run with an RCA failure focus. | INTERNAL | The deterministic report contains no invented failure location or confirmed cause. It returns only genuinely observed failure findings, or an empty failure projection with limitations. A failed-run scenario is accepted only after a deterministic fixture or supported bounded failure scenario exists. |
 | RCA performance | Run an INTERNAL investigation with tracing enabled. Analyze the resulting run with an RCA performance focus and summarize measured component timing if available. | INTERNAL | When trace timing can be attributed to components, reports the dominant measured component and its share, never “slow”, abnormal, or a root cause. Missing sources or unattributable timings yield partial/insufficient evidence. |
 | Confidential RCA boundary | Attempt to analyze a CONFIDENTIAL P4711 investigation run using codex-development access and report only the information available to you. | INTERNAL | Runtime RLS returns neutral unavailable before telemetry lookup; a run ID is not authority. |
 
-## 8. Execution Notes
+## 8. LLM Provider Limits
 
-## 9. Investigation History and PDF Export
+Provider limits are external execution blocks, not functional agent failures. A known
+OpenAI-compatible provider rate limit persists `llm_rate_limit`; an explicit known
+quota code persists `llm_quota_exceeded`; known provider connection or maintenance
+failures persist `llm_provider_unavailable`. These cases produce a sanitized,
+response-language-specific message and are rendered as an amber **Limit reached** state
+after a history reload. Their acceptance outcome is `BLOCKED_BY_PROVIDER`, while
+`internal_error` remains `FAIL`. Provider messages, account metadata, token quotas,
+request IDs, and retry headers are not displayed or included in the acceptance evidence.
+
+## 9. Execution Notes
+
+## 10. Investigation History and PDF Export
 
 Start a `CONFIDENTIAL` ticket investigation, continue it twice, and verify that distinct
 run IDs share one investigation ID, remain ordered, and preserve individual languages.

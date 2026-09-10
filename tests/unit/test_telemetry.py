@@ -18,6 +18,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from industrial_ai_agent.agent.llm import LLMProviderError, LLMProviderErrorCode
 from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     _create_langchain_tool,
 )
@@ -91,6 +92,24 @@ def test_error_span_has_sanitized_error_metadata() -> None:
     assert span.attributes["error.code"] == "RuntimeError"
     assert "Bearer" not in str(span.attributes)
     assert span.events == ()
+
+
+def test_provider_limit_span_uses_bounded_provider_attributes() -> None:
+    telemetry, exporter = _recording_telemetry()
+
+    with (
+        pytest.raises(LLMProviderError),
+        telemetry.span("llm.call", {"model.profile": "public_fast"}),
+    ):
+        raise LLMProviderError(
+            LLMProviderErrorCode.RATE_LIMIT,
+            provider_error_type="RateLimitError",
+        )
+
+    span = exporter.get_finished_spans()[0]
+    assert span.attributes["error.code"] == "llm_rate_limit"
+    assert span.attributes["error.stage"] == "llm_provider"
+    assert span.attributes["error.type"] == "RateLimitError"
 
 
 def test_metric_dimensions_exclude_identifiers_and_free_text() -> None:

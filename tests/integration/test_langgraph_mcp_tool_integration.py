@@ -221,7 +221,7 @@ def test_mcp_discovery_creates_authorized_langchain_tools_with_compatible_schema
         _input_schema(tools_by_name["get_maintenance_ticket"])["properties"][
             "ticket_id"
         ]["pattern"]
-        == "^MT-[A-F0-9]{12}$"
+        == "^MT-(?:[A-F0-9]{12}|S[0-9]{2}-[0-9]{8})$"
     )
 
 
@@ -268,6 +268,38 @@ def test_ticket_lookup_is_selected_in_the_original_response_language(
             request.messages[0].content or ""
         )
     assert '"found": false' in (llm_client.requests[-1].messages[-1].content or "")
+
+
+def test_station_product_status_request_uses_one_bounded_station_overview() -> None:
+    llm_client = FakeLLMClient(
+        _tool_response("get_station_overview", {"station_id": "S04"}, "overview"),
+        _final_response(),
+    )
+
+    result = asyncio.run(
+        _mcp_agent(llm_client, database_url="").aanswer_via_mcp(
+            "Liste die Produkte auf, die Station S04 durchlaufen haben."
+        )
+    )
+
+    assert result.status is AgentRunStatus.SUCCESS
+    assert [call.tool for call in result.executed_tool_calls] == [
+        "get_station_overview"
+    ]
+    assert result.executed_tool_calls[0].arguments == {"station_id": "S04"}
+    assert {tool.name for tool in llm_client.requests[0].tools} >= {
+        "get_station_overview"
+    }
+    observation = json.loads(llm_client.requests[1].messages[-1].content or "{}")
+    assert observation["recent_products"] == [
+        {
+            "product_id": "P4711",
+            "latest_station_id": "S04",
+            "latest_status": "FAILED",
+            "latest_error_code": "QUALITY-09",
+            "classification": 2,
+        }
+    ]
 
 
 def test_langgraph_mcp_http_path_matches_the_stdio_path(

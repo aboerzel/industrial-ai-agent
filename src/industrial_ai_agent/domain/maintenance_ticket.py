@@ -4,6 +4,14 @@ from dataclasses import dataclass
 from industrial_ai_agent.domain.product_history import StationId
 from industrial_ai_agent.domain.security import DataClassification
 
+MAINTENANCE_TICKET_ID_PATTERN = r"^MT-(?:[A-F0-9]{12}|S[0-9]{2}-[0-9]{8})$"
+_maintenance_ticket_id_pattern = re.compile(MAINTENANCE_TICKET_ID_PATTERN)
+
+
+def is_maintenance_ticket_id(value: str) -> bool:
+    """Return whether a value uses one of the supported ticket identifier grammars."""
+    return _maintenance_ticket_id_pattern.fullmatch(value.strip()) is not None
+
 
 @dataclass(frozen=True, slots=True)
 class MaintenanceTicketRequestId:
@@ -24,7 +32,7 @@ class MaintenanceTicketId:
         normalized_value = self.value.strip()
         if not normalized_value:
             raise ValueError("Maintenance ticket ID must not be empty")
-        if re.fullmatch(r"MT-[A-F0-9]{12}", normalized_value) is None:
+        if not is_maintenance_ticket_id(normalized_value):
             raise ValueError("Maintenance ticket ID has an invalid format")
         object.__setattr__(self, "value", normalized_value)
 

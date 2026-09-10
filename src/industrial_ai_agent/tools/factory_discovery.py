@@ -32,11 +32,6 @@ class StationListResult(BaseModel):
     classification: DataClassification
 
 
-class StationOverviewResult(StationDiscoveryResult):
-    found: bool
-    recent_product_ids: tuple[str, ...] = ()
-
-
 class ProductDiscoveryResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -45,6 +40,12 @@ class ProductDiscoveryResult(BaseModel):
     latest_status: str | None
     latest_error_code: str | None
     classification: DataClassification
+
+
+class StationOverviewResult(StationDiscoveryResult):
+    found: bool
+    recent_product_ids: tuple[str, ...] = ()
+    recent_products: tuple[ProductDiscoveryResult, ...] = ()
 
 
 class ProductListResult(BaseModel):
@@ -96,6 +97,9 @@ class FactoryDiscoveryCapability:
             found=True,
             recent_product_ids=tuple(
                 product_id.value for product_id in overview.recent_product_ids
+            ),
+            recent_products=tuple(
+                _product_result(product) for product in overview.recent_products
             ),
         )
 

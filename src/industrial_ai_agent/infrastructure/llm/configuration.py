@@ -48,6 +48,7 @@ class ModelProfileConfig(BaseModel):
     cost_class: CostClass
     supports_structured_output: bool = False
     supports_reasoning_effort: bool = False
+    max_output_tokens: int | None = Field(default=None, ge=1, le=4096)
     api_cost_usd: Decimal | None = Field(default=None, ge=0)
     api_key_env: str | None = Field(default=None, min_length=1)
 

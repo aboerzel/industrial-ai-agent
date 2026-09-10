@@ -5,6 +5,8 @@
   --color-turn-running-border: #8aa8b9;
   --color-turn-error: #7c302d;
   --color-turn-error-border: #bd625e;
+  --color-turn-limit: #7b5a13;
+  --color-turn-limit-border: #c79b32;
 
   color-scheme: light;
   font-family: Arial, Helvetica, sans-serif;
@@ -195,8 +197,8 @@ select:focus, textarea:focus {
   animation: status-pulse 1.4s ease-in-out infinite;
 }
 .status-badge[data-status="success"] { border-color: #83ad92; color: #1f633d; background: #edf7f0; }
-.status-badge[data-status="completed_with_attention"],
-.status-badge[data-status="limit_reached"] { border-color: #91a9b5; color: #395c6d; background: #eff4f6; }
+.status-badge[data-status="completed_with_attention"] { border-color: #91a9b5; color: #395c6d; background: #eff4f6; }
+.status-badge[data-status="limit_reached"] { border-color: #d0a443; color: #75540d; background: #fff7df; }
 .status-badge[data-status="failed"] { border-color: #c98f8c; color: #8a302d; background: #fff2f1; }
 @keyframes status-pulse { 50% { opacity: 0.35; } }
 
@@ -230,7 +232,10 @@ select:focus, textarea:focus {
 .agent-turn.is-pending .turn-label { color: var(--color-turn-running); }
 .agent-turn.is-error { border-left-color: var(--color-turn-error-border); }
 .agent-turn.is-error .turn-label { color: var(--color-turn-error); }
+.agent-turn.is-limit { border-left-color: var(--color-turn-limit-border); }
+.agent-turn.is-limit .turn-label { color: var(--color-turn-limit); }
 .turn-error { color: var(--color-turn-error); }
+.turn-limit { color: var(--color-turn-limit); }
 .turn-error p { margin: 4px 0 0; }
 .turn-metadata { margin: 14px 0 0; color: #63716d; font-size: 0.76rem; font-weight: 700; }
 

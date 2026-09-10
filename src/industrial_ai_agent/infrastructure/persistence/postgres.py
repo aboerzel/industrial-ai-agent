@@ -189,6 +189,10 @@ class PostgreSqlFactoryDiscoveryRepository:
             return StationOverview(
                 station=self._station_discovery(session, station),
                 recent_product_ids=_distinct_product_ids(events),
+                recent_products=tuple(
+                    self._product_discovery(session, product)
+                    for product in _distinct_products(events)
+                ),
             )
 
     def list_products(self) -> tuple[ProductDiscovery, ...]:
@@ -278,14 +282,22 @@ class PostgreSqlFactoryDiscoveryRepository:
 def _distinct_product_ids(
     events: tuple[ProductEventRecord, ...],
 ) -> tuple[ProductId, ...]:
-    product_ids: list[ProductId] = []
+    return tuple(
+        ProductId(product.product_code) for product in _distinct_products(events)
+    )
+
+
+def _distinct_products(
+    events: tuple[ProductEventRecord, ...],
+) -> tuple[ProductRecord, ...]:
+    products: list[ProductRecord] = []
     seen: set[str] = set()
     for event in events:
-        product_code = event.product.product_code
-        if product_code not in seen:
-            seen.add(product_code)
-            product_ids.append(ProductId(product_code))
-    return tuple(product_ids)
+        product = event.product
+        if product.product_code not in seen:
+            seen.add(product.product_code)
+            products.append(product)
+    return tuple(products)
 
 
 class PostgreSqlMaintenanceTicketRepository:
