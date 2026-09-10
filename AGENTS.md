@@ -362,6 +362,8 @@ Keep deterministic tests and AI / Agent evaluations as separate quality mechanis
   evals and compare them with the baseline.
 * Keep generated eval reports unversioned by default and record enough provenance to
   interpret deliberately retained results without exposing secrets.
+* Convert critical Agent defects discovered through acceptance or evaluation into
+  automated regression coverage at the lowest reliable layer.
 
 Every meaningful model-dependent agent capability should eventually have automated
 evaluation when the corresponding behavior and metric exist.
