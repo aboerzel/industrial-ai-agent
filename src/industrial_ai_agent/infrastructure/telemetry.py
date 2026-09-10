@@ -179,6 +179,17 @@ class Telemetry:
         self._mcp_calls = meter.create_counter("mcp_tool_calls_total")
         self._mcp_discovery = meter.create_counter("mcp_discovery_total")
         self._llm_calls = meter.create_counter("llm_calls_total")
+        self._llm_input_tokens = meter.create_counter("llm_input_tokens_total")
+        self._llm_output_tokens = meter.create_counter("llm_output_tokens_total")
+        self._llm_total_tokens = meter.create_counter("llm_total_tokens_total")
+        self._llm_tool_calls = meter.create_counter("llm_tool_calls_total")
+        self._llm_tool_input_tokens = meter.create_counter(
+            "llm_tool_input_tokens_total"
+        )
+        self._llm_tool_output_tokens = meter.create_counter(
+            "llm_tool_output_tokens_total"
+        )
+        self._llm_tool_tokens = meter.create_counter("llm_tool_tokens_total")
         self._retrieval_calls = meter.create_counter("retrieval_calls_total")
         self._approvals = meter.create_counter("approval_total")
         self._persistence_operations = meter.create_counter(
@@ -340,8 +351,45 @@ class Telemetry:
         self, *, attributes: Mapping[str, object], duration_seconds: float
     ) -> None:
         safe = metric_attributes(attributes)
-        self._llm_calls.add(1, safe)
-        self._llm_duration.record(duration_seconds, safe)
+        self._record_metric(self._llm_calls.add, 1, safe)
+        self._record_metric(self._llm_duration.record, duration_seconds, safe)
+
+    def record_llm_usage(
+        self,
+        *,
+        attributes: Mapping[str, object],
+        input_tokens: int | None,
+        output_tokens: int | None,
+        total_tokens: int | None,
+    ) -> None:
+        """Record valid provider-reported token counts without affecting execution."""
+        safe = metric_attributes(attributes)
+        for counter, value in (
+            (self._llm_input_tokens, input_tokens),
+            (self._llm_output_tokens, output_tokens),
+            (self._llm_total_tokens, total_tokens),
+        ):
+            if _valid_token_count(value):
+                self._record_metric(counter.add, value, safe)
+
+    def record_llm_tool_usage(
+        self,
+        *,
+        attributes: Mapping[str, object],
+        input_tokens: int | None,
+        output_tokens: int | None,
+        total_tokens: int | None,
+    ) -> None:
+        """Record one bounded tool decision and its exact source LLM usage."""
+        safe = metric_attributes(attributes)
+        self._record_metric(self._llm_tool_calls.add, 1, safe)
+        for counter, value in (
+            (self._llm_tool_input_tokens, input_tokens),
+            (self._llm_tool_output_tokens, output_tokens),
+            (self._llm_tool_tokens, total_tokens),
+        ):
+            if _valid_token_count(value):
+                self._record_metric(counter.add, value, safe)
 
     def record_mcp_call(
         self, *, attributes: Mapping[str, object], duration_seconds: float
@@ -373,6 +421,16 @@ class Telemetry:
         safe = metric_attributes(attributes)
         self._persistence_operations.add(1, safe)
         self._persistence_duration.record(duration_seconds, safe)
+
+    @staticmethod
+    def _record_metric(
+        recorder: object, value: float, attributes: Mapping[str, object]
+    ) -> None:
+        """Keep optional metric transport failures outside the request outcome."""
+        try:
+            recorder(value, attributes)  # type: ignore[operator]
+        except Exception:  # noqa: BLE001 - telemetry must never fail business code.
+            return
 
 
 def configure_telemetry(configuration: TelemetryConfiguration) -> Telemetry:
@@ -600,6 +658,10 @@ def _normalize_attribute_value(value: object) -> bool | float | int | str | None
     if isinstance(value, str) and len(value) <= 160 and "\n" not in value:
         return value
     return None
+
+
+def _valid_token_count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _langfuse_attributes(

@@ -32,7 +32,7 @@
       "type": "stat",
       "datasource": {"uid": "prometheus"},
       "targets": [{"expr": "sum(increase(agent_runs_total{operation_status=\"success\"}[$__range]))", "instant": true, "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "NO RUN DATA", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "NO RUN DATA", "color": {"mode": "fixed", "fixedColor": "#73BF69"}}, "overrides": []},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
       "gridPos": {"h": 6, "w": 4, "x": 8, "y": 0}
     },
@@ -163,8 +163,8 @@
       "description": "Metadata-only error events from Loki. Event location is observed; it is not a root-cause determination.",
       "type": "logs",
       "datasource": {"uid": "loki"},
-      "targets": [{"expr": "{event_name=~\".*failed\"}", "refId": "A"}],
-      "options": {"dedupStrategy": "none", "enableLogDetails": true, "prettifyJSON": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
+      "targets": [{"expr": "{service_name=~\".+\"} | event_name=~\".*failed\" | line_format `{{.service_name}} | {{.event_name}} | {{.error_code}}`", "refId": "A"}],
+      "options": {"dedupStrategy": "none", "enableLogDetails": false, "prettifyJSON": false, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true},
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 30}
     },
     {

@@ -58,6 +58,48 @@ class ObservedLLMClient:
                         response, profile_config.api_cost_usd
                     ),
                 )
+                self._telemetry.record_llm_usage(
+                    attributes={**attributes, "operation.status": status},
+                    input_tokens=(
+                        response.usage.input_tokens
+                        if response.usage is not None
+                        else None
+                    ),
+                    output_tokens=(
+                        response.usage.output_tokens
+                        if response.usage is not None
+                        else None
+                    ),
+                    total_tokens=(
+                        response.usage.total_tokens
+                        if response.usage is not None
+                        else None
+                    ),
+                )
+                tool_name = _first_admitted_tool_name(response, request)
+                if tool_name is not None:
+                    self._telemetry.record_llm_tool_usage(
+                        attributes={
+                            **attributes,
+                            "mcp.tool": tool_name,
+                            "operation.status": status,
+                        },
+                        input_tokens=(
+                            response.usage.input_tokens
+                            if response.usage is not None
+                            else None
+                        ),
+                        output_tokens=(
+                            response.usage.output_tokens
+                            if response.usage is not None
+                            else None
+                        ),
+                        total_tokens=(
+                            response.usage.total_tokens
+                            if response.usage is not None
+                            else None
+                        ),
+                    )
                 return response
         except LLMProviderError as error:
             status = "failure"
@@ -107,3 +149,12 @@ def _response_telemetry_attributes(
         attributes["cost.api_usd"] = float(api_cost_usd)
         attributes["telemetry.cost_status"] = "configured_api_cost"
     return attributes
+
+
+def _first_admitted_tool_name(response: LLMResponse, request: LLMRequest) -> str | None:
+    """Return the one bounded tool decision the sequential graph can dispatch."""
+    if not response.tool_calls:
+        return None
+    first_tool_name = response.tool_calls[0].name
+    allowed_tool_names = {tool.name for tool in request.tools}
+    return first_tool_name if first_tool_name in allowed_tool_names else None

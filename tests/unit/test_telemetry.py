@@ -8,6 +8,7 @@ from mcp.types import CallToolResult, Tool
 from opentelemetry import baggage, propagate, trace
 from opentelemetry.context import attach, detach
 from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -147,6 +148,85 @@ def test_metric_dimensions_keep_only_bounded_persistence_operation() -> None:
         "persistence.operation": "complete",
         "operation.status": "success",
     }
+
+
+def test_llm_usage_metrics_aggregate_only_bounded_dimensions() -> None:
+    telemetry, reader = _metric_telemetry()
+    attributes = {
+        "model.profile": "local_quality",
+        "data.classification": "RESTRICTED",
+        "execution.zone": "LOCAL",
+        "operation.status": "success",
+        "run.id": "run-123",
+        "product_id": "P9001",
+        "prompt": "must never become a metric label",
+    }
+
+    telemetry.record_llm_usage(
+        attributes=attributes,
+        input_tokens=11,
+        output_tokens=7,
+        total_tokens=18,
+    )
+    telemetry.record_llm_usage(
+        attributes=attributes,
+        input_tokens=2,
+        output_tokens=3,
+        total_tokens=5,
+    )
+
+    expected_labels = {
+        "model.profile": "local_quality",
+        "data.classification": "RESTRICTED",
+        "execution.zone": "LOCAL",
+        "operation.status": "success",
+    }
+    assert _counter_values(reader, "llm_input_tokens_total") == [(expected_labels, 13)]
+    assert _counter_values(reader, "llm_output_tokens_total") == [(expected_labels, 10)]
+    assert _counter_values(reader, "llm_total_tokens_total") == [(expected_labels, 23)]
+
+
+def test_llm_usage_metrics_ignore_missing_partial_and_malformed_values() -> None:
+    telemetry, reader = _metric_telemetry()
+
+    telemetry.record_llm_usage(
+        attributes={"model.profile": "local_fast"},
+        input_tokens=None,
+        output_tokens=-1,
+        total_tokens=True,  # type: ignore[arg-type]
+    )
+    telemetry.record_llm_usage(
+        attributes={"model.profile": "local_fast"},
+        input_tokens=4,
+        output_tokens=None,
+        total_tokens=None,
+    )
+
+    assert _counter_values(reader, "llm_input_tokens_total") == [
+        ({"model.profile": "local_fast"}, 4)
+    ]
+    assert _counter_values(reader, "llm_output_tokens_total") == []
+    assert _counter_values(reader, "llm_total_tokens_total") == []
+
+
+def test_llm_usage_metric_recording_failure_is_ignored() -> None:
+    telemetry, _ = _recording_telemetry()
+
+    class _BrokenCounter:
+        def add(self, value: int, attributes: object) -> None:
+            del value, attributes
+            raise OSError("metric exporter unavailable")
+
+    telemetry._llm_input_tokens = _BrokenCounter()  # type: ignore[assignment]
+    telemetry._llm_output_tokens = _BrokenCounter()  # type: ignore[assignment]
+    telemetry._llm_total_tokens = _BrokenCounter()  # type: ignore[assignment]
+
+    telemetry.record_llm_usage(
+        attributes={"model.profile": "local_fast"},
+        input_tokens=11,
+        output_tokens=7,
+        total_tokens=18,
+    )
 
 
 def test_attribute_allowlist_drops_tool_results_tokens_and_unknown_values() -> None:
@@ -438,6 +518,29 @@ def _recording_telemetry(
         meter_provider=MeterProvider(),
     )
     return telemetry, exporter
+
+
+def _metric_telemetry() -> tuple[Telemetry, InMemoryMetricReader]:
+    reader = InMemoryMetricReader()
+    telemetry = Telemetry(
+        TelemetryConfiguration(enabled=True),
+        meter_provider=MeterProvider(metric_readers=[reader]),
+    )
+    return telemetry, reader
+
+
+def _counter_values(
+    reader: InMemoryMetricReader, metric_name: str
+) -> list[tuple[dict[str, object], int | float]]:
+    values: list[tuple[dict[str, object], int | float]] = []
+    for resource_metric in reader.get_metrics_data().resource_metrics:
+        for scope_metric in resource_metric.scope_metrics:
+            for metric in scope_metric.metrics:
+                if metric.name != metric_name:
+                    continue
+                for point in metric.data.data_points:
+                    values.append((dict(point.attributes), point.value))
+    return values
 
 
 class _HookClient:

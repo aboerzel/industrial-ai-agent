@@ -609,6 +609,35 @@ def test_keeps_usage_unavailable_when_provider_does_not_supply_it() -> None:
     assert response.usage is None
 
 
+def test_ignores_malformed_provider_usage_without_failing_response() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Done", tool_calls=None),
+                finish_reason="stop",
+            )
+        ],
+        usage=SimpleNamespace(
+            prompt_tokens="invalid",
+            completion_tokens=-1,
+            total_tokens=True,
+        ),
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(completion),
+    )
+
+    response = client.chat(
+        LOCAL_QUALITY_PROFILE,
+        LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+    )
+
+    assert response.text == "Done"
+    assert response.usage is None
+
+
 def test_rejects_non_object_tool_call_arguments() -> None:
     completion = SimpleNamespace(
         choices=[

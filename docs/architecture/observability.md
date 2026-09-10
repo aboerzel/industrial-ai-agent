@@ -67,20 +67,24 @@ and percentages in their legend where Grafana supports it.
   only to Prometheus scraping the OTel Collector metrics endpoint; it is not a claim that
   every application service or backend is healthy. Current active runs are deliberately
   not inferred because no active-run gauge exists.
-* `Industrial AI Agent - Cost Analytics` records the current Grafana data gap. Observed
-  model API cost exists only when Langfuse explicitly reports `OBSERVED/RUN` cost, but no
-  Langfuse datasource is provisioned for Grafana. No cost total, distribution, or trend
-  is estimated from Prometheus call counts, model configuration, electricity, hardware,
-  or TCO. Configured local Ollama API cost of USD 0 remains
-  `CONFIGURED/MODEL_CONFIGURATION`, not observed run cost.
+* `Industrial AI Agent - LLM Usage Analytics` compares provider-reported input, output,
+  and total-token usage, LLM calls, and admitted tool decisions by semantic model profile.
+  Its model filter, tool-decision table, and per-tool averages use bounded model-profile
+  and MCP-tool labels. Tool-attributed tokens are the usage of the same LLM response that
+  selected the admitted tool; direct-answer and finalization calls remain model-only.
+  It does not calculate monetary cost. Prometheus does not carry provider or concrete
+  model labels; those remain Langfuse-only metadata. Configured local Ollama API cost of
+  USD 0 remains `CONFIGURED/MODEL_CONFIGURATION`, not observed run cost or total-compute
+  cost.
 * `Industrial AI Agent - Usage Analytics` shows bounded Prometheus usage by run
   classification, model profile, MCP tool, agent-side MCP service, and retrieval strategy,
   plus their trends. Its adjacent tool panels use the selected dashboard range for both
   tool-call counts and the weighted average tool duration from the MCP histogram sum and
   count; tools without calls in that range are omitted from the duration panel.
-  Provider/model and provider-reported token distributions remain
-  Langfuse-only metadata and are shown as an explicit Grafana data gap rather than being
-  copied into Prometheus labels.
+  Provider/model distributions remain Langfuse-only metadata. Provider-reported token
+  totals and tool-decision attribution are available in the separate `LLM Usage Analytics`
+  dashboard without adding
+  either value as a Prometheus label.
 * `Industrial AI Agent - Failure Analytics` shows the non-overlapping failed-agent-run
   total/rate and observed LLM, MCP, and retrieval failure boundaries. Component panels
   identify where a failure was recorded, not its root cause. Nested operational boundaries
@@ -93,8 +97,9 @@ were migrated to the four focused dashboards.
 Prometheus serves bounded counters, histograms, rates, distributions, and scrape state;
 Loki serves metadata-only recent failure events; Tempo remains the trace-exploration
 source through Explore and the provisioned trace-to-logs/metrics links. Langfuse remains
-the local evidence source for allowed LLM usage, token, and cost metadata, but is not
-duplicated into Prometheus merely for dashboard coverage.
+the local evidence source for detailed allowed LLM usage and cost metadata. Prometheus
+adds only provider-reported aggregate token and tool-decision counters, never pricing or
+cost estimates.
 
 ## Langfuse LLM Observability
 
@@ -184,10 +189,21 @@ logging. Tempo service filters can select `industrial-ai-agent`, `factory-mcp`, 
 The Collector exposes `agent_runs_total`, `agent_errors_total`,
 `agent_run_duration_seconds`, `mcp_discovery_total`, `mcp_tool_calls_total`,
 `mcp_tool_duration_seconds`, `llm_calls_total`, `llm_call_duration_seconds`,
+`llm_input_tokens_total`, `llm_output_tokens_total`, `llm_total_tokens_total`,
+`llm_tool_calls_total`, `llm_tool_input_tokens_total`,
+`llm_tool_output_tokens_total`, `llm_tool_tokens_total`,
 `retrieval_calls_total`, `approval_total`, `persistence_operations_total`, and
 `persistence_operation_duration_seconds` to Prometheus. Labels are bounded operational
-categories only. They never include run/trace/span IDs, product or station IDs, request
-text, user text, or tool arguments.
+categories only. LLM token counters use only model profile, data classification,
+execution zone, and operation status. They never include run/trace/span IDs, provider or
+concrete model names, product or station IDs, request text, user text, or tool arguments.
+Tool-decision counters add only the MCP tool name after checking it against the bounded
+tool definitions supplied to that LLM call. The sequential graph admits one tool call per
+turn; when a non-compliant provider returns several, only the first admitted call receives
+the response usage once. Model totals may therefore be greater than tool-attributed totals.
+The LLM Usage Analytics dashboard prefers the provider-reported total-token counter;
+when a provider does not expose that series, its total panels transparently fall back to
+the corresponding input-plus-output counters.
 
 The API-side `retrieval.search` span and metric describe the MCP-backed retrieval call.
 Knowledge MCP adds `knowledge.search`, `retrieval.search`, embedding, lexical, semantic,
