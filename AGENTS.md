@@ -274,6 +274,20 @@ when that compatibility exists.
 
 See `docs/decisions/ADR-012-mcp-integration-architecture.md`.
 
+## Physical Device Integration and Closed-Loop Recovery
+
+Future physical-device integration must keep MHS- and vendor-specific details behind
+an inner `PhysicalDevicePort` and an Infrastructure adapter. Hardware MCP exposes only
+bounded domain capabilities; the Agent must never receive raw register, property, or
+arbitrary device-method access. A successful physical command is not a successful
+recovery: deterministic post-action observation and verification are required before
+reporting recovery success. Deterministic risk classification, precondition checks,
+authorization, and required human approval remain outside LLM judgment. Industrial
+functional safety remains enforced independently by PLC, machine, robot, interlock, and
+certified safety systems.
+
+See `docs/decisions/ADR-018-physical-device-integration-and-closed-loop-recovery.md`.
+
 ## MCP Client Access
 
 HTTP MCP clients must be resolved by the ADR-015 server-side client-context boundary.
@@ -737,6 +751,7 @@ ADR-014  Persistent factory data and classification enforcement
 ADR-015  MCP client identity, clearance, and tool authorization
 ADR-016  Observability, tracing, metrics, and telemetry security
 ADR-017  Automated root-cause analysis evidence and reasoning boundaries
+ADR-018  Physical device integration and Closed-Loop Recovery
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

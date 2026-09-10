@@ -1052,16 +1052,22 @@ flowchart TD
     Multiplexer --> Production["Production MCP"]
     Multiplexer --> Knowledge["Knowledge MCP"]
     Multiplexer --> Vision["Vision MCP"]
+    Multiplexer --> Hardware["Hardware MCP<br/>planned bounded capabilities"]
 
     classDef runtime fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef service fill:#fff7ed,stroke:#ea580c,color:#431407
     class AR,State,Context,Policy,Observability runtime
     class Router,Multiplexer routing
-    class Factory,Production,Knowledge,Vision service
+    class Factory,Production,Knowledge,Vision,Hardware service
 ```
 
 This is a target direction, not the current implementation.
+
+Future physical-device integration and Closed-Loop Recovery are governed by
+[ADR-018](../decisions/ADR-018-physical-device-integration-and-closed-loop-recovery.md).
+Hardware MCP is planned as a bounded capability boundary over an inner
+`PhysicalDevicePort`; it is neither implemented nor a raw hardware proxy.
 
 Model profiles such as `vision`, `planning`, or `evaluation` can be added through
 configuration when their capabilities are implemented. A non-OpenAI-compatible
