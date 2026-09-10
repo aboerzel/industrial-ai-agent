@@ -300,6 +300,13 @@ def test_station_product_status_request_uses_one_bounded_station_overview() -> N
             "classification": 2,
         }
     ]
+    assert {
+        (reference.value, reference.type.value) for reference in result.identifiers
+    } >= {
+        ("S04", "station"),
+        ("P4711", "product"),
+        ("QUALITY-09", "error_code"),
+    }
 
 
 def test_langgraph_mcp_http_path_matches_the_stdio_path(

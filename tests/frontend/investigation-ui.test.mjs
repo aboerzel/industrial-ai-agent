@@ -168,18 +168,11 @@ test("renders a single-composer investigation workspace", async (t) => {
       assert.match(nextStepActions[0].parentElement?.textContent ?? "", /Prüfe den aktuellen Status/);
 
       const runCountBeforeAction = bodies.length;
-      nextStepActions[0].click();
-      assert.equal(document.querySelector("#composer-message")?.value, "Prüfe den aktuellen Status von Station S07.");
-      assert.equal(document.activeElement?.id, "composer-message");
-      assert.equal(bodies.length, runCountBeforeAction);
-
       document.querySelector("#composer-message").value = "Keep this draft.";
-      nextStepActions[2].click();
-      assert.equal(
-        document.querySelector("#composer-message")?.value,
-        "Keep this draft.\nSearch technical documentation for PROTO-COMM-07 error codes.",
-      );
-      assert.equal(bodies.length, runCountBeforeAction);
+      nextStepActions[0].click();
+      await settle();
+      assert.equal(bodies.length, runCountBeforeAction + 1);
+      assert.equal(bodies.at(-1).message, "Prüfe den aktuellen Status von Station S07.");
     } finally {
       restoreFetch();
     }
@@ -206,15 +199,46 @@ test("renders a single-composer investigation workspace", async (t) => {
       assert.equal(document.querySelector(".agent-answer")?.textContent.includes("Recommended Actions"), false);
       assert.match(document.querySelector(".next-step-text")?.textContent ?? "", /Produkthistorie/);
 
-      document.querySelector("#composer-message").value = "Keep this draft.";
-      actions[0].click();
-
-      assert.equal(
-        document.querySelector("#composer-message").value,
-        "Keep this draft.\nPrüfe die jüngere Produkthistorie von P4711 auf wiederkehrende Qualitätsprobleme.",
-      );
-      assert.equal(document.activeElement?.id, "composer-message");
       assert.equal(runRequests, 1);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("replaces the composer and submits next-step actions through the normal request path", async () => {
+    const bodies = [];
+    let resolveFollowUp;
+    const { document, window, restoreFetch } = await loadApp((url, options = {}) => {
+      if (String(url).includes("/api/v1/runs")) {
+        bodies.push(JSON.parse(options.body));
+        if (bodies.length === 1) return jsonResponse(runResponse());
+        return new Promise((resolve) => {
+          resolveFollowUp = () => resolve(jsonResponse(runResponse(SECOND_RUN_ID)));
+        });
+      }
+      return jsonResponse(STRUCTURED_NEXT_STEPS_INVESTIGATION);
+    });
+    try {
+      submit(document, window);
+      await settle();
+
+      const composer = document.querySelector("#composer-message");
+      const actions = [...document.querySelectorAll(".next-step-action")];
+      const actionText = "Prüfe die jüngere Produkthistorie von P4711 auf wiederkehrende Qualitätsprobleme.";
+      composer.value = "Replace this draft.";
+      actions[0].click();
+      await settle();
+
+      assert.equal(composer.value, actionText);
+      assert.equal(bodies.length, 2);
+      assert.equal(bodies[1].message, actionText);
+      assert.equal(composer.disabled, true);
+
+      actions[1].click();
+      assert.equal(bodies.length, 2);
+
+      resolveFollowUp();
+      await settle();
     } finally {
       restoreFetch();
     }
@@ -389,11 +413,14 @@ test("renders a single-composer investigation workspace", async (t) => {
       submit(document, window);
       await settle();
       const requestsBeforeReset = getRequests;
+      document.querySelector("#composer-message").value = "Discard this draft.";
       document.querySelector("#new-investigation-button").click();
 
       assert.equal(document.querySelector("#result-title")?.textContent, "Investigation");
       assert.equal(document.querySelector("#composer-button")?.getAttribute("aria-label"), "Send message");
       assert.equal(document.querySelector("#composer-message")?.disabled, false);
+      assert.equal(document.querySelector("#composer-message")?.value, "");
+      assert.equal(document.activeElement?.id, "composer-message");
       assert.equal(document.querySelector("#export-pdf-button")?.disabled, true);
       assert.equal(document.querySelectorAll(".conversation-message").length, 0);
       assert.equal(getRequests, requestsBeforeReset);
@@ -464,12 +491,14 @@ test("renders a single-composer investigation workspace", async (t) => {
     }
   });
 
-  await t.test("renders only declared references and inserts identifier follow-ups without sending", async () => {
+  await t.test("renders declared references, submits actions, and copies into the composer without sending", async () => {
     const referenced = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
-    referenced.turns[0].answer = "QUALITY-09 affects station S04. Untrusted-99 is not a reference.";
+    referenced.turns[0].answer = "QUALITY-09 affects station S04, product P4711, and ticket MT-S02-20260117. P9999 is not a reference.";
     referenced.turns[0].identifiers = [
       { value: "QUALITY-09", type: "error_code" },
       { value: "S04", type: "station" },
+      { value: "P4711", type: "product" },
+      { value: "MT-S02-20260117", type: "maintenance_ticket" },
     ];
     referenced.turns[0].documents = [
       {
@@ -483,22 +512,30 @@ test("renders a single-composer investigation workspace", async (t) => {
         format: "markdown",
       },
     ];
-    let requests = 0;
-    const { document, window, restoreFetch } = await loadApp((url) => {
-      if (String(url).includes("/api/v1/runs")) requests += 1;
+    const requests = [];
+    const { document, window, restoreFetch } = await loadApp((url, options = {}) => {
+      if (String(url).includes("/api/v1/runs")) requests.push(JSON.parse(options.body));
       return jsonResponse(referenced);
     }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: "DE" });
     try {
       await settle();
-      assert.equal(document.querySelectorAll(".identifier-reference").length, 4);
+      assert.equal(document.querySelectorAll(".identifier-reference").length, 8);
       const documentReferences = [...document.querySelectorAll(".document-title")];
       assert.deepEqual(
         documentReferences.map((reference) => reference.textContent),
         ["S04 QUALITY-09 Troubleshooting Procedure", "Quality Inspection Workflow"],
       );
       assert.equal(documentReferences.some((reference) => reference.textContent === "Document"), false);
-      assert.equal(document.querySelectorAll(".structured-reference").length, 4);
-      assert.equal(document.querySelector(".agent-answer")?.textContent.includes("Untrusted-99"), true);
+      assert.equal(document.querySelectorAll(".structured-reference").length, 8);
+      assert.deepEqual(
+        [...document.querySelectorAll(".identifier-reference")].map((reference) => reference.textContent),
+        ["QUALITY-09", "S04", "P4711", "MT-S02-20260117", "QUALITY-09", "S04", "P4711", "MT-S02-20260117"],
+      );
+      assert.equal(document.querySelector(".agent-answer")?.textContent.includes("P9999"), true);
+      assert.equal(
+        [...document.querySelectorAll(".structured-reference")].some((reference) => reference.textContent === "P9999"),
+        false,
+      );
       assert.deepEqual(
         [...document.querySelectorAll(".document-references h4")].map((node) => node.textContent),
         ["Referenzen", "Dokumente"],
@@ -506,12 +543,21 @@ test("renders a single-composer investigation workspace", async (t) => {
 
       document.querySelector(".identifier-reference").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
       const investigate = [...document.querySelectorAll(".reference-action")].find((button) => button.textContent === "Untersuchen");
+      document.querySelector("#composer-message").value = "Replace this draft.";
       investigate.click();
-      assert.equal(
-        document.querySelector("#composer-message").value,
-        "Investigate P4711 at S04.\nUntersuche QUALITY-09 genauer.",
-      );
-      assert.equal(requests, 0);
+      await settle();
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].message, "Untersuche QUALITY-09 genauer.");
+
+      const composer = document.querySelector("#composer-message");
+      composer.value = "Replace this copied draft.";
+      document.querySelector(".identifier-reference").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+      const copy = [...document.querySelectorAll(".reference-action")].find((button) => button.textContent === "Kopieren");
+      copy.click();
+      await settle();
+      assert.equal(composer.value, "QUALITY-09");
+      assert.equal(document.activeElement, composer);
+      assert.equal(requests.length, 1);
 
       assert.deepEqual(
         [...document.querySelectorAll(".document-action")].map((button) => [button.textContent, button.disabled]),

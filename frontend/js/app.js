@@ -28,7 +28,7 @@ let pendingAgentTurn = null;
 
 composerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await submitRequest(composerMessage.value.trim());
+  await submitRequest();
 });
 
 composerMessage.addEventListener("keydown", (event) => {
@@ -50,6 +50,7 @@ responseLanguage.addEventListener("change", persistUiState);
 
 newInvestigationButton.addEventListener("click", () => {
   if (isSubmitting) return;
+  composerMessage.value = "";
   renderEmptyInvestigation();
   composerMessage.focus();
 });
@@ -84,8 +85,9 @@ async function restoreActiveInvestigation() {
   }
 }
 
-async function submitRequest(message) {
-  if (!message) {
+async function submitRequest(message = composerMessage.value.trim()) {
+  const requestMessage = message.trim();
+  if (!requestMessage) {
     showError("Enter a troubleshooting request before starting an investigation.");
     composerMessage.focus();
     return;
@@ -93,11 +95,11 @@ async function submitRequest(message) {
   if (isSubmitting) return;
 
   const isNewInvestigation = currentInvestigationId === null;
-  renderPendingConversation(message, { replace: isNewInvestigation });
+  renderPendingConversation(requestMessage, { replace: isNewInvestigation });
   setSubmitting();
   try {
     const result = await createRun(
-      message,
+      requestMessage,
       userClearance.value,
       responseLanguage.value,
       currentInvestigationId,
@@ -547,6 +549,9 @@ function identifierActions(reference, language) {
 }
 
 async function copyIdentifier(value) {
+  if (isSubmitting) return;
+  composerMessage.value = value;
+  composerMessage.focus();
   if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
 }
 
@@ -669,11 +674,8 @@ function syncControls() {
 
 function useAsFollowUp(nextStep) {
   if (isSubmitting) return;
-  const existing = composerMessage.value;
-  composerMessage.value = existing.trim()
-    ? `${existing}${existing.endsWith("\n") ? "" : "\n"}${nextStep}`
-    : nextStep;
-  composerMessage.focus();
+  composerMessage.value = nextStep;
+  void submitRequest(nextStep);
 }
 
 function nextStepActionLabel(responseLanguage) {

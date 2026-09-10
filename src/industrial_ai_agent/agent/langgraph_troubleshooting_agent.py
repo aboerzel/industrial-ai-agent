@@ -55,6 +55,9 @@ from industrial_ai_agent.agent.response_language import (
 )
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
+from industrial_ai_agent.domain.maintenance_ticket import (
+    MAINTENANCE_TICKET_ID_PATTERN,
+)
 from industrial_ai_agent.domain.security import effective_data_classification
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketProposalArguments,
@@ -1004,7 +1007,10 @@ def _tool_observation_contents(
 
 _STATION_IDENTIFIER_PATTERN = re.compile(r"\bS\d{2,3}\b", re.IGNORECASE)
 _PRODUCT_IDENTIFIER_PATTERN = re.compile(r"\bP\d{4}\b", re.IGNORECASE)
-_MAINTENANCE_TICKET_PATTERN = re.compile(r"\bMT-[A-F0-9]{10}\b", re.IGNORECASE)
+_MAINTENANCE_TICKET_PATTERN = re.compile(
+    rf"\b{MAINTENANCE_TICKET_ID_PATTERN.removeprefix('^').removesuffix('$')}\b",
+    re.IGNORECASE,
+)
 _ERROR_CODE_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b", re.IGNORECASE)
 _COMPACT_DOCUMENT_FORMATS = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
@@ -1091,13 +1097,34 @@ def _append_observation_identifiers(
         return
     if not isinstance(payload, dict):
         return
-    if action == "get_machine_status":
-        _append_identifier(
-            references, payload.get("station_id"), IdentifierType.STATION
-        )
-        _append_identifier(
-            references, payload.get("active_error_code"), IdentifierType.ERROR_CODE
-        )
+    if action == "list_stations":
+        stations = payload.get("stations")
+        if isinstance(stations, list):
+            for station in stations:
+                _append_station_discovery_identifiers(references, station)
+    elif action == "get_station_overview":
+        _append_station_discovery_identifiers(references, payload)
+        recent_product_ids = payload.get("recent_product_ids")
+        if isinstance(recent_product_ids, list):
+            for product_id in recent_product_ids:
+                _append_identifier(references, product_id, IdentifierType.PRODUCT)
+        recent_products = payload.get("recent_products")
+        if isinstance(recent_products, list):
+            for product in recent_products:
+                _append_product_discovery_identifiers(references, product)
+    elif action == "list_products":
+        products = payload.get("products")
+        if isinstance(products, list):
+            for product in products:
+                _append_product_discovery_identifiers(references, product)
+    elif action == "get_product_overview":
+        _append_product_discovery_identifiers(references, payload)
+        passed_station_ids = payload.get("passed_station_ids")
+        if isinstance(passed_station_ids, list):
+            for station_id in passed_station_ids:
+                _append_identifier(references, station_id, IdentifierType.STATION)
+    elif action == "get_machine_status":
+        _append_station_discovery_identifiers(references, payload)
     elif action == "get_product_history":
         _append_identifier(
             references, payload.get("product_id"), IdentifierType.PRODUCT
@@ -1122,6 +1149,31 @@ def _append_observation_identifiers(
         _append_identifier(
             references, payload.get("station_id"), IdentifierType.STATION
         )
+
+
+def _append_station_discovery_identifiers(
+    references: list[IdentifierReference], payload: object
+) -> None:
+    if not isinstance(payload, dict):
+        return
+    _append_identifier(references, payload.get("station_id"), IdentifierType.STATION)
+    _append_identifier(
+        references, payload.get("active_error_code"), IdentifierType.ERROR_CODE
+    )
+
+
+def _append_product_discovery_identifiers(
+    references: list[IdentifierReference], payload: object
+) -> None:
+    if not isinstance(payload, dict):
+        return
+    _append_identifier(references, payload.get("product_id"), IdentifierType.PRODUCT)
+    _append_identifier(
+        references, payload.get("latest_station_id"), IdentifierType.STATION
+    )
+    _append_identifier(
+        references, payload.get("latest_error_code"), IdentifierType.ERROR_CODE
+    )
 
 
 def _append_pattern_references(

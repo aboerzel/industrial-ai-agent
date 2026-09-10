@@ -547,6 +547,87 @@ def test_reference_extraction_uses_typed_provenance_and_ignores_retrieval_intern
     ]
 
 
+def test_reference_extraction_covers_authorized_factory_discovery_projections() -> None:
+    references = []
+
+    _append_observation_identifiers(
+        references,
+        "get_station_overview",
+        '{"station_id":"S04","active_error_code":"QUALITY-09",'
+        '"recent_product_ids":["P4811","P4801","P4711"],'
+        '"recent_products":[{"product_id":"P4811","latest_station_id":"S04",'
+        '"latest_status":"COMPLETED","latest_error_code":null},'
+        '{"product_id":"P4801","latest_station_id":"S04",'
+        '"latest_status":"COMPLETED","latest_error_code":null},'
+        '{"product_id":"P4711","latest_station_id":"S04",'
+        '"latest_status":"FAILED","latest_error_code":"QUALITY-09"}]}',
+    )
+    _append_observation_identifiers(
+        references,
+        "list_products",
+        '{"products":[{"product_id":"P4101","latest_station_id":"S02",'
+        '"latest_status":"WARNING","latest_error_code":"POSITION-ENC-02"},'
+        '{"product_id":"P9001","latest_station_id":"S07",'
+        '"latest_status":"FAILED","latest_error_code":null}]}',
+    )
+    _append_observation_identifiers(
+        references,
+        "list_stations",
+        '{"stations":[{"station_id":"S02","active_error_code":null},'
+        '{"station_id":"S07","active_error_code":"PROTO-COMM-07"}]}',
+    )
+
+    assert [
+        (reference.value, reference.type.value)
+        for reference in _deduplicate_identifier_references(references)
+    ] == [
+        ("S04", "station"),
+        ("QUALITY-09", "error_code"),
+        ("P4811", "product"),
+        ("P4801", "product"),
+        ("P4711", "product"),
+        ("P4101", "product"),
+        ("S02", "station"),
+        ("POSITION-ENC-02", "error_code"),
+        ("P9001", "product"),
+        ("S07", "station"),
+        ("PROTO-COMM-07", "error_code"),
+    ]
+
+
+def test_reference_extraction_accepts_both_supported_ticket_grammars() -> None:
+    references = []
+
+    _append_request_identifiers(
+        references,
+        "Pruefe MT-S02-20260117 sowie MT-6EA0DEF5515A.",
+    )
+
+    assert [
+        (reference.value, reference.type.value)
+        for reference in _deduplicate_identifier_references(references)
+    ] == [
+        ("MT-S02-20260117", "maintenance_ticket"),
+        ("S02", "station"),
+        ("MT-6EA0DEF5515A", "maintenance_ticket"),
+    ]
+
+
+def test_reference_extraction_ignores_untyped_or_untrusted_hidden_identifiers() -> None:
+    references = []
+
+    _append_observation_identifiers(
+        references,
+        "get_station_overview",
+        '{"station_id":"S04","recent_product_ids":["P4711"],'
+        '"untrusted_hidden_product_id":"P9001"}',
+    )
+
+    assert [
+        reference.value for reference in _deduplicate_identifier_references(references)
+    ] == ["S04", "P4711"]
+
+
 def test_matching_multiple_and_repeated_tool_steps_preserve_execution_order() -> None:
     executed_tool_calls = (
         {"tool": "get_machine_status", "arguments": {"station_id": "S04"}},
