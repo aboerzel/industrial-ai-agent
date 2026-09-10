@@ -32,10 +32,12 @@ For the full industrial-value and scope statement, see [Capabilities and Industr
 - **Human-in-the-loop write protection:** The implemented `create_maintenance_ticket` action pauses and executes only after explicit approval.
 - **Controlled knowledge access:** Classified factory records and engineering documents are filtered by server-side authorization and PostgreSQL RLS before they reach tools or retrieval.
 - **Repeatable model evaluation:** Versioned datasets measure initial tool selection, bounded tool trajectories, retrieval behavior, and evidence-before-action expectations.
-- **Trust and quality assurance:** Versioned Golden scenarios and deterministic regression checks validate authorized tool trajectories, grounded structured outputs, and security/non-disclosure guarantees without exact-answer matching.
+- **Trust & quality assurance:** Versioned Golden Regression scenarios, deterministic security boundaries, and observability make critical Agent behavior reproducible, testable, and inspectable.
 - **Metadata-only observability:** OpenTelemetry, Tempo, Loki, Prometheus, Grafana, and Langfuse trace operational metadata while excluding prompts, responses, tool content, documents, and secrets.
 - **Evidence-based RCA:** Recorded facts, deterministic derivations, and optional AI hypotheses are explicitly separated; an LLM cannot claim a confirmed root cause.
 - **Modern, testable architecture:** Python, FastAPI, LangGraph, Pydantic, MCP, PostgreSQL, Docker Compose, pytest, Ruff, focused integration tests, and documented ADRs support incremental evolution.
+
+Trust is not delegated to the LLM. It is built around the model through deterministic security boundaries, structured contracts, versioned Golden Regression scenarios, automated regression tests, and inspectable execution.
 
 ## System Context
 
@@ -163,6 +165,28 @@ The loop is intentionally sequential and bounded: one validated tool call per mo
 
 The project does not guarantee the semantic correctness of an LLM response, replace industrial safety systems, or claim high availability, failover, or an SLA.
 
+## Trust & Quality Assurance
+
+Plausible-looking LLM output is not treated as evidence of correctness. Important Agent behavior is verified through conventional deterministic tests and versioned Golden Regression scenarios that reuse the authoritative synthetic `FACTORY-DEMO-01` fixtures.
+
+The provider-independent Golden CI path evaluates sanitized run artifacts rather than comparing complete natural-language answers with fixed strings. Natural wording may vary while the following deterministic contracts remain testable:
+
+- admitted tool selection and bounded tool trajectories;
+- structured investigation output, authorized identifiers, and authorized document references;
+- selected deterministic factual consistency checks and response-language behavior;
+- provider and timeout outcome classification; and
+- anti-enumeration and neutral non-disclosure behavior.
+
+This is regression evidence for defined contracts, not proof of semantic correctness, complete faithfulness, causal correctness, hallucination absence, finding or next-step usefulness, or semantic reference relevance. Those dimensions are reserved for a future provider-neutral semantic evaluation layer calibrated against reviewed human examples. Details: [Golden Regression and Semantic Evaluation Strategy](docs/architecture/golden-regression-and-semantic-evaluation.md).
+
+## Security Boundaries
+
+Security decisions are enforced outside the LLM. A server-derived `SecurityContext`, explicit clearance and data classification, authorization, PostgreSQL Row-Level Security (RLS), deterministic model-egress policy, and bounded Agent-facing MCP capabilities determine what information may be retrieved and which actions may be proposed. The model may reason only over information it has already been authorized to receive; it does not decide disclosure.
+
+Insufficient authorization produces a neutral unavailable/not-found result. It intentionally does not reveal whether a protected entity exists, its classification, the clearance needed to see it, or protected metadata; the same result can represent an absent entity or an existing but unauthorized one. Read capabilities remain bounded, while the implemented `create_maintenance_ticket` action requires deterministic policy checks and explicit human approval before execution. External errors and telemetry are sanitized, and factory data, documents, and images are mounted read-only in the local Compose demo.
+
+This demonstrator does not replace PLC, robot, machine, or functional-safety systems. An LLM decision is not an independent industrial-safety guarantee.
+
 ## Try the Demo
 
 Example request:
@@ -173,20 +197,24 @@ This synthetic `CONFIDENTIAL` scenario demonstrates server-side access decisions
 
 For a `RESTRICTED` example, investigate `P9001` at `S07`: the classification policy permits only approved local models. More reproducible acceptance scenarios are in [Use Cases and Scenarios](docs/demo/use-cases-and-scenarios.md).
 
-## Monitoring and Observability
+## Observability
 
-OpenTelemetry is the common telemetry boundary. The local Grafana instance provisions four focused dashboards:
+Agent behavior should be inspectable rather than opaque. OpenTelemetry is the common, vendor-neutral instrumentation boundary; Prometheus stores bounded operational metrics, Grafana presents dashboards, Loki stores sanitized events, Tempo provides traces, and Langfuse provides LLM- and Agent-oriented observability.
+
+The local Grafana instance provisions four focused dashboards:
 
 - **Industrial AI Agent - System Overview:** scrape availability, run outcomes, latency, bounded activity, and metadata-only failure events.
-- **Industrial AI Agent - Cost Analytics:** makes the current cost-data gap explicit; it does not estimate costs from call counts or configured prices.
+- **Industrial AI Agent - LLM Usage Analytics:** provider-reported input, output, and total-token counters, admitted tool decisions, and token attribution by semantic model profile.
 - **Industrial AI Agent - Usage Analytics:** shows bounded usage trends by classification, model profile, MCP tool, service, and retrieval strategy.
 - **Industrial AI Agent - Failure Analytics:** separates failed runs from recorded LLM, MCP, and retrieval failure boundaries to avoid double-counting.
 
-Tempo stores traces, Loki stores metadata-only logs, Prometheus stores bounded metrics, and Langfuse receives allowed agent and generation metadata. Provider-reported token or observed-cost data is deliberately not copied into Prometheus labels; configured API cost is not observed run cost. See [Observability](docs/architecture/observability.md) for data allowlists, dashboards, retention bounds, and investigation workflow.
+Token usage is captured at the LLM/model boundary. Tool-attributed tokens are the tokens from the LLM response that selected the admitted tool; because the sequential loop admits one tool per decision, that response usage is attributed once. Tool execution itself consumes no LLM tokens. Direct answers and later finalization or other non-tool calls remain only in model-level totals and are not retrospectively assigned to a prior tool. Prometheus uses bounded labels such as `model_profile`, `mcp_tool`, `data_classification`, `execution_zone`, and `operation_status`, never arbitrary IDs, user text, prompts, documents, or tool arguments. Prometheus records token counters but not pricing or cost estimates; Langfuse retains allowed detailed model metadata without becoming a Grafana datasource.
+
+Observability does not prove answer correctness. Its role is to make execution, failures, and model/tool behavior measurable and reviewable. See [Observability](docs/architecture/observability.md) for data allowlists, dashboards, retention bounds, and investigation workflow.
 
 ![Industrial AI Agent Usage Analytics dashboard](docs/assets/Usage-Analytics.png)
 
-*Usage Analytics makes agent runs, data-classification distribution, model-profile activity, MCP-tool use, and retrieval activity inspectable. Provider/model token distributions and observed costs remain metadata-only Langfuse information and are not aggregated by Grafana.*
+*Usage Analytics makes agent runs, data-classification distribution, model-profile activity, MCP-tool use, and retrieval activity inspectable. The current dashboard set also includes LLM Usage Analytics for Prometheus token totals and tool-attributed tokens.*
 
 ## Root-Cause Analysis
 
