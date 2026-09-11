@@ -908,6 +908,11 @@ maintenance-ticket capability; it is not an external ticketing integration.
 `SimulatedPositionEncoderAdapter` deterministically implements the inner
 `PhysicalDevicePort` for the position-encoder reference-calibration demonstrator. It is
 neither Hardware MCP nor an MHS or real-hardware adapter.
+`ClosedLoopRecoveryService` is the deterministic Application use case over the same
+port: it observes, evaluates bounded preconditions, invokes an authorization boundary,
+acts, obtains a fresh state, and verifies before returning a recovery result. Hardware
+MCP, Agent orchestration, HITL wiring, an MHS adapter, and Vision integration remain
+unimplemented.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores

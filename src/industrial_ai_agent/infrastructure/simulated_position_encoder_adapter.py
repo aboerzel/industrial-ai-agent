@@ -50,10 +50,14 @@ class SimulatedPositionEncoderAdapter(PhysicalDevicePort):
     def __init__(
         self,
         calibration_outcome: SimulatedCalibrationOutcome = SimulatedCalibrationOutcome.SUCCESS,
+        station_mode: MachineState = MachineState.STOPPED,
     ) -> None:
         if not isinstance(calibration_outcome, SimulatedCalibrationOutcome):
             raise TypeError("calibration_outcome must be a SimulatedCalibrationOutcome")
+        if not isinstance(station_mode, MachineState):
+            raise TypeError("station_mode must be a MachineState")
         self._calibration_outcome = calibration_outcome
+        self._station_mode = station_mode
         self._operational_state = DeviceOperationalState.FAULT
         self._reference_valid = False
         self._position_mm = self._initial_position_mm
@@ -108,7 +112,7 @@ class SimulatedPositionEncoderAdapter(PhysicalDevicePort):
             station_id=self.station_id,
             connection_state=DeviceConnectionState.CONNECTED,
             operational_state=self._operational_state,
-            station_mode=MachineState.STOPPED,
+            station_mode=self._station_mode,
             axis_motion_state=AxisMotionState.IDLE,
             product_present=False,
             reference_valid=self._reference_valid,

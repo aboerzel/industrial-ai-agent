@@ -315,6 +315,7 @@ class RecoveryResult:
     post_action_state: DeviceState | None
     verification: VerificationResult
     outcome: RecoveryOutcome
+    precondition_evaluations: tuple[PreconditionEvaluation, ...] = ()
 
     def __post_init__(self) -> None:
         if self.operation_result is not None and not isinstance(
@@ -333,6 +334,23 @@ class RecoveryResult:
             raise TypeError("verification must be a VerificationResult")
         if not isinstance(self.outcome, RecoveryOutcome):
             raise TypeError("Unknown recovery outcome")
+        normalized_precondition_evaluations = tuple(self.precondition_evaluations)
+        if any(
+            not isinstance(item, PreconditionEvaluation)
+            for item in normalized_precondition_evaluations
+        ):
+            raise TypeError(
+                "precondition_evaluations must contain PreconditionEvaluation items"
+            )
+        condition_types = tuple(
+            item.precondition.condition_type
+            for item in normalized_precondition_evaluations
+        )
+        if len(condition_types) != len(set(condition_types)):
+            raise ValueError("Precondition evaluations must be unique")
+        object.__setattr__(
+            self, "precondition_evaluations", normalized_precondition_evaluations
+        )
         if self.outcome is RecoveryOutcome.SUCCEEDED:
             if self.operation_result is None or not self.operation_result.executed:
                 raise ValueError("Successful recovery requires an executed operation")
