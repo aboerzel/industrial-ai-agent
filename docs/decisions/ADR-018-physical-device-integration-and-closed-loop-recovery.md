@@ -71,6 +71,34 @@ expose bounded domain capabilities, for example position-reference status, prepa
 execution, and verification of reference calibration. Final tool names remain a
 use-case-level decision.
 
+### First Hardware MCP Capability Shape
+
+The first reference-calibration use case uses a bounded split capability shape rather
+than a raw-command sequence or an automatic catch-all recovery tool:
+
+* `get_position_reference_status` provides a bounded read-only observation;
+* `prepare_reference_calibration` produces the bounded recovery proposal and approval
+  presentation, but performs no physical action; and
+* `execute_reference_calibration` is a controlled action that, after trusted approval,
+  delegates to `ClosedLoopRecoveryService` and returns its structured
+  `RecoveryResult`.
+
+The execution capability owns deterministic precondition evaluation, physical
+execution, a fresh post-action state read, and verification. It must not expose separate
+Agent-facing raw calibration, re-read, or verification tools. The Agent can judge
+whether to inspect or propose the bounded recovery, but it must not orchestrate those
+deterministic recovery internals. Conversely, the preparation and approval boundary
+remain explicit; `execute_reference_calibration` is not an automatic
+`recover_everything` capability.
+
+For a controlled action, the LangGraph flow creates a strict pending action from the
+proposal and interrupts before the Hardware MCP invocation. A human decision is claimed
+and persisted by the server-owned run/graph state, then the post-approval execution
+node invokes the capability. The `RecoveryAuthorizationPort` receives an
+authorization decision derived from that trusted, action-bound state and the
+server-derived security context. Approval is never an MCP argument, a model-provided
+boolean, or model text.
+
 ### Closed-Loop Recovery Lifecycle and Contracts
 
 A recovery follows this governing lifecycle:
@@ -152,6 +180,14 @@ future physical recovery must stay within that bounded loop using carefully desi
 domain capabilities and observations, or a proposed limit or orchestration change must
 be assessed and decided separately. This ADR does not assume that the current limit is
 automatically sufficient and does not authorize an increase.
+
+ADR-004 defines this limit as four successfully executed Agent tools per persisted
+troubleshooting run, including its approved resume, rather than model requests or
+internal application and adapter calls. The bounded split form therefore uses up to
+three Agent tools for a simple reference recovery (status, preparation, controlled
+execution); the `PhysicalDevicePort` calls made inside `ClosedLoopRecoveryService` do
+not consume additional Agent-tool budget. A Hardware MCP handler must not turn those
+internal steps into nested Agent-visible MCP tool calls.
 
 Future hardware HTTP MCP access must use the server-derived identity, clearance, and
 permission model of ADR-015. MCP discovery, MCP permission, application authorization,
