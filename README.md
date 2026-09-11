@@ -27,6 +27,7 @@ For the full industrial-value and scope statement, see [Capabilities and Industr
 - **Classification-aware model routing:** Semantic model profiles are selected deterministically from task requirements; `RESTRICTED` data is eligible only for approved local execution.
 - **Final egress enforcement:** An independent, deny-by-default check runs immediately before every model-provider call; model selection alone cannot authorize data transfer.
 - **Bounded industrial tools:** Factory, Knowledge, Runtime, Observability, and RCA capabilities are exposed through five authenticated MCP (Model Context Protocol) services with strict schemas and bounded operations.
+- **MHS-ready physical integration:** An internal `PhysicalDevicePort` keeps the MCP layer above a replaceable, future `MHSDeviceAdapter` concept for physical-device and closed-loop recovery integration; MHS conformance is not claimed.
 - **Deterministic security boundaries:** Authorization, RLS, validation, tool allowlists, execution limits, and approval policy remain outside the LLM.
 - **Hybrid deterministic and AI processing:** Code owns guarantees; the model is used for bounded semantic decisions such as selecting the next approved tool or formulating an explanation.
 - **Human-in-the-loop write protection:** The implemented `create_maintenance_ticket` action pauses and executes only after explicit approval.
@@ -215,6 +216,10 @@ Observability does not prove answer correctness. Its role is to make execution, 
 ![Industrial AI Agent Usage Analytics dashboard](docs/assets/Usage-Analytics.png)
 
 *Usage Analytics makes agent runs, data-classification distribution, model-profile activity, MCP-tool use, and retrieval activity inspectable. The current dashboard set also includes LLM Usage Analytics for Prometheus token totals and tool-attributed tokens.*
+
+![Industrial AI Agent LLM Usage Analytics dashboard](docs/assets/LLM-Usage-Analytics.png)
+
+*LLM Usage Analytics presents provider-reported token usage and the bounded tool decisions that caused attributed token consumption.*
 
 ## Root-Cause Analysis
 

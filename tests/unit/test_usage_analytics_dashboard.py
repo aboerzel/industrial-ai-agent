@@ -11,6 +11,9 @@ DASHBOARD_PATH = (
     / "dashboards"
     / "industrial-ai-agent-usage-analytics.json"
 )
+COST_DASHBOARD_PATH = DASHBOARD_PATH.with_name(
+    "industrial-ai-agent-cost-analytics.json"
+)
 
 TOOL_COLORS = {
     "analyze_run": "#C15C17",
@@ -18,7 +21,10 @@ TOOL_COLORS = {
     "get_agent_run": "#8AB8FF",
     "get_machine_status": "#73BF69",
     "get_maintenance_ticket": "#5DADE2",
+    "get_position_reference_status": "#F2A65A",
     "list_stations": "#5794F2",
+    "prepare_reference_calibration": "#56D2B9",
+    "execute_reference_calibration": "#FF5C93",
     "list_products": "#FF9830",
     "search_documentation": "#B877D9",
     "get_product_history": "#F2CC0C",
@@ -35,9 +41,9 @@ TOOL_COLORS = {
     "list_recent_agent_runs": "#B48EAD",
     "runtime.approval.lookup": "#9E77ED",
     "runtime.failure.lookup": "#F2495C",
-    "runtime.run.list": "#56D2B9",
-    "runtime.run.lookup": "#A1C181",
-    "runtime.trajectory.lookup": "#D683CE",
+    "runtime.run.list": "#A1C181",
+    "runtime.run.lookup": "#D683CE",
+    "runtime.trajectory.lookup": "#4C78A8",
 }
 
 
@@ -47,7 +53,7 @@ def test_tool_count_and_duration_panels_share_selected_range_and_layout() -> Non
     tool_calls = panels["Tool Calls"]
     duration = panels["Average Tool Call Duration"]
 
-    assert len(TOOL_COLORS) == 25
+    assert len(TOOL_COLORS) == 28
     assert tool_calls["type"] == duration["type"] == "barchart"
     assert tool_calls["description"] == (
         "Number of instrumented tool calls within the selected time range. "
@@ -122,3 +128,79 @@ def test_tool_count_and_duration_panels_share_selected_range_and_layout() -> Non
             tool_name: value["text"]
             for tool_name, value in values[0]["options"].items()
         } == {tool_name: tool_name for tool_name in TOOL_COLORS}
+
+
+def test_usage_counters_are_fixed_green() -> None:
+    dashboard = json.loads(DASHBOARD_PATH.read_text(encoding="utf-8"))
+    panels = {panel["title"]: panel for panel in dashboard["panels"]}
+
+    for title in (
+        "Agent Runs",
+        "LLM Calls",
+        "MCP Tool Operations",
+        "Retrieval Operations",
+    ):
+        defaults = panels[title]["fieldConfig"]["defaults"]
+        assert defaults["color"] == {"mode": "fixed", "fixedColor": "#73BF69"}
+        assert defaults["thresholds"] == {
+            "mode": "absolute",
+            "steps": [{"color": "green", "value": None}],
+        }
+
+    for title, panel in panels.items():
+        if title not in {
+            "Agent Runs",
+            "LLM Calls",
+            "MCP Tool Operations",
+            "Retrieval Operations",
+        }:
+            assert "thresholds" not in panel["fieldConfig"]["defaults"]
+
+
+def test_run_classification_uses_distinct_semantic_colors() -> None:
+    dashboard = json.loads(DASHBOARD_PATH.read_text(encoding="utf-8"))
+    panel = next(
+        panel
+        for panel in dashboard["panels"]
+        if panel["title"] == "Runs by Classification"
+    )
+
+    colors = {
+        override["matcher"]["options"]: override["properties"][0]["value"]["fixedColor"]
+        for override in panel["fieldConfig"]["overrides"]
+    }
+    assert colors == {
+        "PUBLIC": "#73BF69",
+        "INTERNAL": "#5794F2",
+        "CONFIDENTIAL": "#FF9830",
+        "RESTRICTED": "#E02F44",
+    }
+    assert len(set(colors.values())) == len(colors)
+
+
+def test_cost_tool_colors_are_name_based_and_shared() -> None:
+    dashboard = json.loads(COST_DASHBOARD_PATH.read_text(encoding="utf-8"))
+    panels = {
+        panel["title"]: panel
+        for panel in dashboard["panels"]
+        if panel["title"]
+        in {
+            "Tool Decisions by Tool",
+            "Attributed Tokens by Tool",
+            "Average Total Tokens per Tool Decision",
+        }
+    }
+    assert len(panels) == 3
+
+    mappings = []
+    for panel in panels.values():
+        assert panel["options"]["xField"] == "Tool"
+        assert panel["options"]["colorByField"] == "Tool"
+        override = panel["fieldConfig"]["overrides"][0]
+        assert override["matcher"] == {"id": "byName", "options": "Tool"}
+        mappings.append(override["properties"][0]["value"][0]["options"])
+
+    assert all(mapping == mappings[0] for mapping in mappings[1:])
+    colors = {name: value["color"] for name, value in mappings[0].items()}
+    assert colors == TOOL_COLORS
+    assert len(set(colors.values())) == len(colors)
