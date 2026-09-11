@@ -58,6 +58,32 @@ class RecordingPositionEncoderAdapter(SimulatedPositionEncoderAdapter):
 
 
 @dataclass
+class RecordingRecoveryTelemetry:
+    lifecycle_events: list[dict[str, str]]
+    span_attributes: list[dict[str, str]]
+
+    def record_recovery_lifecycle(
+        self,
+        *,
+        stage: str,
+        outcome: str,
+        verification_status: str,
+        classification: str,
+    ) -> None:
+        self.lifecycle_events.append(
+            {
+                "stage": stage,
+                "outcome": outcome,
+                "verification_status": verification_status,
+                "classification": classification,
+            }
+        )
+
+    def set_current_span_attributes(self, attributes: dict[str, str]) -> None:
+        self.span_attributes.append(attributes)
+
+
+@dataclass
 class TrustedApprovalClaims(TrustedRecoveryApprovalClaimPort):
     approved_bindings: set[tuple[UUID, str, StationId, DeviceId]]
     on_claim: Callable[[], None] | None = None
@@ -205,6 +231,46 @@ def test_hardware_mcp_execute_accepts_only_server_injected_execution_fields() ->
             )
 
     asyncio.run(forged_call())
+
+
+def test_hardware_mcp_emits_bounded_lifecycle_signals_for_execution() -> None:
+    adapter = RecordingPositionEncoderAdapter()
+    telemetry = RecordingRecoveryTelemetry(lifecycle_events=[], span_attributes=[])
+    server = create_hardware_mcp_server(
+        recovery_preparation=HardwareRecoveryPreparationService(
+            physical_devices=adapter
+        ),
+        recovery_execution=_execution_service(adapter),
+        telemetry=telemetry,  # type: ignore[arg-type]
+    )
+
+    result = asyncio.run(_call_execute(server, run_id=str(RUN_ID), action_id=ACTION_ID))
+
+    assert result["recovery_outcome"] == "SUCCEEDED"
+    assert telemetry.lifecycle_events == [
+        {
+            "stage": "action_attempted",
+            "outcome": "PENDING",
+            "verification_status": "NOT_RUN",
+            "classification": "CONFIDENTIAL",
+        },
+        {
+            "stage": "succeeded",
+            "outcome": "SUCCEEDED",
+            "verification_status": "PASSED",
+            "classification": "CONFIDENTIAL",
+        },
+    ]
+    assert all(
+        set(attributes)
+        <= {
+            "data.classification",
+            "recovery.outcome",
+            "recovery.stage",
+            "verification.status",
+        }
+        for attributes in telemetry.span_attributes
+    )
 
 
 def test_run_store_approval_adapter_requires_approved_exact_pending_action_once() -> (

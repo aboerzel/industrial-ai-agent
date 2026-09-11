@@ -42,6 +42,19 @@ trajectory, structured investigation steps, identifiers, documents, selected kno
 facts, bounded next steps, DE/EN deterministic projection parity, and expected neutral
 non-disclosure. It does not compare a whole answer with one fixed Golden response.
 
+The S04 reference-recovery case additionally fixes the bounded three-tool trajectory
+`get_position_reference_status`, `prepare_reference_calibration`, and
+`execute_reference_calibration`. It validates deterministic trajectory and result
+contracts, not live-model reasoning quality. Approval, replay, clearance, precondition,
+and post-action verification behavior remain covered at the Hardware MCP and recovery
+service test layers where their state transitions are directly observable.
+
+The existing telemetry facade records bounded recovery lifecycle stages for preparation,
+controlled action, block/failure, verification failure, and success. It exports only
+fixed stage/outcome/verification/classification metadata; raw device state, prompts, and
+approval text are excluded. Existing approval instrumentation independently records the
+trusted approval decision. MHS, real hardware, and Vision recovery remain unimplemented.
+
 ## Security Is a Hard Gate
 
 Insufficient-clearance requests are expected successes when they produce the established

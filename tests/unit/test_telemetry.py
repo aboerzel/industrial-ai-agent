@@ -150,6 +150,29 @@ def test_metric_dimensions_keep_only_bounded_persistence_operation() -> None:
     }
 
 
+def test_recovery_lifecycle_metrics_keep_only_bounded_dimensions() -> None:
+    telemetry, reader = _metric_telemetry()
+
+    telemetry.record_recovery_lifecycle(
+        stage="verification_failed",
+        outcome="FAILED",
+        verification_status="FAILED",
+        classification="CONFIDENTIAL",
+    )
+
+    assert _counter_values(reader, "recovery_lifecycle_total") == [
+        (
+            {
+                "recovery.stage": "verification_failed",
+                "recovery.outcome": "FAILED",
+                "verification.status": "FAILED",
+                "data.classification": "CONFIDENTIAL",
+            },
+            1,
+        )
+    ]
+
+
 def test_llm_usage_metrics_aggregate_only_bounded_dimensions() -> None:
     telemetry, reader = _metric_telemetry()
     attributes = {

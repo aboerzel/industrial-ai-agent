@@ -79,6 +79,8 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "model.profile",
         "operation.status",
         "operation.type",
+        "recovery.outcome",
+        "recovery.stage",
         "persistence.operation",
         "rca.focus",
         "retrieval.candidate_count",
@@ -87,6 +89,7 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "reranker.model",
         "run.id",
         "run.profile",
+        "verification.status",
         "telemetry.metadata_only",
         "telemetry.cost_status",
         "telemetry.usage_status",
@@ -115,10 +118,13 @@ _METRIC_ATTRIBUTE_KEYS = frozenset(
         "model.profile",
         "operation.status",
         "operation.type",
+        "recovery.outcome",
+        "recovery.stage",
         "persistence.operation",
         "rca.focus",
         "retrieval.strategy",
         "run.profile",
+        "verification.status",
     }
 )
 _ALLOWED_LOG_EVENTS = frozenset(
@@ -127,6 +133,12 @@ _ALLOWED_LOG_EVENTS = frozenset(
         "agent.run.failed",
         "mcp.server.completed",
         "mcp.server.failed",
+        "recovery.action_attempted",
+        "recovery.action_failed",
+        "recovery.blocked",
+        "recovery.prepared",
+        "recovery.succeeded",
+        "recovery.verification_failed",
     }
 )
 
@@ -192,6 +204,7 @@ class Telemetry:
         self._llm_tool_tokens = meter.create_counter("llm_tool_tokens_total")
         self._retrieval_calls = meter.create_counter("retrieval_calls_total")
         self._approvals = meter.create_counter("approval_total")
+        self._recovery_lifecycle = meter.create_counter("recovery_lifecycle_total")
         self._persistence_operations = meter.create_counter(
             "persistence_operations_total"
         )
@@ -414,6 +427,26 @@ class Telemetry:
                 }
             ),
         )
+
+    def record_recovery_lifecycle(
+        self,
+        *,
+        stage: str,
+        outcome: str,
+        verification_status: str,
+        classification: str,
+    ) -> None:
+        """Record one fixed physical-recovery lifecycle signal without payload data."""
+        attributes = metric_attributes(
+            {
+                "recovery.stage": stage,
+                "recovery.outcome": outcome,
+                "verification.status": verification_status,
+                "data.classification": classification,
+            }
+        )
+        self._recovery_lifecycle.add(1, attributes)
+        self.log_event(event=f"recovery.{stage}", run_id=None)
 
     def record_persistence_operation(
         self, *, attributes: Mapping[str, object], duration_seconds: float

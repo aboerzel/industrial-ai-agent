@@ -93,7 +93,7 @@ def test_v1_dataset_is_versioned_and_covers_trust_boundaries() -> None:
     cases = load_golden_cases()
 
     assert DEFAULT_DATASET_PATH.name == "cases.json"
-    assert len(cases) == 15
+    assert len(cases) == 16
     assert len({case.id for case in cases}) == len(cases)
     tags = {tag for case in cases for tag in case.tags}
     assert {
@@ -102,6 +102,7 @@ def test_v1_dataset_is_versioned_and_covers_trust_boundaries() -> None:
         "non-disclosure",
         "cross-source",
         "provider",
+        "hardware-recovery",
     } <= tags
     assert any(case.equivalent_case_id for case in cases)
 
@@ -176,8 +177,8 @@ def test_default_golden_suite_passes_with_deterministic_authorized_artifacts() -
         dataset="golden-v1-fake-artifacts",
     )
 
-    assert report.total_cases == 15
-    assert report.passed_cases == 15
+    assert report.total_cases == 16
+    assert report.passed_cases == 16
     assert report.failed_cases == ()
 
 

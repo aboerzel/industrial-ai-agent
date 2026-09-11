@@ -39,6 +39,7 @@ from industrial_ai_agent.infrastructure.mcp_schema_validation import (
 from industrial_ai_agent.infrastructure.simulated_position_encoder_adapter import (
     SimulatedPositionEncoderAdapter,
 )
+from industrial_ai_agent.infrastructure.telemetry import Telemetry
 
 HARDWARE_MCP_SERVER_NAME = "hardware_mcp"
 HARDWARE_MCP_SERVER_VERSION = "0.1.0"
@@ -151,6 +152,7 @@ def create_hardware_mcp_server(
     recovery_execution: HardwareRecoveryExecutionService | None = None,
     access_control: McpHttpAccessControl | None = None,
     default_security_context: SecurityContext = DEMO_ENGINEER_SECURITY_CONTEXT,
+    telemetry: Telemetry | None = None,
 ) -> MCPServer:
     """Expose bounded status and recovery preparation over injected application logic."""
     if not isinstance(default_security_context, SecurityContext):
@@ -222,6 +224,13 @@ def create_hardware_mcp_server(
             raise LookupError(
                 "Position-reference information is unavailable"
             ) from error
+        _record_recovery_lifecycle(
+            telemetry=telemetry,
+            stage="prepared",
+            outcome="NOT_EXECUTED",
+            verification_status="NOT_RUN",
+            classification=result.classification.name,
+        )
         return _project_preparation(result).model_dump(mode="json")
 
     @server.tool(
@@ -249,6 +258,13 @@ def create_hardware_mcp_server(
         if recovery_execution is None:
             raise LookupError("Position-reference information is unavailable")
         try:
+            _record_recovery_lifecycle(
+                telemetry=telemetry,
+                stage="action_attempted",
+                outcome="PENDING",
+                verification_status="NOT_RUN",
+                classification="CONFIDENTIAL",
+            )
             result = await recovery_execution.execute_reference_calibration(
                 run_id=UUID(run_id),
                 action_id=action_id,
@@ -261,6 +277,7 @@ def create_hardware_mcp_server(
             raise LookupError(
                 "Position-reference information is unavailable"
             ) from error
+        _record_recovery_result(telemetry=telemetry, result=result)
         return _project_recovery_result(result).model_dump(mode="json")
 
     for tool_name in _HARDWARE_TOOL_PERMISSIONS:
@@ -274,6 +291,7 @@ def create_demo_hardware_mcp_server(
     *,
     access_control: McpHttpAccessControl | None = None,
     default_security_context: SecurityContext = DEMO_ENGINEER_SECURITY_CONTEXT,
+    telemetry: Telemetry | None = None,
 ) -> MCPServer:
     """Compose the local deterministic S04 demonstrator at the Infrastructure edge."""
     adapter = SimulatedPositionEncoderAdapter()
@@ -283,6 +301,7 @@ def create_demo_hardware_mcp_server(
         ),
         access_control=access_control,
         default_security_context=default_security_context,
+        telemetry=telemetry,
     )
 
 
@@ -437,3 +456,46 @@ def _project_recovery_result(result: Any) -> _RecoveryResultProjection:
         ),
         recovery_outcome=result.outcome.value,
     )
+
+
+def _record_recovery_result(*, telemetry: Telemetry | None, result: Any) -> None:
+    if result.outcome.value == "SUCCEEDED":
+        stage = "succeeded"
+    elif result.outcome.value == "BLOCKED":
+        stage = "blocked"
+    elif result.operation_result is not None and not result.action_executed:
+        stage = "action_failed"
+    else:
+        stage = "verification_failed"
+    _record_recovery_lifecycle(
+        telemetry=telemetry,
+        stage=stage,
+        outcome=result.outcome.value,
+        verification_status=result.verification.status.value,
+        classification="CONFIDENTIAL",
+    )
+
+
+def _record_recovery_lifecycle(
+    *,
+    telemetry: Telemetry | None,
+    stage: str,
+    outcome: str,
+    verification_status: str,
+    classification: str,
+) -> None:
+    if telemetry is not None:
+        telemetry.set_current_span_attributes(
+            {
+                "recovery.stage": stage,
+                "recovery.outcome": outcome,
+                "verification.status": verification_status,
+                "data.classification": classification,
+            }
+        )
+        telemetry.record_recovery_lifecycle(
+            stage=stage,
+            outcome=outcome,
+            verification_status=verification_status,
+            classification=classification,
+        )
