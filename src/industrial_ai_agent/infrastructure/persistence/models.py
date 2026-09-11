@@ -175,6 +175,7 @@ class AgentRunRecord(Base):
     request_text: Mapped[str] = mapped_column(Text)
     response_language: Mapped[str] = mapped_column(String)
     final_answer: Mapped[str | None] = mapped_column(Text)
+    recovery_outcome: Mapped[str | None] = mapped_column(String)
     investigation_steps: Mapped[list[dict[str, object]]] = mapped_column(
         JSON, default=list
     )

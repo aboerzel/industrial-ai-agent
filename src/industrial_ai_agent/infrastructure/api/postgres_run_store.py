@@ -18,6 +18,7 @@ from industrial_ai_agent.infrastructure.api.run_store import (
     RuntimeRunInspection,
     StoredAgentRun,
     _to_public_status,
+    recovery_failure_code,
 )
 from industrial_ai_agent.infrastructure.api.schemas import RunStatus
 from industrial_ai_agent.infrastructure.persistence.models import AgentRunRecord
@@ -92,6 +93,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 request_text=request_text,
                 response_language=response_language.value,
                 final_answer=None,
+                recovery_outcome=None,
                 investigation_steps=[],
                 next_steps=[],
                 identifiers=[],
@@ -118,7 +120,14 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         with self._session_factory.session(self._security_context) as session:
             record = _require_record(session, run_id)
             record.status = _to_public_status(result).value
+            record.error_code = recovery_failure_code(result)
+            record.error_message = _safe_error_message(record.error_code)
             record.final_answer = result.final_answer
+            record.recovery_outcome = (
+                result.recovery_outcome.value
+                if result.recovery_outcome is not None
+                else None
+            )
             record.investigation_steps = [
                 step.model_dump() for step in result.investigation_steps
             ]
@@ -343,13 +352,16 @@ def _require_record(session, run_id: UUID) -> AgentRunRecord:
 
 def _stored(record: AgentRunRecord) -> StoredAgentRun:
     result = None
-    if record.status in {RunStatus.SUCCESS.value, RunStatus.LIMIT_REACHED.value}:
+    if record.status in {RunStatus.SUCCESS.value, RunStatus.LIMIT_REACHED.value} or (
+        record.status == RunStatus.FAILED.value
+        and record.error_code
+        in {"recovery_incomplete", "recovery_blocked", "recovery_failed"}
+    ):
         result = AgentRunResult.model_validate(
             {
-                "status": "SUCCESS"
-                if record.status == RunStatus.SUCCESS.value
-                else "LIMIT_REACHED",
+                "status": _stored_agent_status(record.status, record.error_code),
                 "final_answer": record.final_answer,
+                "recovery_outcome": record.recovery_outcome,
                 "investigation_steps": record.investigation_steps,
                 "next_steps": record.next_steps,
                 "identifiers": record.identifiers,
@@ -382,7 +394,7 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
     )
 
 
-def _safe_error_message(error_code: str) -> str:
+def _safe_error_message(error_code: str | None) -> str:
     return {
         "no_eligible_model": "No eligible model is available for this request.",
         "model_egress_denied": "Model execution is not permitted for this request.",
@@ -391,7 +403,22 @@ def _safe_error_message(error_code: str) -> str:
         "llm_quota_exceeded": "The language model usage limit has been reached.",
         "llm_provider_unavailable": "The language model provider is temporarily unavailable.",
         "agent_execution_timeout": "The agent run exceeded its execution time limit.",
+        "recovery_incomplete": "The requested recovery was not completed.",
+        "recovery_blocked": "The requested recovery was blocked before execution.",
+        "recovery_failed": "The requested recovery did not pass verification.",
     }.get(error_code, "The agent run could not be completed.")
+
+
+def _stored_agent_status(status: str, error_code: str | None) -> str:
+    if status == RunStatus.SUCCESS.value:
+        return "SUCCESS"
+    if status == RunStatus.LIMIT_REACHED.value:
+        return "LIMIT_REACHED"
+    return {
+        "recovery_incomplete": "RECOVERY_INCOMPLETE",
+        "recovery_blocked": "RECOVERY_BLOCKED",
+        "recovery_failed": "RECOVERY_FAILED",
+    }[error_code or ""]
 
 
 def _matches_reference_calibration_approval(
@@ -448,7 +475,10 @@ _KNOWN_TOOL_NAMES = frozenset(
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_position_reference_status",
         "search_documentation",
+        "prepare_reference_calibration",
+        "execute_reference_calibration",
         "create_maintenance_ticket",
     }
 )
@@ -465,7 +495,11 @@ def _safe_tool_names(summary: object) -> tuple[str, ...]:
 
 
 def _safe_approval_action(value: object) -> str | None:
-    return value if value == "create_maintenance_ticket" else None
+    return (
+        value
+        if value in {"create_maintenance_ticket", "execute_reference_calibration"}
+        else None
+    )
 
 
 def _safe_approval_decision(value: object) -> str | None:

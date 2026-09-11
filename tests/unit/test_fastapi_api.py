@@ -29,6 +29,7 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     confidential_troubleshooting_requirements,
 )
 from industrial_ai_agent.application.document_content import AuthorizedDocumentContent
+from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.app import create_app as _create_app
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
@@ -168,8 +169,9 @@ def test_execution_timeout_persists_terminal_sanitized_failure(
 
     response = TestClient(app).post("/api/v1/runs", json=_confidential_request())
 
-    assert response.status_code == 504
-    assert response.json() == {
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error"] == {
         "code": "agent_execution_timeout",
         "message": "The agent run exceeded its execution time limit.",
     }
@@ -194,6 +196,11 @@ def test_execution_timeout_persists_terminal_sanitized_failure(
         "code": "agent_execution_timeout",
         "message": "The agent run exceeded its execution time limit.",
     }
+    pdf = TestClient(app).get(
+        f"/api/v1/investigations/{run_id}/pdf?user_clearance=CONFIDENTIAL"
+    )
+    assert pdf.status_code == 200
+    assert b"agent_execution_timeout" in pdf.content
 
 
 def test_provider_failure_is_terminal_and_following_request_remains_usable(
@@ -230,8 +237,9 @@ def test_provider_failure_is_terminal_and_following_request_remains_usable(
     blocked = client.post("/api/v1/runs", json=_confidential_request())
     recovered = client.post("/api/v1/runs", json=_confidential_request())
 
-    assert blocked.status_code == 503
-    assert blocked.json()["code"] == "llm_rate_limit"
+    assert blocked.status_code == 200
+    assert blocked.json()["status"] == "failed"
+    assert blocked.json()["error"]["code"] == "llm_rate_limit"
     assert recovered.status_code == 200
     failed_run = asyncio.run(store.get(UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")))
     assert failed_run is not None
@@ -301,6 +309,7 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
         "status",
         "data_classification",
         "answer",
+        "recovery_outcome",
         "investigation_steps",
         "next_steps",
         "identifiers",
@@ -852,6 +861,85 @@ def test_confidential_ticket_lookup_uses_the_bounded_ticket_trajectory() -> None
     assert service.policies[0].data_classification is DataClassification.CONFIDENTIAL
 
 
+def test_recovery_incomplete_is_a_failed_run_with_a_bounded_error_code() -> None:
+    result = AgentRunResult(
+        status=AgentRunStatus.RECOVERY_INCOMPLETE,
+        final_answer="The required recovery preparation was not performed.",
+        tool_call_count=1,
+        executed_tool_calls=(
+            ExecutedToolCall(
+                tool="get_position_reference_status",
+                arguments={"station_id": "S04"},
+            ),
+        ),
+    )
+    client = TestClient(create_app(FakeRunService(result=result)))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Recover the position reference at S04.",
+            "user_clearance": "CONFIDENTIAL",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error"] == {
+        "code": "recovery_incomplete",
+        "message": "The requested recovery was not completed.",
+    }
+    assert response.json()["tool_calls"] == [
+        {
+            "tool": "get_position_reference_status",
+            "arguments": {"station_id": "S04"},
+        }
+    ]
+
+
+def test_recovery_not_required_is_a_successful_no_action_run_and_pdf_protocol() -> None:
+    result = AgentRunResult(
+        status=AgentRunStatus.SUCCESS,
+        final_answer=(
+            "No recovery is required. The position reference at station S04 is already valid."
+        ),
+        recovery_outcome=RecoveryOutcome.NOT_REQUIRED,
+        tool_call_count=1,
+        executed_tool_calls=(
+            ExecutedToolCall(
+                tool="get_position_reference_status",
+                arguments={"station_id": "S04"},
+            ),
+        ),
+    )
+    client = TestClient(create_app(FakeRunService(result=result)))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Recover the position reference at S04.",
+            "user_clearance": "CONFIDENTIAL",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    assert response.json()["recovery_outcome"] == "NOT_REQUIRED"
+    assert response.json()["approval_request"] is None
+    assert response.json()["tool_calls"] == [
+        {
+            "tool": "get_position_reference_status",
+            "arguments": {"station_id": "S04"},
+        }
+    ]
+
+    pdf = client.get(
+        f"/api/v1/investigations/{response.json()['investigation_id']}/pdf?user_clearance=CONFIDENTIAL"
+    )
+    assert pdf.status_code == 200
+    assert b"No action was required." in pdf.content
+
+
 def test_internal_ticket_lookup_is_neutral_and_indistinguishable_from_unknown_ticket() -> (
     None
 ):
@@ -966,7 +1054,7 @@ def test_get_unknown_run_returns_sanitized_not_found_error() -> None:
     }
 
 
-def test_no_eligible_model_maps_to_service_unavailable() -> None:
+def test_no_eligible_model_returns_a_persisted_failed_run() -> None:
     client = TestClient(
         create_app(
             FakeRunService(
@@ -977,8 +1065,9 @@ def test_no_eligible_model_maps_to_service_unavailable() -> None:
 
     response = client.post("/api/v1/runs", json=_confidential_request())
 
-    assert response.status_code == 503
-    assert response.json()["code"] == "no_eligible_model"
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error"]["code"] == "no_eligible_model"
 
 
 def test_model_egress_denial_fails_closed() -> None:
@@ -995,15 +1084,16 @@ def test_model_egress_denial_fails_closed() -> None:
     }
 
 
-def test_mcp_unavailability_maps_to_service_unavailable() -> None:
+def test_mcp_unavailability_returns_a_persisted_failed_run() -> None:
     client = TestClient(
         create_app(FakeRunService(error=McpServiceUnavailableError("unavailable")))
     )
 
     response = client.post("/api/v1/runs", json=_confidential_request())
 
-    assert response.status_code == 503
-    assert response.json() == {
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error"] == {
         "code": "mcp_service_unavailable",
         "message": "A required MCP service is unavailable.",
     }
@@ -1067,8 +1157,9 @@ def test_llm_provider_limit_is_sanitized_persisted_and_available_in_history(
         },
     )
 
-    assert response.status_code == 503
-    assert response.json() == {"code": code.value, "message": message}
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error"] == {"code": code.value, "message": message}
     assert "RateLimitError" not in response.text
     stored = asyncio.run(store.get(run_id))
     assert stored is not None
@@ -1084,6 +1175,87 @@ def test_llm_provider_limit_is_sanitized_persisted_and_available_in_history(
         "code": code.value,
         "message": message,
     }
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expected_message"),
+    (
+        (
+            McpServiceUnavailableError("unavailable"),
+            "mcp_service_unavailable",
+            "A required MCP service is unavailable.",
+        ),
+        (
+            LLMProviderError(
+                LLMProviderErrorCode.RATE_LIMIT,
+                provider_error_type="RateLimitError",
+            ),
+            "llm_rate_limit",
+            (
+                "The language model is temporarily unavailable because its usage "
+                "limit has been reached. Please try again later."
+            ),
+        ),
+    ),
+)
+def test_pdf_exports_persisted_operational_failure_transcripts(
+    error: Exception,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    client = TestClient(create_app(FakeRunService(error=error)))
+
+    run = client.post("/api/v1/runs", json=_confidential_request()).json()
+    pdf = client.get(
+        f"/api/v1/investigations/{run['investigation_id']}/pdf?user_clearance=CONFIDENTIAL"
+    )
+
+    assert run["status"] == "failed"
+    assert run["investigation_steps"] == []
+    assert pdf.status_code == 200
+    assert b"Investigate P4711." in pdf.content
+    assert expected_code.encode() in pdf.content
+    assert expected_message.split()[0].encode() in pdf.content
+    assert expected_message.split()[-2].encode() in pdf.content
+    assert b"Status:" in pdf.content
+
+
+@pytest.mark.parametrize(
+    ("status", "error_code", "answer"),
+    (
+        (
+            AgentRunStatus.RECOVERY_INCOMPLETE,
+            "recovery_incomplete",
+            "The requested recovery was not completed.",
+        ),
+        (
+            AgentRunStatus.RECOVERY_BLOCKED,
+            "recovery_blocked",
+            "The requested recovery was blocked.",
+        ),
+    ),
+)
+def test_pdf_exports_recovery_failure_without_investigation_steps(
+    status: AgentRunStatus, error_code: str, answer: str
+) -> None:
+    result = AgentRunResult(
+        status=status,
+        final_answer=answer,
+        tool_call_count=0,
+    )
+    client = TestClient(create_app(FakeRunService(result=result)))
+
+    run = client.post("/api/v1/runs", json=_confidential_request()).json()
+    pdf = client.get(
+        f"/api/v1/investigations/{run['investigation_id']}/pdf?user_clearance=CONFIDENTIAL"
+    )
+
+    assert run["status"] == "failed"
+    assert run["investigation_steps"] == []
+    assert run["error"]["code"] == error_code
+    assert pdf.status_code == 200
+    assert answer.encode() in pdf.content
+    assert error_code.encode() in pdf.content
 
 
 def test_unrelated_http_429_remains_an_internal_error() -> None:
@@ -1112,8 +1284,9 @@ def test_streamable_http_connection_failure_maps_to_service_unavailable(
 
     response = client.post("/api/v1/runs", json=_confidential_request())
 
-    assert response.status_code == 503
-    assert response.json()["code"] == "mcp_service_unavailable"
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error"]["code"] == "mcp_service_unavailable"
 
 
 @pytest.mark.parametrize(

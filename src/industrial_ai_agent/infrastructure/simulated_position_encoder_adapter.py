@@ -66,6 +66,14 @@ class SimulatedPositionEncoderAdapter(PhysicalDevicePort):
         self._require_device(device_id)
         return self._capabilities
 
+    def resolve_position_reference_device(
+        self, station_id: StationId
+    ) -> DeviceId | None:
+        """Resolve the simulator's sole bounded device without enumeration."""
+        if not isinstance(station_id, StationId):
+            raise TypeError("station_id must be a StationId")
+        return self.device_id if station_id == self.station_id else None
+
     def read_state(self, device_id: DeviceId) -> DeviceState:
         self._require_device(device_id)
         return self._snapshot()

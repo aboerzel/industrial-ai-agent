@@ -1,7 +1,9 @@
-"""Bounded Hardware MCP transport for position-reference recovery preparation."""
+"""Bounded Hardware MCP transport for position-reference recovery."""
 
 from __future__ import annotations
 
+import argparse
+import os
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -14,6 +16,7 @@ from industrial_ai_agent.application.hardware_recovery import (
     HardwareRecoveryExecutionService,
     HardwareRecoveryNotAccessibleError,
     HardwareRecoveryPreparationService,
+    PositionReferenceDeviceResolver,
     PositionReferenceStatus,
     ReferenceCalibrationPreparation,
 )
@@ -27,22 +30,39 @@ from industrial_ai_agent.domain.physical_device import DeviceId
 from industrial_ai_agent.domain.product_history import StationId
 from industrial_ai_agent.domain.security import (
     DEMO_ENGINEER_SECURITY_CONTEXT,
+    DEMO_RUNTIME_SECURITY_CONTEXT,
     SecurityContext,
+)
+from industrial_ai_agent.infrastructure.api.postgres_run_store import (
+    PostgreSqlAgentRunStore,
+)
+from industrial_ai_agent.infrastructure.hardware_recovery_approval import (
+    AgentRunStoreRecoveryApprovalPort,
 )
 from industrial_ai_agent.infrastructure.mcp_access_control import (
     McpHttpAccessControl,
+    create_demo_mcp_access_control,
     install_mcp_http_access_control,
 )
 from industrial_ai_agent.infrastructure.mcp_schema_validation import (
     require_strict_mcp_tool_arguments,
 )
+from industrial_ai_agent.infrastructure.persistence.postgres import (
+    PostgreSqlSessionFactory,
+)
 from industrial_ai_agent.infrastructure.simulated_position_encoder_adapter import (
     SimulatedPositionEncoderAdapter,
 )
-from industrial_ai_agent.infrastructure.telemetry import Telemetry
+from industrial_ai_agent.infrastructure.telemetry import (
+    Telemetry,
+    TelemetryConfiguration,
+    configure_telemetry,
+    run_instrumented_mcp_http_server,
+)
 
 HARDWARE_MCP_SERVER_NAME = "hardware_mcp"
 HARDWARE_MCP_SERVER_VERSION = "0.1.0"
+HARDWARE_MCP_HTTP_PATH = "/mcp"
 
 StationIdentifier = Annotated[
     str,
@@ -149,6 +169,7 @@ class _RecoveryResultProjection(_McpModel):
 def create_hardware_mcp_server(
     *,
     recovery_preparation: HardwareRecoveryPreparationService,
+    position_reference_devices: PositionReferenceDeviceResolver,
     recovery_execution: HardwareRecoveryExecutionService | None = None,
     access_control: McpHttpAccessControl | None = None,
     default_security_context: SecurityContext = DEMO_ENGINEER_SECURITY_CONTEXT,
@@ -165,13 +186,15 @@ def create_hardware_mcp_server(
 
     @server.tool(
         name="get_position_reference_status",
-        description="Get bounded position-reference status for one authorized device.",
+        description=(
+            "Get bounded position-reference status for one authorized station. "
+            "The physical device is resolved by trusted server-side configuration."
+        ),
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
     def get_position_reference_status(
         station_id: StationIdentifier,
-        device_id: DeviceIdentifier,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         security_context = _security_context_for_request(
@@ -183,7 +206,9 @@ def create_hardware_mcp_server(
         try:
             result = recovery_preparation.get_position_reference_status(
                 station_id=_station_id(station_id),
-                device_id=_device_id(device_id),
+                device_id=_resolve_position_reference_device(
+                    position_reference_devices, station_id
+                ),
                 security_context=security_context,
             )
         except (HardwareRecoveryNotAccessibleError, TypeError, ValueError) as error:
@@ -198,14 +223,14 @@ def create_hardware_mcp_server(
         name="prepare_reference_calibration",
         description=(
             "Prepare a controlled reference-calibration proposal for one authorized "
-            "device. This tool never executes calibration."
+            "station. The physical device is resolved server-side. This tool never "
+            "executes calibration."
         ),
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
     def prepare_reference_calibration(
         station_id: StationIdentifier,
-        device_id: DeviceIdentifier,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         security_context = _security_context_for_request(
@@ -217,7 +242,9 @@ def create_hardware_mcp_server(
         try:
             result = recovery_preparation.prepare_reference_calibration(
                 station_id=_station_id(station_id),
-                device_id=_device_id(device_id),
+                device_id=_resolve_position_reference_device(
+                    position_reference_devices, station_id
+                ),
                 security_context=security_context,
             )
         except (HardwareRecoveryNotAccessibleError, TypeError, ValueError) as error:
@@ -299,9 +326,108 @@ def create_demo_hardware_mcp_server(
         recovery_preparation=HardwareRecoveryPreparationService(
             physical_devices=adapter
         ),
+        position_reference_devices=adapter,
         access_control=access_control,
         default_security_context=default_security_context,
         telemetry=telemetry,
+    )
+
+
+def create_secure_hardware_mcp_server(
+    *, telemetry: Telemetry | None = None
+) -> MCPServer:
+    """Build the deployed S04 demonstrator with HTTP access and trusted approval."""
+    database_url = os.getenv("AGENT_RUNTIME_DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("AGENT_RUNTIME_DATABASE_URL is required for Hardware MCP")
+
+    adapter = SimulatedPositionEncoderAdapter()
+    preparation = HardwareRecoveryPreparationService(physical_devices=adapter)
+    run_store = PostgreSqlAgentRunStore(
+        PostgreSqlSessionFactory(database_url), DEMO_RUNTIME_SECURITY_CONTEXT
+    )
+    execution = HardwareRecoveryExecutionService(
+        preparation=preparation,
+        physical_devices=adapter,
+        approval_claims=AgentRunStoreRecoveryApprovalPort(run_store),
+    )
+    server: MCPServer
+
+    async def listed_tools() -> list[Any]:
+        return await server.list_tools()
+
+    access_control = create_demo_mcp_access_control(
+        tools=listed_tools,
+        required_permission=_required_hardware_permission,
+        allowed_client_ids=frozenset({"industrial-agent"}),
+    )
+    server = create_hardware_mcp_server(
+        recovery_preparation=preparation,
+        position_reference_devices=adapter,
+        recovery_execution=execution,
+        access_control=access_control,
+        telemetry=telemetry,
+    )
+    return server
+
+
+def main() -> None:
+    """Run the bounded Hardware MCP through the configured transport."""
+    args = _parse_args()
+    telemetry = _create_hardware_telemetry() if args.transport != "stdio" else None
+    server = (
+        create_demo_hardware_mcp_server(telemetry=telemetry)
+        if args.transport == "stdio"
+        else create_secure_hardware_mcp_server(telemetry=telemetry)
+    )
+    if args.transport == "stdio":
+        server.run(transport="stdio")
+        return
+    assert telemetry is not None
+    run_instrumented_mcp_http_server(
+        server,
+        host=args.host,
+        port=args.port,
+        streamable_http_path=HARDWARE_MCP_HTTP_PATH,
+        telemetry=telemetry,
+    )
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the Hardware MCP server.")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "streamable-http"),
+        default=os.getenv("HARDWARE_MCP_TRANSPORT", "streamable-http"),
+    )
+    parser.add_argument("--host", default=os.getenv("HARDWARE_MCP_HOST", "127.0.0.1"))
+    parser.add_argument(
+        "--port", type=int, default=int(os.getenv("HARDWARE_MCP_PORT", "8006"))
+    )
+    return parser.parse_args()
+
+
+def _required_hardware_permission(tool_name: str) -> McpPermission:
+    return _HARDWARE_TOOL_PERMISSIONS[tool_name]
+
+
+def _resolve_position_reference_device(
+    resolver: PositionReferenceDeviceResolver, station_id: str
+) -> DeviceId:
+    device_id = resolver.resolve_position_reference_device(_station_id(station_id))
+    if device_id is None:
+        raise HardwareRecoveryNotAccessibleError()
+    return device_id
+
+
+def _create_hardware_telemetry() -> Telemetry:
+    return configure_telemetry(
+        TelemetryConfiguration(
+            enabled=os.getenv("OTEL_ENABLED", "false").strip().lower()
+            in {"1", "true", "yes", "on"},
+            otlp_endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317"),
+            service_name=os.getenv("OTEL_SERVICE_NAME", "hardware-mcp"),
+        )
     )
 
 
@@ -499,3 +625,7 @@ def _record_recovery_lifecycle(
             verification_status=verification_status,
             classification=classification,
         )
+
+
+if __name__ == "__main__":
+    main()

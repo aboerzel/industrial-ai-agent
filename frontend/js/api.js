@@ -154,13 +154,14 @@ async function request(path, options = {}, validator = isRunResponse) {
 function isRunResponse(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "error", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "recovery_outcome", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "error", "approval_request"]) &&
     isUuid(value.run_id) &&
     (value.investigation_id === undefined || isUuid(value.investigation_id)) &&
     (value.investigation_sequence === undefined || (Number.isInteger(value.investigation_sequence) && value.investigation_sequence > 0)) &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
     (value.answer === undefined || value.answer === null || isBoundedString(value.answer, 8_000)) &&
+    (value.recovery_outcome === undefined || value.recovery_outcome === null || ["SUCCEEDED", "NOT_REQUIRED", "FAILED", "BLOCKED"].includes(value.recovery_outcome)) &&
     (value.investigation_steps === undefined || isInvestigationSteps(value.investigation_steps)) &&
     (value.next_steps === undefined || isNextSteps(value.next_steps)) &&
     (value.identifiers === undefined || isIdentifierReferences(value.identifiers)) &&
@@ -189,13 +190,14 @@ function isInvestigationResponse(value) {
 function isInvestigationTurn(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "error", "created_at", "updated_at", "approval_request"]) &&
+    hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "recovery_outcome", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "error", "created_at", "updated_at", "approval_request"]) &&
     isUuid(value.run_id) && Number.isInteger(value.sequence) && value.sequence > 0 &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
     ["DE", "EN"].includes(value.response_language) &&
     isBoundedString(value.request, 4_000) &&
     (value.answer === null || value.answer === undefined || isBoundedString(value.answer, 8_000)) &&
+    (value.recovery_outcome === null || value.recovery_outcome === undefined || ["SUCCEEDED", "NOT_REQUIRED", "FAILED", "BLOCKED"].includes(value.recovery_outcome)) &&
     (value.investigation_steps === undefined || isInvestigationSteps(value.investigation_steps)) &&
     (value.next_steps === undefined || isNextSteps(value.next_steps)) &&
     (value.identifiers === undefined || isIdentifierReferences(value.identifiers)) &&
@@ -298,6 +300,9 @@ function isPublicToolName(value) {
     "search_documentation",
     "create_maintenance_ticket",
     "get_maintenance_ticket",
+    "get_position_reference_status",
+    "prepare_reference_calibration",
+    "execute_reference_calibration",
   ].includes(value);
 }
 

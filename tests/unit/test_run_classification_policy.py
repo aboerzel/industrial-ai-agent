@@ -4,6 +4,8 @@ from uuid import uuid4
 import pytest
 
 from industrial_ai_agent.agent.run_classification_policy import (
+    CONFIDENTIAL_RECOVERY_TOOLS,
+    CONFIDENTIAL_TROUBLESHOOTING_TOOLS,
     INTERNAL_DIAGNOSTIC_TOOLS,
     PUBLIC_INFORMATION_TOOLS,
     RESTRICTED_INFORMATION_TOOLS,
@@ -96,6 +98,67 @@ def test_named_demo_cases_keep_their_deterministic_classification(
     message: str, expected: AgentRunProfile
 ) -> None:
     assert resolve_demo_run_profile(message) is expected
+
+
+def test_s04_position_reference_recovery_uses_the_dedicated_recovery_scope() -> None:
+    profile = resolve_demo_run_profile(
+        "Untersuche den Positionsreferenzfehler an Station S04 und stelle die Station wieder her."
+    )
+    policy = AgentRunClassificationPolicy().resolve(profile)
+
+    assert profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
+    assert policy.data_classification is DataClassification.CONFIDENTIAL
+    assert policy.task_requirements.required_model_profile is not None
+    assert policy.task_requirements.required_model_profile.name == "nvidia_quality"
+    assert policy.allowed_tool_names == CONFIDENTIAL_RECOVERY_TOOLS
+    assert policy.allowed_tool_names == frozenset(
+        {
+            "get_position_reference_status",
+            "prepare_reference_calibration",
+            "execute_reference_calibration",
+        }
+    )
+
+
+def test_confidential_recovery_does_not_admit_general_troubleshooting_tools() -> None:
+    policy = AgentRunClassificationPolicy().resolve(
+        AgentRunProfile.CONFIDENTIAL_RECOVERY
+    )
+
+    assert (
+        not {
+            "get_machine_status",
+            "get_station_overview",
+            "search_documentation",
+            "list_stations",
+            "list_products",
+            "get_product_overview",
+            "get_product_history",
+            "create_maintenance_ticket",
+            "get_maintenance_ticket",
+        }
+        & policy.allowed_tool_names
+    )
+
+
+def test_confidential_troubleshooting_keeps_its_existing_broad_tool_surface() -> None:
+    policy = AgentRunClassificationPolicy().resolve(
+        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    )
+
+    assert policy.allowed_tool_names == CONFIDENTIAL_TROUBLESHOOTING_TOOLS
+    assert {
+        "get_machine_status",
+        "get_station_overview",
+        "search_documentation",
+    } <= policy.allowed_tool_names
+
+
+def test_unrelated_s04_troubleshooting_keeps_the_existing_scope() -> None:
+    assert (
+        resolve_demo_run_profile("Untersuche den allgemeinen Fehler an Station S04.")
+        is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    )
 
 
 def test_known_public_discovery_request_stays_public() -> None:

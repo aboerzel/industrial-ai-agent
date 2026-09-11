@@ -44,6 +44,7 @@ from industrial_ai_agent.infrastructure.llm.openai_compatible import (
 )
 from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     DEFAULT_ALLOWED_FACTORY_TOOLS,
+    DEFAULT_ALLOWED_HARDWARE_TOOLS,
     DEFAULT_ALLOWED_KNOWLEDGE_TOOLS,
     McpLangChainToolProvider,
     McpServerConfiguration,
@@ -63,6 +64,7 @@ DEFAULT_MODEL_CONFIGURATION_PATH = Path(
 )
 DEFAULT_FACTORY_MCP_URL = "http://127.0.0.1:8001/mcp"
 DEFAULT_KNOWLEDGE_MCP_URL = "http://127.0.0.1:8002/mcp"
+DEFAULT_HARDWARE_MCP_URL = "http://127.0.0.1:8006/mcp"
 MCP_INDUSTRIAL_AGENT_TOKEN_ENV = "MCP_INDUSTRIAL_AGENT_TOKEN"
 
 
@@ -138,6 +140,9 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                 normalize_structured_final_output=(
                     run_policy.run_profile is not AgentRunProfile.RESTRICTED_INFORMATION
                 ),
+                requires_verified_recovery=(
+                    run_policy.run_profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
+                ),
             )
 
 
@@ -147,6 +152,7 @@ def create_default_troubleshooting_run_service(
     mcp_transport: str | None = None,
     factory_mcp_url: str | None = None,
     knowledge_mcp_url: str | None = None,
+    hardware_mcp_url: str | None = None,
     runtime_database_url: str | None = None,
     telemetry: Telemetry | None = None,
     internal_diagnostic_scope_validator=None,
@@ -161,6 +167,9 @@ def create_default_troubleshooting_run_service(
     resolved_knowledge_mcp_url = knowledge_mcp_url or os.getenv(
         "KNOWLEDGE_MCP_URL", DEFAULT_KNOWLEDGE_MCP_URL
     )
+    resolved_hardware_mcp_url = hardware_mcp_url or os.getenv(
+        "HARDWARE_MCP_URL", DEFAULT_HARDWARE_MCP_URL
+    )
 
     def mcp_tool_provider_factory(
         policy: ResolvedRunPolicy,
@@ -170,6 +179,7 @@ def create_default_troubleshooting_run_service(
                 mcp_transport=transport,
                 factory_mcp_url=resolved_factory_mcp_url,
                 knowledge_mcp_url=resolved_knowledge_mcp_url,
+                hardware_mcp_url=resolved_hardware_mcp_url,
                 factory_database_url=runtime_database_url,
                 run_policy=policy,
             ),
@@ -235,6 +245,7 @@ def _mcp_server_configurations(
     mcp_transport: str,
     factory_mcp_url: str,
     knowledge_mcp_url: str,
+    hardware_mcp_url: str,
     factory_database_url: str | None,
     run_policy: ResolvedRunPolicy,
 ) -> tuple[McpServerConfiguration, ...]:
@@ -245,6 +256,10 @@ def _mcp_server_configurations(
         )
         knowledge_transport: McpTransport = StreamableHttpServerParameters(
             url=knowledge_mcp_url,
+            bearer_token=_required_mcp_bearer_token(run_policy.mcp_client_identity),
+        )
+        hardware_transport: McpTransport = StreamableHttpServerParameters(
+            url=hardware_mcp_url,
             bearer_token=_required_mcp_bearer_token(run_policy.mcp_client_identity),
         )
     elif mcp_transport == "stdio":
@@ -286,6 +301,18 @@ def _mcp_server_configurations(
             ),
         ),
     )
+    if mcp_transport == "http":
+        candidates += (
+            (
+                "hardware",
+                hardware_transport,
+                frozenset(
+                    tool
+                    for tool in DEFAULT_ALLOWED_HARDWARE_TOOLS
+                    if tool in run_policy.allowed_tool_names
+                ),
+            ),
+        )
     # Do not establish an MCP session for a server that has no capability in this
     # server-resolved run scope. This preserves the policy boundary before discovery.
     return tuple(

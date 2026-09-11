@@ -73,7 +73,3 @@ class ReferenceCalibrationProposalArguments(_StrictToolArguments):
     """Bounded target visible to the model before human approval."""
 
     station_id: StationIdentifier
-    device_id: Annotated[
-        str,
-        StringConstraints(strip_whitespace=True, pattern=r"^[A-Z][A-Z0-9-]{2,63}$"),
-    ]

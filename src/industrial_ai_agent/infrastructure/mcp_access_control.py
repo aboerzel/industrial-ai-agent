@@ -95,11 +95,13 @@ class McpHttpAccessControl:
         resolver: McpClientContextResolver,
         tools: Callable[[], Awaitable[list[Any]]],
         required_permission: Callable[[str], McpPermission],
+        allowed_client_ids: frozenset[str] | None = None,
     ) -> None:
         self._authenticator = authenticator
         self._resolver = resolver
         self._tools = tools
         self._required_permission = required_permission
+        self._allowed_client_ids = allowed_client_ids
 
     def access_context_from_headers(
         self, headers: Mapping[str, str] | None
@@ -113,15 +115,23 @@ class McpHttpAccessControl:
             required = self._required_permission(tool_name)
         except KeyError as error:
             raise McpAuthorizationError(_AUTHORIZATION_FAILURE_MESSAGE) from error
-        if not context.permits(required):
+        if not self._context_can_access(context, required):
             raise McpAuthorizationError(_AUTHORIZATION_FAILURE_MESSAGE)
 
     async def visible_tools(self, context: McpAccessContext) -> list[Any]:
         return [
             tool
             for tool in await self._tools()
-            if context.permits(self._required_permission(tool.name))
+            if self._context_can_access(context, self._required_permission(tool.name))
         ]
+
+    def _context_can_access(
+        self, context: McpAccessContext, permission: McpPermission
+    ) -> bool:
+        return context.permits(permission) and (
+            self._allowed_client_ids is None
+            or context.identity.client_id in self._allowed_client_ids
+        )
 
     async def middleware(
         self,
@@ -147,6 +157,7 @@ def create_demo_mcp_access_control(
     *,
     tools: Callable[[], Awaitable[list[Any]]],
     required_permission: Callable[[str], McpPermission],
+    allowed_client_ids: frozenset[str] | None = None,
 ) -> McpHttpAccessControl:
     """Build the local demo's explicit, server-owned identity policy."""
     industrial_token = _required_environment_value("MCP_INDUSTRIAL_AGENT_TOKEN")
@@ -216,6 +227,7 @@ def create_demo_mcp_access_control(
         resolver=RegisteredMcpClientContextResolver(tuple(registrations)),
         tools=tools,
         required_permission=required_permission,
+        allowed_client_ids=allowed_client_ids,
     )
 
 

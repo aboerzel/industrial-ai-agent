@@ -25,6 +25,7 @@ def test_public_run_connects_only_to_its_authorized_read_only_servers(
         mcp_transport="http",
         factory_mcp_url="http://factory.example/mcp",
         knowledge_mcp_url="http://knowledge.example/mcp",
+        hardware_mcp_url="http://hardware.example/mcp",
         factory_database_url=None,
         run_policy=policy,
     )
@@ -104,6 +105,7 @@ def test_restricted_information_does_not_open_knowledge_mcp_for_station_status(
         mcp_transport="http",
         factory_mcp_url="http://factory.example/mcp",
         knowledge_mcp_url="http://knowledge.example/mcp",
+        hardware_mcp_url="http://hardware.example/mcp",
         factory_database_url=None,
         run_policy=policy,
     )
@@ -112,6 +114,84 @@ def test_restricted_information_does_not_open_knowledge_mcp_for_station_status(
     assert servers[0].allowed_tool_names == frozenset(
         {"list_stations", "get_station_overview", "get_machine_status"}
     )
+
+
+def test_confidential_run_registers_only_bounded_hardware_recovery_tools(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_INDUSTRIAL_AGENT_TOKEN", "test-industrial-agent-token")
+    policy = AgentRunClassificationPolicy().resolve(
+        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    )
+
+    servers = _mcp_server_configurations(
+        mcp_transport="http",
+        factory_mcp_url="http://factory.example/mcp",
+        knowledge_mcp_url="http://knowledge.example/mcp",
+        hardware_mcp_url="http://hardware.example/mcp",
+        factory_database_url=None,
+        run_policy=policy,
+    )
+
+    hardware = next(server for server in servers if server.server_id == "hardware")
+
+    assert [server.server_id for server in servers] == [
+        "factory",
+        "knowledge",
+        "hardware",
+    ]
+    assert hardware.allowed_tool_names == frozenset(
+        {
+            "get_position_reference_status",
+            "prepare_reference_calibration",
+            "execute_reference_calibration",
+        }
+    )
+
+
+def test_confidential_recovery_registers_only_hardware_recovery_tools(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_INDUSTRIAL_AGENT_TOKEN", "test-industrial-agent-token")
+    policy = AgentRunClassificationPolicy().resolve(
+        AgentRunProfile.CONFIDENTIAL_RECOVERY
+    )
+
+    servers = _mcp_server_configurations(
+        mcp_transport="http",
+        factory_mcp_url="http://factory.example/mcp",
+        knowledge_mcp_url="http://knowledge.example/mcp",
+        hardware_mcp_url="http://hardware.example/mcp",
+        factory_database_url=None,
+        run_policy=policy,
+    )
+
+    assert [server.server_id for server in servers] == ["hardware"]
+    assert servers[0].allowed_tool_names == frozenset(
+        {
+            "get_position_reference_status",
+            "prepare_reference_calibration",
+            "execute_reference_calibration",
+        }
+    )
+
+
+def test_lower_classification_profiles_do_not_authorize_hardware_recovery_tools() -> (
+    None
+):
+    policy = AgentRunClassificationPolicy()
+    hardware_tools = {
+        "get_position_reference_status",
+        "prepare_reference_calibration",
+        "execute_reference_calibration",
+    }
+
+    for profile in (
+        AgentRunProfile.PUBLIC_INFORMATION,
+        AgentRunProfile.INTERNAL_DIAGNOSTIC,
+        AgentRunProfile.RESTRICTED_INFORMATION,
+    ):
+        assert not hardware_tools & policy.resolve(profile).allowed_tool_names
 
 
 def test_restricted_information_uses_a_bounded_local_generation_budget() -> None:

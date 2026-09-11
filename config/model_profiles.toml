@@ -73,3 +73,4 @@ capabilities = ["TEXT", "TOOL_CALLING"]
 quality_class = "HIGH"
 cost_class = "HIGH"
 supports_structured_output = true
+max_output_tokens = 256

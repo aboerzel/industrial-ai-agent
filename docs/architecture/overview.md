@@ -283,7 +283,7 @@ flowchart LR
 FastAPI now provides the local/demo external Application Boundary. Its versioned
 `POST /api/v1/runs` free-form endpoint creates a UUID, records lifecycle state in the PostgreSQL
 `agent_runtime` schema, and awaits an injected troubleshooting run service. That service creates
-server-owned `CONFIDENTIAL_TROUBLESHOOTING` requirements, routes a semantic profile, and invokes
+server-owned run requirements, routes a semantic profile, and invokes
 the existing LangGraph MCP path. Public Pydantic API contracts contain only the run ID,
 status, narrative final answer, bounded structured investigation steps derived from the
 actual tool trajectory, bounded structured follow-up prompts, and normalized tool calls;
@@ -310,8 +310,12 @@ authorizes public-cloud model processing.
 Compose publishes host-facing demo and diagnostic ports only on `127.0.0.1`; services
 communicating only within Compose, including the OTel Collector, have no host port.
 Grafana anonymous local access is restricted to Viewer. `LOCAL_ONLY_MODE=true` removes
-public-cloud profiles from routing; otherwise the Full Demo requires a valid public
-provider credential for the configured `public_fast` profile.
+public-cloud profiles from routing. The bounded S04 position-reference recovery scenario
+uses the server-owned `CONFIDENTIAL_RECOVERY` scope and requires `nvidia_quality`; it does
+not fall back to another provider when NVIDIA is unavailable. That scope exposes only the
+three bounded position-reference recovery capabilities, while other Confidential
+troubleshooting remains on the configured `public_fast` profile. All routes retain the
+same final public-cloud egress check.
 
 `POST /api/v1/diagnostics` is the only INTERNAL run entry point. It accepts only
 bounded product and station identifiers, verifies the required projections through an
@@ -836,6 +840,9 @@ it exercises the bounded port for the reference-calibration demonstrator only.
 contracts. Execution consumes an approved, run-, target-, and operation-bound HITL
 decision and delegates the fresh observe-precondition-authorize-act-observe-verify loop
 to `ClosedLoopRecoveryService`; neither the model nor a tool argument supplies approval.
+The Hardware MCP recovery capabilities are station-oriented: trusted infrastructure
+resolves the single bounded position-reference device for an authorized station, so the
+model cannot select or enumerate physical device identities.
 An MHS adapter, real hardware, and Vision integration remain unimplemented.
 
 Must remain independent from:
@@ -926,8 +933,11 @@ surface. It exposes `get_position_reference_status`,
 `execute_reference_calibration` capability. The LangGraph HITL interrupt stores an
 approval bound to its run, station, device, and operation; the execution capability
 consumes it once and delegates to `ClosedLoopRecoveryService`, which always re-reads
-preconditions and independently verifies the resulting state. An MHS adapter, real
-hardware, and Vision integration remain unimplemented.
+preconditions and independently verifies the resulting state. The deployed demo runtime
+registers Hardware MCP alone for `CONFIDENTIAL_RECOVERY`; Factory and Knowledge MCP remain
+available to the broader `CONFIDENTIAL_TROUBLESHOOTING` scope. The Hardware MCP process
+uses the deterministic simulated position encoder and the persisted approval-claim
+adapter. An MHS adapter, real hardware, and Vision integration remain unimplemented.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores
@@ -1105,7 +1115,9 @@ flowchart TD
     class Factory,Production,Knowledge,Vision,Hardware service
 ```
 
-This is a target direction, not the current implementation.
+This remains a target direction. The current deployed composition includes Factory MCP,
+Knowledge MCP, and the bounded Hardware MCP S04 recovery slice; Production and Vision
+MCP remain future capabilities.
 
 Future physical-device integration and Closed-Loop Recovery are governed by
 [ADR-018](../decisions/ADR-018-physical-device-integration-and-closed-loop-recovery.md).

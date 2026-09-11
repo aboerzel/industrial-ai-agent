@@ -398,6 +398,37 @@ test("renders a single-composer investigation workspace", async (t) => {
     }
   });
 
+  await t.test("enables PDF export for a persisted failed transcript", async () => {
+    const failedInvestigation = {
+      ...LIMIT_REACHED_INVESTIGATION,
+      status: "failed",
+    };
+    const { document, window, restoreFetch } = await loadApp((url) => {
+      if (String(url).includes("/api/v1/runs")) {
+        return jsonResponse({
+          ...runResponse(),
+          status: "failed",
+          answer: null,
+          error: {
+            code: "llm_rate_limit",
+            message: "The language model is temporarily unavailable.",
+          },
+        });
+      }
+      return jsonResponse(failedInvestigation);
+    });
+    try {
+      submit(document, window);
+      await settle();
+
+      assert.equal(document.querySelector("#run-status")?.dataset.status, "failed");
+      assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
+      assert.match(document.querySelector(".agent-turn")?.textContent ?? "", /LLM-Limit erreicht/);
+    } finally {
+      restoreFetch();
+    }
+  });
+
   await t.test("clears only active UI context when starting a new investigation", async () => {
     let getRequests = 0;
     const submittedRuns = [];

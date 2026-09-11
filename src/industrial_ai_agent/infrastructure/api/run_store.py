@@ -188,6 +188,7 @@ class InMemoryAgentRunStore:
             request_text=existing.request_text,
             response_language=existing.response_language,
             result=result,
+            error_code=recovery_failure_code(result),
             approval_request=None,
             approval_action=existing.approval_action,
             approval_decision=existing.approval_decision,
@@ -375,7 +376,17 @@ class InMemoryAgentRunStore:
 def _to_public_status(result: AgentRunResult) -> RunStatus:
     if result.status.value == "SUCCESS":
         return RunStatus.SUCCESS
-    return RunStatus.LIMIT_REACHED
+    if result.status.value == "LIMIT_REACHED":
+        return RunStatus.LIMIT_REACHED
+    return RunStatus.FAILED
+
+
+def recovery_failure_code(result: AgentRunResult) -> str | None:
+    return {
+        "RECOVERY_INCOMPLETE": "recovery_incomplete",
+        "RECOVERY_BLOCKED": "recovery_blocked",
+        "RECOVERY_FAILED": "recovery_failed",
+    }.get(result.status.value)
 
 
 def _inspection(record: StoredAgentRun) -> RuntimeRunInspection:

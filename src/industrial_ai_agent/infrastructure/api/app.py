@@ -88,6 +88,9 @@ _PERSISTED_RUN_ERROR_CODES = frozenset(
         "model_egress_denied",
         "no_eligible_model",
         "agent_execution_timeout",
+        "recovery_incomplete",
+        "recovery_blocked",
+        "recovery_failed",
     }
 )
 _SAFE_PROVIDER_ERROR_TYPES = frozenset(
@@ -618,21 +621,9 @@ async def _start_run(
                 timeout=_execution_timeout_seconds(request),
             )
     except TimeoutError:
-        await store.fail(run_id, "agent_execution_timeout")
-        _raise_api_run_error(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            code="agent_execution_timeout",
-            message=user_facing_error_message(
-                "agent_execution_timeout", response_language
-            ),
-        )
+        return _to_run_response(await store.fail(run_id, "agent_execution_timeout"))
     except NoEligibleModelError:
-        await store.fail(run_id, "no_eligible_model")
-        _raise_api_run_error(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            code="no_eligible_model",
-            message=user_facing_error_message("no_eligible_model", response_language),
-        )
+        return _to_run_response(await store.fail(run_id, "no_eligible_model"))
     except (ModelEgressDeniedError, DataClassificationBoundaryError):
         await store.fail(run_id, "model_egress_denied")
         _raise_api_run_error(
@@ -641,30 +632,17 @@ async def _start_run(
             message=user_facing_error_message("model_egress_denied", response_language),
         )
     except McpServiceUnavailableError:
-        await store.fail(run_id, "mcp_service_unavailable")
-        _raise_api_run_error(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            code="mcp_service_unavailable",
-            message=user_facing_error_message(
-                "mcp_service_unavailable", response_language
-            ),
-        )
+        return _to_run_response(await store.fail(run_id, "mcp_service_unavailable"))
     except Exception as error:  # noqa: BLE001 - public API must sanitize unexpected errors.
         provider_error = _provider_error_from(error)
         if provider_error is not None:
-            await store.fail(run_id, provider_error.code)
+            failed_record = await store.fail(run_id, provider_error.code)
             _record_llm_provider_failure(
                 run_id=run_id,
                 error=provider_error,
                 telemetry=_telemetry(request),
             )
-            _raise_api_run_error(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                code=provider_error.code,
-                message=user_facing_error_message(
-                    provider_error.code, response_language
-                ),
-            )
+            return _to_run_response(failed_record)
         _record_internal_failure(
             run_id=run_id, error=error, telemetry=_telemetry(request)
         )
@@ -784,6 +762,7 @@ def _to_run_response(
         answer=sanitize_public_text(result.final_answer)
         if result is not None
         else None,
+        recovery_outcome=result.recovery_outcome if result is not None else None,
         investigation_steps=_to_investigation_steps(result),
         next_steps=_to_next_steps(result),
         identifiers=_to_identifiers(result),
@@ -841,6 +820,7 @@ def _to_investigation_turn(
         response_language=record.response_language.value,
         request=sanitize_public_text(record.request_text) or "",
         answer=sanitize_public_text(result.final_answer) if result else None,
+        recovery_outcome=result.recovery_outcome if result else None,
         investigation_steps=_to_investigation_steps(result),
         next_steps=_to_next_steps(result),
         identifiers=_to_identifiers(result),

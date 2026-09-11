@@ -115,6 +115,9 @@ def user_facing_error_message(
         ),
         "internal_error": "The agent run could not be completed.",
         "agent_execution_timeout": "The agent run exceeded its execution time limit.",
+        "recovery_incomplete": "The requested recovery was not completed.",
+        "recovery_blocked": "The requested recovery was blocked before execution.",
+        "recovery_failed": "The requested recovery did not pass verification.",
     }
     german = {
         "requested_data_unavailable": "Die angeforderten Daten sind nicht verfügbar.",
@@ -138,6 +141,9 @@ def user_facing_error_message(
         ),
         "internal_error": "Der Agent-Run konnte nicht abgeschlossen werden.",
         "agent_execution_timeout": "Der Agent-Run hat sein Ausfuehrungszeitlimit ueberschritten.",
+        "recovery_incomplete": "Die angeforderte Recovery wurde nicht abgeschlossen.",
+        "recovery_blocked": "Die angeforderte Recovery wurde vor der Ausführung blockiert.",
+        "recovery_failed": "Die angeforderte Recovery hat die Verifikation nicht bestanden.",
     }
     messages = german if response_language is ResponseLanguage.DE else english
     return messages.get(error_code, messages["internal_error"])

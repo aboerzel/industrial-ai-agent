@@ -534,6 +534,7 @@ def test_nvidia_profile_uses_the_existing_structured_output_contract() -> None:
     assert fake_client.completions.parameters["response_format"] == (
         request.response_format.model_dump(mode="json", by_alias=True)
     )
+    assert fake_client.completions.parameters["max_tokens"] == 256
 
 
 def test_maps_assistant_tool_call_and_tool_result_messages() -> None:

@@ -42,3 +42,20 @@ max_data_classification = "CONFIDENTIAL"
 capabilities = ["TEXT", "TOOL_CALLING"]
 quality_class = "HIGH"
 cost_class = "LOW"
+
+[profiles.nvidia_quality]
+provider = "nvidia"
+model = "nvidia/nemotron-3.5-lightning-30b-a3b"
+model_env = "NVIDIA_MODEL"
+base_url = "https://integrate.api.nvidia.com/v1"
+base_url_env = "NVIDIA_BASE_URL"
+temperature = 0
+authentication = "api_key"
+api_key_env = "NVIDIA_API_KEY"
+execution_zone = "PUBLIC_CLOUD"
+max_data_classification = "CONFIDENTIAL"
+capabilities = ["TEXT", "TOOL_CALLING"]
+quality_class = "HIGH"
+cost_class = "HIGH"
+supports_structured_output = true
+max_output_tokens = 256

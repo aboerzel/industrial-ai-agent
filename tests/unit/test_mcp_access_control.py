@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from mcp_types import Tool
 
@@ -7,6 +9,7 @@ from industrial_ai_agent.infrastructure.mcp_access_control import (
     DemoBearerTokenAuthenticator,
     McpAuthenticationError,
     McpAuthorizationError,
+    McpHttpAccessControl,
     RegisteredMcpClientContextResolver,
     _registration,
 )
@@ -67,10 +70,6 @@ def test_missing_malformed_and_unknown_bearer_tokens_fail_closed(
 
 
 def test_client_supplied_clearance_and_identity_headers_have_no_authority() -> None:
-    from industrial_ai_agent.infrastructure.mcp_access_control import (
-        McpHttpAccessControl,
-    )
-
     registrations = _registrations()
     access_control = McpHttpAccessControl(
         authenticator=DemoBearerTokenAuthenticator(registrations),
@@ -94,6 +93,24 @@ def test_client_supplied_clearance_and_identity_headers_have_no_authority() -> N
     assert context.security_context.clearance == DataClassification.INTERNAL
     with pytest.raises(McpAuthorizationError, match="MCP tool is not authorized"):
         access_control.authorize_tool(context, "create_maintenance_ticket")
+
+
+def test_server_can_limit_visible_capabilities_to_one_trusted_client() -> None:
+    registrations = _registrations()
+    access_control = McpHttpAccessControl(
+        authenticator=DemoBearerTokenAuthenticator(registrations),
+        resolver=RegisteredMcpClientContextResolver(registrations),
+        tools=lambda: _tools(),
+        required_permission=lambda _: McpPermission.READ_FACTORY,
+        allowed_client_ids=frozenset({"industrial-agent"}),
+    )
+    codex = access_control.access_context_from_headers(
+        {"authorization": "Bearer codex-test-token"}
+    )
+
+    assert asyncio.run(access_control.visible_tools(codex)) == []
+    with pytest.raises(McpAuthorizationError, match="MCP tool is not authorized"):
+        access_control.authorize_tool(codex, "get_product_history")
 
 
 async def _tools() -> list[Tool]:

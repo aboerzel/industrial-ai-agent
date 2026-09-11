@@ -44,6 +44,15 @@ class HardwareRecoveryNotAccessibleError(LookupError):
     """Raised without distinguishing absent, inaccessible, or mismatched targets."""
 
 
+class PositionReferenceDeviceResolver(Protocol):
+    """Resolve the one bounded position-reference target for an authorized station."""
+
+    def resolve_position_reference_device(
+        self, station_id: StationId
+    ) -> DeviceId | None:
+        """Return the configured device or ``None`` without enumerating devices."""
+
+
 @dataclass(frozen=True, slots=True)
 class PositionReferenceStatus:
     state: DeviceState

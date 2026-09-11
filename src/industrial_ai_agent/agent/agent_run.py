@@ -12,6 +12,8 @@ from pydantic import (
     model_validator,
 )
 
+from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
+
 MAX_TOOL_CALLS = 4
 MAX_NEXT_STEPS = 5
 MAX_NEXT_STEP_LENGTH = 500
@@ -82,6 +84,9 @@ class MissingLLMResponseTextError(RuntimeError):
 class AgentRunStatus(StrEnum):
     SUCCESS = "SUCCESS"
     LIMIT_REACHED = "LIMIT_REACHED"
+    RECOVERY_INCOMPLETE = "RECOVERY_INCOMPLETE"
+    RECOVERY_BLOCKED = "RECOVERY_BLOCKED"
+    RECOVERY_FAILED = "RECOVERY_FAILED"
 
 
 class IdentifierType(StrEnum):
@@ -214,6 +219,7 @@ class ExecutedToolCall(BaseModel):
 
     tool: str
     arguments: dict[str, Any]
+    tool_call_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("tool")
     @classmethod
@@ -270,6 +276,7 @@ class AgentRunResult(BaseModel):
     tool_call_count: int = Field(ge=0, le=MAX_TOOL_CALLS)
     executed_tool_calls: tuple[ExecutedToolCall, ...] = ()
     model_profile_name: str | None = None
+    recovery_outcome: RecoveryOutcome | None = None
 
     @model_validator(mode="after")
     def validate_status_fields(self) -> Self:
@@ -294,6 +301,16 @@ class AgentRunResult(BaseModel):
                 )
         if self.status is AgentRunStatus.SUCCESS and self.final_answer is None:
             raise ValueError("SUCCESS requires a final answer")
+        if (
+            self.recovery_outcome is RecoveryOutcome.SUCCEEDED
+            and self.status is not AgentRunStatus.SUCCESS
+        ):
+            raise ValueError("Succeeded recovery outcome requires SUCCESS status")
+        if (
+            self.recovery_outcome is RecoveryOutcome.NOT_REQUIRED
+            and self.status is not AgentRunStatus.SUCCESS
+        ):
+            raise ValueError("Not-required recovery outcome requires SUCCESS status")
         if self.status is AgentRunStatus.LIMIT_REACHED:
             if self.final_answer is not None:
                 raise ValueError("LIMIT_REACHED cannot contain a final answer")

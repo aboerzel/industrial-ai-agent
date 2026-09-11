@@ -92,6 +92,35 @@ services:
       factory-mcp:
         condition: service_healthy
 
+  hardware-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.hardware-mcp
+    restart: unless-stopped
+    environment:
+      AGENT_RUNTIME_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
+      MCP_INDUSTRIAL_AGENT_TOKEN: ${MCP_INDUSTRIAL_AGENT_TOKEN:?Set MCP_INDUSTRIAL_AGENT_TOKEN in .env}
+      MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN: ${MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN:?Set MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN in .env}
+      MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN: ${MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN:?Set MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN in .env}
+      MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN: ${MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN:?Set MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN in .env}
+      MCP_CODEX_DEVELOPMENT_TOKEN: ${MCP_CODEX_DEVELOPMENT_TOKEN:?Set MCP_CODEX_DEVELOPMENT_TOKEN in .env}
+      OTEL_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SERVICE_NAME: hardware-mcp
+    ports:
+      - "127.0.0.1:8006:8006"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8006), 2).close()"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    depends_on:
+      factory-db:
+        condition: service_healthy
+      otel-collector:
+        condition: service_healthy
+
   agent-api:
     build:
       context: .
@@ -102,11 +131,15 @@ services:
       AGENT_RUNTIME_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
       FACTORY_MCP_URL: http://factory-mcp:8001/mcp
       KNOWLEDGE_MCP_URL: http://knowledge-mcp:8002/mcp
+      HARDWARE_MCP_URL: http://hardware-mcp:8006/mcp
       MCP_INDUSTRIAL_AGENT_TOKEN: ${MCP_INDUSTRIAL_AGENT_TOKEN:?Set MCP_INDUSTRIAL_AGENT_TOKEN in .env}
       MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN: ${MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN:?Set MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN in .env}
       MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN: ${MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN:?Set MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN in .env}
       MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN: ${MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN:?Set MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN in .env}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+      NVIDIA_MODEL: ${NVIDIA_MODEL:-nvidia/nemotron-3.5-lightning-30b-a3b}
       LOCAL_ONLY_MODE: ${LOCAL_ONLY_MODE:-false}
       MODEL_CONFIGURATION_PATH: /app/config/model_profiles.docker.toml
       OTEL_ENABLED: "true"
@@ -127,6 +160,8 @@ services:
       factory-mcp:
         condition: service_healthy
       knowledge-mcp:
+        condition: service_healthy
+      hardware-mcp:
         condition: service_healthy
       otel-collector:
         condition: service_healthy

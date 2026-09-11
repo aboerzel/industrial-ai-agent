@@ -304,6 +304,7 @@ class RecoveryProposal:
 
 class RecoveryOutcome(StrEnum):
     SUCCEEDED = "SUCCEEDED"
+    NOT_REQUIRED = "NOT_REQUIRED"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
 
@@ -358,6 +359,15 @@ class RecoveryResult:
                 raise ValueError("Successful recovery requires post-action observation")
             if self.verification.status is not VerificationStatus.PASSED:
                 raise ValueError("Successful recovery requires passed verification")
+        if self.outcome is RecoveryOutcome.NOT_REQUIRED:
+            if self.operation_result is not None:
+                raise ValueError("Recovery not required must not execute an operation")
+            if self.post_action_state is not None:
+                raise ValueError("Recovery not required has no post-action observation")
+            if self.pre_action_state is None:
+                raise ValueError("Recovery not required requires an observation")
+            if self.verification.status is not VerificationStatus.NOT_RUN:
+                raise ValueError("Recovery not required must not run verification")
         if self.outcome is RecoveryOutcome.BLOCKED:
             if self.operation_result is not None:
                 raise ValueError("Blocked recovery must not execute an operation")

@@ -123,6 +123,27 @@ def test_loads_external_openai_compatible_provider_profiles(
     )
 
 
+def test_docker_configuration_includes_nvidia_quality_profile() -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.docker.toml"
+    )
+
+    profile = configuration.get_profile("nvidia_quality")
+
+    assert profile.provider == "nvidia"
+    assert profile.model == "nvidia/nemotron-3.5-lightning-30b-a3b"
+    assert str(profile.base_url) == "https://integrate.api.nvidia.com/v1"
+    assert profile.api_key_env == "NVIDIA_API_KEY"
+    assert profile.supports_structured_output is True
+    assert profile.max_output_tokens == 256
+
+
+def test_nvidia_profile_has_a_bounded_agent_output_budget() -> None:
+    configuration = load_project_configuration()
+
+    assert configuration.get_profile("nvidia_quality").max_output_tokens == 256
+
+
 @pytest.mark.parametrize(
     ("environment", "expected_profiles"),
     (

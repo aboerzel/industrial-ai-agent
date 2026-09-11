@@ -183,6 +183,28 @@ def test_blocked_recovery_is_represented_without_an_executed_action() -> None:
     assert result.outcome is RecoveryOutcome.BLOCKED
 
 
+def test_recovery_not_required_requires_a_trusted_observation_without_action() -> None:
+    result = RecoveryResult(
+        operation_result=None,
+        pre_action_state=_state(reference_valid=True, position_deviation=0.01),
+        post_action_state=None,
+        verification=VerificationResult(status=VerificationStatus.NOT_RUN),
+        outcome=RecoveryOutcome.NOT_REQUIRED,
+    )
+
+    assert result.action_executed is False
+    assert result.outcome is RecoveryOutcome.NOT_REQUIRED
+
+    with pytest.raises(ValueError, match="must not execute"):
+        RecoveryResult(
+            operation_result=_executed_operation_result(),
+            pre_action_state=_state(reference_valid=True, position_deviation=0.01),
+            post_action_state=None,
+            verification=VerificationResult(status=VerificationStatus.NOT_RUN),
+            outcome=RecoveryOutcome.NOT_REQUIRED,
+        )
+
+
 def test_failed_action_produces_failed_recovery() -> None:
     operation = DeviceOperation(
         device_id=DEVICE_ID,

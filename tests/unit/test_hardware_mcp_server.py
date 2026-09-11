@@ -11,6 +11,8 @@ from industrial_ai_agent.application.hardware_recovery import (
 )
 from industrial_ai_agent.application.mcp_access import McpPermission
 from industrial_ai_agent.domain.machine_status import MachineState
+from industrial_ai_agent.domain.physical_device import DeviceId
+from industrial_ai_agent.domain.product_history import StationId
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.hardware_mcp_server import (
     _HARDWARE_TOOL_PERMISSIONS,
@@ -54,7 +56,7 @@ def test_hardware_mcp_exposes_only_strict_bounded_hardware_recovery_tools() -> N
     assert tools[2].annotations.read_only_hint is False
     for tool in tools[:2]:
         assert tool.input_schema["additionalProperties"] is False
-        assert set(tool.input_schema["properties"]) == {"station_id", "device_id"}
+        assert set(tool.input_schema["properties"]) == {"station_id"}
     assert tools[2].input_schema["additionalProperties"] is False
     assert set(tools[2].input_schema["properties"]) == {
         "station_id",
@@ -164,7 +166,9 @@ def test_mcp_execute_delegates_to_the_closed_loop_execution_service() -> None:
         ("prepare_reference_calibration", {"requires_approval": False}),
         ("prepare_reference_calibration", {"tolerance": 99}),
         ("prepare_reference_calibration", {"approved": True}),
+        ("prepare_reference_calibration", {"device_id": "POSITION-ENC-99"}),
         ("get_position_reference_status", {"backend": "other"}),
+        ("get_position_reference_status", {"device_id": "POSITION-ENC-99"}),
     ),
 )
 def test_tool_inputs_reject_model_supplied_safety_and_backend_values(
@@ -176,11 +180,21 @@ def test_tool_inputs_reject_model_supplied_safety_and_backend_values(
         with pytest.raises(ToolError):
             await server.call_tool(
                 tool_name,
-                {"station_id": "S04", "device_id": "POSITION-ENC-02", **extra_argument},
+                {"station_id": "S04", **extra_argument},
             )
 
     asyncio.run(call())
     assert adapter.execute_calls == 0
+
+
+def test_simulator_resolves_only_its_bounded_s04_position_reference_device() -> None:
+    adapter = SimulatedPositionEncoderAdapter()
+
+    assert adapter.resolve_position_reference_device(StationId("S04")) == DeviceId(
+        "POSITION-ENC-02"
+    )
+    assert adapter.resolve_position_reference_device(StationId("S99")) is None
+    assert not hasattr(adapter, "list_devices")
 
 
 def test_permissions_are_distinct_for_status_preparation_and_execution() -> None:
@@ -265,11 +279,9 @@ def test_insufficient_clearance_and_unknown_target_have_the_same_neutral_error()
     server, _ = _server()
 
     restricted_error = _tool_error(
-        restricted_server, "get_position_reference_status", "S04", "POSITION-ENC-02"
+        restricted_server, "get_position_reference_status", "S04"
     )
-    unknown_error = _tool_error(
-        server, "get_position_reference_status", "S04", "POSITION-ENC-99"
-    )
+    unknown_error = _tool_error(server, "get_position_reference_status", "S99")
 
     assert str(restricted_error) == str(unknown_error)
     assert "POSITION-ENC-02" not in str(restricted_error)
@@ -297,6 +309,7 @@ def _server(
     service = HardwareRecoveryPreparationService(physical_devices=adapter)
     server = create_hardware_mcp_server(
         recovery_preparation=service,
+        position_reference_devices=adapter,
         **(
             {"default_security_context": default_security_context}
             if default_security_context is not None
@@ -310,7 +323,7 @@ def _call(server, tool_name: str) -> dict[str, object]:  # type: ignore[no-untyp
     async def call() -> dict[str, object]:
         result = await server.call_tool(
             tool_name,
-            {"station_id": "S04", "device_id": "POSITION-ENC-02"},
+            {"station_id": "S04"},
         )
         return result.structured_content
 
@@ -321,14 +334,16 @@ def _tool_error(  # type: ignore[no-untyped-def]
     server,
     tool_name: str,
     station_id: str,
-    device_id: str,
+    device_id: str | None = None,
     **extra_arguments: object,
 ) -> ToolError:
     async def call() -> ToolError:
         with pytest.raises(ToolError) as error:
             await server.call_tool(
                 tool_name,
-                {
+                {"station_id": station_id, **extra_arguments}
+                if device_id is None
+                else {
                     "station_id": station_id,
                     "device_id": device_id,
                     **extra_arguments,

@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
+from industrial_ai_agent.agent.llm import ModelProfile
 from industrial_ai_agent.agent.model_routing import (
     CostPreference,
     LLMCapability,
@@ -21,6 +22,7 @@ class AgentRunProfile(StrEnum):
     PUBLIC_INFORMATION = "PUBLIC_INFORMATION"
     INTERNAL_DIAGNOSTIC = "INTERNAL_DIAGNOSTIC"
     CONFIDENTIAL_TROUBLESHOOTING = "CONFIDENTIAL_TROUBLESHOOTING"
+    CONFIDENTIAL_RECOVERY = "CONFIDENTIAL_RECOVERY"
     RESTRICTED_INFORMATION = "RESTRICTED_INFORMATION"
     RESTRICTED_TROUBLESHOOTING = "RESTRICTED_TROUBLESHOOTING"
 
@@ -64,9 +66,19 @@ CONFIDENTIAL_TROUBLESHOOTING_TOOLS = frozenset(
         "get_product_overview",
         "get_product_history",
         "get_machine_status",
+        "get_position_reference_status",
         "get_maintenance_ticket",
+        "prepare_reference_calibration",
         "search_documentation",
+        "execute_reference_calibration",
         "create_maintenance_ticket",
+    }
+)
+CONFIDENTIAL_RECOVERY_TOOLS = frozenset(
+    {
+        "get_position_reference_status",
+        "prepare_reference_calibration",
+        "execute_reference_calibration",
     }
 )
 RESTRICTED_INFORMATION_TOOLS = frozenset(
@@ -171,6 +183,15 @@ class AgentRunClassificationPolicy:
                 allowed_tool_names=CONFIDENTIAL_TROUBLESHOOTING_TOOLS,
                 mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
+        if profile is AgentRunProfile.CONFIDENTIAL_RECOVERY:
+            return ResolvedRunPolicy(
+                run_profile=profile,
+                data_classification=classification,
+                mcp_clearance_ceiling=rls_clearance,
+                task_requirements=_recovery_requirements(classification),
+                allowed_tool_names=CONFIDENTIAL_RECOVERY_TOOLS,
+                mcp_client_identity=_mcp_identity_for(rls_clearance),
+            )
         if profile is AgentRunProfile.RESTRICTED_TROUBLESHOOTING:
             return ResolvedRunPolicy(
                 run_profile=profile,
@@ -228,11 +249,25 @@ def _information_requirements(classification: DataClassification) -> TaskRequire
     )
 
 
+def _recovery_requirements(classification: DataClassification) -> TaskRequirements:
+    return TaskRequirements(
+        task_role=TaskRole.TROUBLESHOOTING,
+        required_capabilities=frozenset(
+            {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
+        ),
+        minimum_quality=QualityClass.HIGH,
+        cost_preference=CostPreference.PREFER_QUALITY,
+        data_classification=classification,
+        required_model_profile=ModelProfile("nvidia_quality"),
+    )
+
+
 def _profile_classification(profile: AgentRunProfile) -> DataClassification:
     return {
         AgentRunProfile.PUBLIC_INFORMATION: DataClassification.PUBLIC,
         AgentRunProfile.INTERNAL_DIAGNOSTIC: DataClassification.INTERNAL,
         AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING: DataClassification.CONFIDENTIAL,
+        AgentRunProfile.CONFIDENTIAL_RECOVERY: DataClassification.CONFIDENTIAL,
         AgentRunProfile.RESTRICTED_INFORMATION: DataClassification.RESTRICTED,
         AgentRunProfile.RESTRICTED_TROUBLESHOOTING: DataClassification.RESTRICTED,
     }[profile]
@@ -264,6 +299,8 @@ def resolve_demo_run_profile(
         return AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
     if _is_restricted_information_request(normalized, security_context):
         return AgentRunProfile.RESTRICTED_INFORMATION
+    if _is_s04_position_reference_recovery(normalized):
+        return AgentRunProfile.CONFIDENTIAL_RECOVERY
     for identifier, profile in _DEMO_ENTITY_PROFILES.items():
         if identifier in normalized:
             return profile
@@ -334,4 +371,15 @@ def _is_ticket_lookup_request(normalized_message: str) -> bool:
     return any(
         is_maintenance_ticket_id(candidate.strip(".,;:!?()[]{}\"'"))
         for candidate in normalized_message.split()
+    )
+
+
+def _is_s04_position_reference_recovery(normalized_message: str) -> bool:
+    return "S04" in normalized_message and any(
+        marker in normalized_message
+        for marker in (
+            "POSITIONSREFERENZ",
+            "POSITION REFERENCE",
+            "REFERENCE CALIBRATION",
+        )
     )

@@ -63,6 +63,83 @@ test("renders every public terminal and approval lifecycle state", async (t) => 
   }
 });
 
+test("accepts the bounded S04 recovery approval response contract", async () => {
+  const payload = {
+    run_id: RUN_ID,
+    status: "waiting_for_approval",
+    data_classification: "CONFIDENTIAL",
+    answer: null,
+    tool_calls: [],
+    approval_request: {
+      action: "execute_reference_calibration",
+      summary: "Reference calibration is ready for approval.",
+      arguments: {
+        station_id: "S04",
+        device_id: "POSITION-ENC-02",
+        operation_type: "reference_calibration",
+      },
+      classification: "CONFIDENTIAL",
+      model_profile: "nvidia_quality",
+      status: "waiting_for_approval",
+      created_at: "2026-09-11T11:53:47+00:00",
+    },
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
+test("accepts bounded hardware recovery tool calls in the run result contract", async () => {
+  const payload = {
+    run_id: RUN_ID,
+    status: "success",
+    data_classification: "CONFIDENTIAL",
+    answer: "Recovery completed.",
+    tool_calls: [
+      { tool: "get_position_reference_status", arguments: { station_id: "S04" } },
+      { tool: "prepare_reference_calibration", arguments: { station_id: "S04" } },
+      { tool: "execute_reference_calibration", arguments: { station_id: "S04" } },
+    ],
+    approval_request: null,
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
+test("accepts the explicit no-action recovery outcome", async () => {
+  const payload = {
+    run_id: RUN_ID,
+    status: "success",
+    data_classification: "CONFIDENTIAL",
+    answer: "No recovery is required.",
+    recovery_outcome: "NOT_REQUIRED",
+    tool_calls: [
+      { tool: "get_position_reference_status", arguments: { station_id: "S04" } },
+    ],
+    approval_request: null,
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
+test("accepts a bounded incomplete S04 recovery result as failed", async () => {
+  const payload = {
+    run_id: RUN_ID,
+    status: "failed",
+    data_classification: "CONFIDENTIAL",
+    answer: "The requested recovery was not completed.",
+    tool_calls: [
+      { tool: "get_position_reference_status", arguments: { station_id: "S04" } },
+    ],
+    error: {
+      code: "recovery_incomplete",
+      message: "The requested recovery was not completed.",
+    },
+    approval_request: null,
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
 test("accepts discovery tool calls in the existing run result contract", async () => {
   const payload = {
     run_id: RUN_ID,

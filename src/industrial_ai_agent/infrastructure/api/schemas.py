@@ -14,6 +14,7 @@ from pydantic import (
 )
 
 from industrial_ai_agent.agent.response_language import ResponseLanguage
+from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
 
 
 class RunStatus(StrEnum):
@@ -104,7 +105,9 @@ class PublicToolName(StrEnum):
     GET_PRODUCT_OVERVIEW = "get_product_overview"
     GET_PRODUCT_HISTORY = "get_product_history"
     GET_MACHINE_STATUS = "get_machine_status"
+    GET_POSITION_REFERENCE_STATUS = "get_position_reference_status"
     GET_MAINTENANCE_TICKET = "get_maintenance_ticket"
+    PREPARE_REFERENCE_CALIBRATION = "prepare_reference_calibration"
     SEARCH_DOCUMENTATION = "search_documentation"
     CREATE_MAINTENANCE_TICKET = "create_maintenance_ticket"
     EXECUTE_REFERENCE_CALIBRATION = "execute_reference_calibration"
@@ -181,6 +184,7 @@ class RunResponse(BaseModel):
     status: RunStatus
     data_classification: DataClassificationLabel
     answer: Annotated[str, StringConstraints(max_length=8_000)] | None = None
+    recovery_outcome: RecoveryOutcome | None = None
     investigation_steps: tuple[InvestigationStepResponse, ...] = Field(
         default=(), max_length=4
     )
@@ -206,6 +210,7 @@ class InvestigationTurnResponse(BaseModel):
     response_language: str
     request: Annotated[str, StringConstraints(max_length=4_000)]
     answer: Annotated[str, StringConstraints(max_length=8_000)] | None = None
+    recovery_outcome: RecoveryOutcome | None = None
     investigation_steps: tuple[InvestigationStepResponse, ...] = Field(
         default=(), max_length=4
     )

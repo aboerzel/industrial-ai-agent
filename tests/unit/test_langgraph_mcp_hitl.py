@@ -21,6 +21,7 @@ from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
     MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
     LangGraphTroubleshootingAgent,
+    _model_visible_tools,
 )
 from industrial_ai_agent.agent.llm import (
     FinishReason,
@@ -34,6 +35,7 @@ from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
+from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketExecutionArguments,
@@ -118,16 +120,34 @@ class RecordingMcpToolProvider:
 @dataclass
 class HardwareRecoveryMcpToolProvider:
     calls: list[dict[str, str]] = field(default_factory=list)
+    status_result: str = (
+        '{"station_id":"S04","device_id":"POSITION-ENC-02",'
+        '"reference_valid":false,"position_deviation_mm":0.43,'
+        '"configured_tolerance_mm":0.20,"calibration_supported":true,'
+        '"classification":"CONFIDENTIAL"}'
+    )
+    preparation_result: str = (
+        '{"station_id":"S04","device_id":"POSITION-ENC-02",'
+        '"proposed_operation":"reference_calibration",'
+        '"requires_approval":true,"precondition_evaluations":['
+        '{"status":"PASSED"},{"status":"PASSED"},'
+        '{"status":"PASSED"},{"status":"PASSED"}],'
+        '"classification":"CONFIDENTIAL"}'
+    )
+    execution_result: str = (
+        '{"action_executed":true,"verification_status":"PASSED",'
+        '"recovery_outcome":"SUCCEEDED","classification":"CONFIDENTIAL"}'
+    )
 
     @asynccontextmanager
     async def open_session(self) -> AsyncIterator[McpToolSession]:
-        async def get_position_reference_status(station_id: str, device_id: str) -> str:
-            assert (station_id, device_id) == ("S04", "POSITION-ENC-02")
-            return '{"reference_valid":false,"classification":"CONFIDENTIAL"}'
+        async def get_position_reference_status(station_id: str) -> str:
+            assert station_id == "S04"
+            return self.status_result
 
-        async def prepare_reference_calibration(station_id: str, device_id: str) -> str:
-            assert (station_id, device_id) == ("S04", "POSITION-ENC-02")
-            return '{"requires_approval":true,"classification":"CONFIDENTIAL"}'
+        async def prepare_reference_calibration(station_id: str) -> str:
+            assert station_id == "S04"
+            return self.preparation_result
 
         async def execute_reference_calibration(
             station_id: str,
@@ -143,7 +163,7 @@ class HardwareRecoveryMcpToolProvider:
                     "action_id": action_id,
                 }
             )
-            return '{"recovery_outcome":"SUCCEEDED","classification":"CONFIDENTIAL"}'
+            return self.execution_result
 
         yield McpToolSession(
             tools=(
@@ -181,6 +201,26 @@ class HardwareRecoveryMcpToolProvider:
                 ),
             ),
         )
+
+
+def test_model_visible_hardware_recovery_tools_are_station_oriented() -> None:
+    provider = HardwareRecoveryMcpToolProvider()
+
+    async def visible_schemas() -> dict[str, set[str]]:
+        async with provider.open_session() as session:
+            visible_tools = _model_visible_tools(session.tools, session.tool_policies)
+            return {
+                tool.name: set(tool.args_schema.model_json_schema()["properties"])
+                for tool in visible_tools
+            }
+
+    schemas = asyncio.run(visible_schemas())
+
+    assert schemas == {
+        "get_position_reference_status": {"station_id"},
+        "prepare_reference_calibration": {"station_id"},
+        "execute_reference_calibration": {"station_id"},
+    }
 
 
 @dataclass
@@ -250,7 +290,7 @@ def _reference_calibration_action_response() -> LLMResponse:
             LLMToolCall(
                 id="reference-calibration-call-1",
                 name=EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
-                arguments={"station_id": "S04", "device_id": "POSITION-ENC-02"},
+                arguments={"station_id": "S04"},
             ),
         ),
         finish_reason=FinishReason.TOOL_CALLS,
@@ -440,12 +480,14 @@ def _agent(
     *,
     profile: ModelProfile = DEFAULT_PROFILE,
     classification: DataClassification = DataClassification.CONFIDENTIAL,
+    requires_verified_recovery: bool = False,
 ) -> LangGraphTroubleshootingAgent:
     return LangGraphTroubleshootingAgent(
         LLMClientChatModel(client, profile),
         mcp_tool_provider=cast(McpToolProvider, cast(object, provider)),
         checkpointer=checkpointer,
         run_classification=classification,
+        requires_verified_recovery=requires_verified_recovery,
     )
 
 
@@ -512,23 +554,11 @@ def test_hardware_recovery_hitl_binds_approved_execution_to_run_and_keeps_budget
                     LLMToolCall(
                         id="status-call-1",
                         name="get_position_reference_status",
-                        arguments={"station_id": "S04", "device_id": "POSITION-ENC-02"},
+                        arguments={"station_id": "S04"},
                     ),
                 ),
                 finish_reason=FinishReason.TOOL_CALLS,
             ),
-            LLMResponse(
-                text=None,
-                tool_calls=(
-                    LLMToolCall(
-                        id="prepare-call-1",
-                        name="prepare_reference_calibration",
-                        arguments={"station_id": "S04", "device_id": "POSITION-ENC-02"},
-                    ),
-                ),
-                finish_reason=FinishReason.TOOL_CALLS,
-            ),
-            _reference_calibration_action_response(),
         ]
     )
     agent = LangGraphTroubleshootingAgent(
@@ -536,6 +566,7 @@ def test_hardware_recovery_hitl_binds_approved_execution_to_run_and_keeps_budget
         mcp_tool_provider=cast(McpToolProvider, cast(object, provider)),
         checkpointer=checkpointer,
         run_classification=DataClassification.CONFIDENTIAL,
+        requires_verified_recovery=True,
     )
 
     started, payload = asyncio.run(
@@ -543,24 +574,25 @@ def test_hardware_recovery_hitl_binds_approved_execution_to_run_and_keeps_budget
     )
 
     assert started["executed_tool_count"] == 2
-    assert payload == {
-        "kind": "action_approval",
-        "action": EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
-        "action_id": "reference-calibration-call-1",
-        "details": {
-            "station_id": "S04",
-            "device_id": "POSITION-ENC-02",
-            "operation_type": "reference_calibration",
-            "summary": "Run controlled reference calibration for POSITION-ENC-02 at S04.",
-        },
+    assert started["run_status"] is None
+    assert payload is not None
+    assert payload["kind"] == "action_approval"
+    assert payload["action"] == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME
+    assert isinstance(payload["action_id"], str)
+    assert payload["details"] == {
+        "station_id": "S04",
+        "device_id": "POSITION-ENC-02",
+        "operation_type": "reference_calibration",
+        "summary": "Run controlled reference calibration for POSITION-ENC-02 at S04.",
     }
     assert provider.calls == []
 
     resumed_agent = LangGraphTroubleshootingAgent(
-        LLMClientChatModel(FakeLLMClient([_final_response()]), DEFAULT_PROFILE),
+        LLMClientChatModel(FakeLLMClient([]), DEFAULT_PROFILE),
         mcp_tool_provider=cast(McpToolProvider, cast(object, provider)),
         checkpointer=checkpointer,
         run_classification=DataClassification.CONFIDENTIAL,
+        requires_verified_recovery=True,
     )
     completed = asyncio.run(
         resumed_agent.aresume_via_mcp(thread_id=run_id, approval="approve")
@@ -577,7 +609,7 @@ def test_hardware_recovery_hitl_binds_approved_execution_to_run_and_keeps_budget
             "station_id": "S04",
             "device_id": "POSITION-ENC-02",
             "run_id": run_id,
-            "action_id": "reference-calibration-call-1",
+            "action_id": payload["action_id"],
         }
     ]
 
@@ -586,13 +618,27 @@ def test_hardware_recovery_hitl_rejection_never_calls_execution_tool() -> None:
     checkpointer = InMemorySaver()
     provider = HardwareRecoveryMcpToolProvider()
     run_id = str(uuid4())
+    client = FakeLLMClient(
+        [
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="status-call-1",
+                        name="get_position_reference_status",
+                        arguments={"station_id": "S04"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+        ]
+    )
     agent = LangGraphTroubleshootingAgent(
-        LLMClientChatModel(
-            FakeLLMClient([_reference_calibration_action_response()]), DEFAULT_PROFILE
-        ),
+        LLMClientChatModel(client, DEFAULT_PROFILE),
         mcp_tool_provider=cast(McpToolProvider, cast(object, provider)),
         checkpointer=checkpointer,
         run_classification=DataClassification.CONFIDENTIAL,
+        requires_verified_recovery=True,
     )
     asyncio.run(
         agent.astart_via_mcp("Recover S04 position reference.", thread_id=run_id)
@@ -600,8 +646,212 @@ def test_hardware_recovery_hitl_rejection_never_calls_execution_tool() -> None:
 
     rejected = asyncio.run(agent.aresume_via_mcp(thread_id=run_id, approval="reject"))
 
-    assert rejected["executed_tool_count"] == 0
+    assert rejected["executed_tool_count"] == 2
+    assert rejected["run_status"] is AgentRunStatus.RECOVERY_BLOCKED
     assert provider.calls == []
+
+
+def test_recovery_intent_bypasses_premature_text_after_recoverable_status() -> None:
+    checkpointer = InMemorySaver()
+    provider = HardwareRecoveryMcpToolProvider()
+    client = FakeLLMClient(
+        [
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="status-call-1",
+                        name="get_position_reference_status",
+                        arguments={"station_id": "S04"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text="Reference calibration should be prepared.",
+                finish_reason=FinishReason.STOP,
+            ),
+        ]
+    )
+    agent = _agent(
+        client,
+        provider,
+        checkpointer,
+        requires_verified_recovery=True,
+    )
+
+    state, payload = asyncio.run(
+        agent.astart_via_mcp("Recover S04 position reference.", thread_id="early-stop")
+    )
+
+    assert payload is not None
+    assert state["run_status"] is None
+    assert state["executed_tool_count"] == 2
+    assert [call.tool for call in state["executed_tool_calls"]] == [
+        "get_position_reference_status",
+        "prepare_reference_calibration",
+    ]
+    assert len(client.requests) == 1
+    assert provider.calls == []
+
+
+def test_healthy_recovery_status_terminates_as_trusted_no_op() -> None:
+    checkpointer = InMemorySaver()
+    provider = HardwareRecoveryMcpToolProvider(
+        status_result=(
+            '{"station_id":"S04","device_id":"POSITION-ENC-02",'
+            '"reference_valid":true,"position_deviation_mm":0.08,'
+            '"configured_tolerance_mm":0.20,"calibration_supported":true,'
+            '"classification":"CONFIDENTIAL"}'
+        )
+    )
+    client = FakeLLMClient(
+        [
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="status-call-1",
+                        name="get_position_reference_status",
+                        arguments={"station_id": "S04"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+        ]
+    )
+
+    state, payload = asyncio.run(
+        _agent(
+            client,
+            provider,
+            checkpointer,
+            requires_verified_recovery=True,
+        ).astart_via_mcp("Recover S04 position reference.", thread_id="healthy-s04")
+    )
+
+    assert state["run_status"] is AgentRunStatus.SUCCESS
+    assert state["recovery_outcome"] is RecoveryOutcome.NOT_REQUIRED
+    assert state["executed_tool_count"] == 1
+    assert [call.tool for call in state["executed_tool_calls"]] == [
+        "get_position_reference_status"
+    ]
+    assert state["final_answer"] == (
+        "No recovery is required. The position reference at station S04 is already valid."
+    )
+    assert payload is None
+    assert provider.calls == []
+    assert len(client.requests) == 1
+
+
+def test_recovery_preparation_block_skips_hitl_and_execution() -> None:
+    checkpointer = InMemorySaver()
+    provider = HardwareRecoveryMcpToolProvider(
+        preparation_result=(
+            '{"station_id":"S04","device_id":"POSITION-ENC-02",'
+            '"proposed_operation":"reference_calibration",'
+            '"requires_approval":true,"precondition_evaluations":['
+            '{"status":"FAILED"}],"classification":"CONFIDENTIAL"}'
+        )
+    )
+    client = FakeLLMClient(
+        [
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="status-call-1",
+                        name="get_position_reference_status",
+                        arguments={"station_id": "S04"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+        ]
+    )
+    agent = _agent(
+        client,
+        provider,
+        checkpointer,
+        requires_verified_recovery=True,
+    )
+
+    state, payload = asyncio.run(
+        agent.astart_via_mcp("Recover S04 position reference.", thread_id="blocked")
+    )
+
+    assert payload is None
+    assert state["run_status"] is AgentRunStatus.RECOVERY_BLOCKED
+    assert state["executed_tool_count"] == 2
+    assert [call.tool for call in state["executed_tool_calls"]] == [
+        "get_position_reference_status",
+        "prepare_reference_calibration",
+    ]
+    assert len(client.requests) == 1
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize(
+    ("execution_result", "expected_status"),
+    (
+        (
+            (
+                '{"action_executed":false,"verification_status":"NOT_RUN",'
+                '"recovery_outcome":"BLOCKED","classification":"CONFIDENTIAL"}'
+            ),
+            AgentRunStatus.RECOVERY_BLOCKED,
+        ),
+        (
+            (
+                '{"action_executed":true,"verification_status":"FAILED",'
+                '"recovery_outcome":"FAILED","classification":"CONFIDENTIAL"}'
+            ),
+            AgentRunStatus.RECOVERY_FAILED,
+        ),
+    ),
+)
+def test_recovery_execution_non_success_never_becomes_completed(
+    execution_result: str, expected_status: AgentRunStatus
+) -> None:
+    checkpointer = InMemorySaver()
+    provider = HardwareRecoveryMcpToolProvider(execution_result=execution_result)
+    run_id = str(uuid4())
+    agent = _agent(
+        FakeLLMClient(
+            [
+                LLMResponse(
+                    text=None,
+                    tool_calls=(
+                        LLMToolCall(
+                            id="status-call-1",
+                            name="get_position_reference_status",
+                            arguments={"station_id": "S04"},
+                        ),
+                    ),
+                    finish_reason=FinishReason.TOOL_CALLS,
+                ),
+            ]
+        ),
+        provider,
+        checkpointer,
+        requires_verified_recovery=True,
+    )
+    asyncio.run(
+        agent.astart_via_mcp("Recover S04 position reference.", thread_id=run_id)
+    )
+
+    completed = asyncio.run(
+        _agent(
+            FakeLLMClient([]),
+            provider,
+            checkpointer,
+            requires_verified_recovery=True,
+        ).aresume_via_mcp(thread_id=run_id, approval="approve")
+    )
+
+    assert completed["run_status"] is expected_status
+    assert completed["executed_tool_count"] == 3
+    assert len(provider.calls) == 1
 
 
 def test_mcp_hitl_rejects_model_controlled_idempotency_key_before_write() -> None:

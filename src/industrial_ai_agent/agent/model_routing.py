@@ -78,6 +78,7 @@ class TaskRequirements:
     minimum_quality: QualityClass
     cost_preference: CostPreference
     data_classification: DataClassification
+    required_model_profile: ModelProfile | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_role, TaskRole):
@@ -95,6 +96,10 @@ class TaskRequirements:
             raise TypeError("Unknown cost preference")
         if not isinstance(self.data_classification, DataClassification):
             raise TypeError("Unknown data classification")
+        if self.required_model_profile is not None and not isinstance(
+            self.required_model_profile, ModelProfile
+        ):
+            raise TypeError("Required model profile must be a ModelProfile")
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +168,12 @@ class DeterministicModelRouter:
             for profile in capability_eligible
             if profile.quality_class.rank >= requirements.minimum_quality.rank
         )
+        if requirements.required_model_profile is not None:
+            quality_eligible = (
+                profile
+                for profile in quality_eligible
+                if profile.profile == requirements.required_model_profile
+            )
         return tuple(sorted(quality_eligible, key=lambda item: item.profile.name))
 
     def route(

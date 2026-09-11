@@ -333,5 +333,6 @@ def _execution_from_state(
             tool_call_count=values.get("executed_tool_count", 0),
             executed_tool_calls=values.get("executed_tool_calls", ()),
             model_profile_name=values.get("model_profile_name"),
+            recovery_outcome=values.get("recovery_outcome"),
         )
     )

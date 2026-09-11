@@ -506,6 +506,93 @@ def test_investigation_findings_are_derived_from_their_authorized_tool_results(
     assert "QUALITY-09" in resolved[0].finding
 
 
+def test_recovery_findings_are_correlated_to_exact_tool_invocations() -> None:
+    resolved = _resolve_investigation_steps(
+        (
+            {
+                "tool": "get_position_reference_status",
+                "arguments": {"station_id": "S04"},
+                "tool_call_id": "status-call",
+            },
+            {
+                "tool": "prepare_reference_calibration",
+                "arguments": {"station_id": "S04"},
+                "tool_call_id": "prepare-call",
+            },
+            {
+                "tool": "execute_reference_calibration",
+                "arguments": {"station_id": "S04"},
+                "tool_call_id": "execute-call",
+            },
+        ),
+        (),
+        ResponseLanguage.EN,
+        observations_by_tool_call_id={
+            "execute-call": (
+                '{"action_executed":true,"verification_status":"PASSED",'
+                '"recovery_outcome":"SUCCEEDED"}'
+            ),
+            "status-call": (
+                '{"station_id":"S04","reference_valid":false,'
+                '"position_deviation_mm":0.43,"configured_tolerance_mm":0.20}'
+            ),
+            "prepare-call": (
+                '{"station_id":"S04","requires_approval":true,'
+                '"precondition_evaluations":[{"status":"PASSED"}]}'
+            ),
+        },
+    )
+
+    assert [(step.step, step.action) for step in resolved] == [
+        (1, "get_position_reference_status"),
+        (2, "prepare_reference_calibration"),
+        (3, "execute_reference_calibration"),
+    ]
+    assert resolved[0].finding == (
+        "The position reference at S04 is invalid; deviation 0.43 mm exceeds "
+        "the 0.2 mm tolerance."
+    )
+    assert resolved[1].finding == (
+        "Controlled reference calibration at S04 was prepared and requires human approval."
+    )
+    assert resolved[2].finding == (
+        "Reference calibration executed and independent post-action verification passed."
+    )
+    assert len({step.finding for step in resolved}) == 3
+
+
+def test_repeated_tool_findings_are_correlated_by_tool_call_id() -> None:
+    resolved = _resolve_investigation_steps(
+        (
+            {
+                "tool": "get_machine_status",
+                "arguments": {"station_id": "S04"},
+                "tool_call_id": "first-status-call",
+            },
+            {
+                "tool": "get_machine_status",
+                "arguments": {"station_id": "S05"},
+                "tool_call_id": "second-status-call",
+            },
+        ),
+        (),
+        ResponseLanguage.EN,
+        observations_by_tool_call_id={
+            "second-status-call": ('{"station_id":"S05","found":true,"state":"READY"}'),
+            "first-status-call": (
+                '{"station_id":"S04","found":true,"state":"FAULTED",'
+                '"active_error_code":"QUALITY-09"}'
+            ),
+        },
+    )
+
+    assert [step.step for step in resolved] == [1, 2]
+    assert [step.finding for step in resolved] == [
+        "Station S04 is FAULTED with active error QUALITY-09.",
+        "Station S05 is READY.",
+    ]
+
+
 def test_investigation_finding_falls_back_only_when_no_safe_tool_summary_exists() -> (
     None
 ):

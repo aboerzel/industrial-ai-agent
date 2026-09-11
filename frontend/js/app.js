@@ -23,6 +23,7 @@ const errorMessage = document.querySelector("#error-message");
 const ACTIVE_INVESTIGATION_STORAGE_KEY = "industrial-ai-agent.active-investigation";
 
 let currentInvestigationId = null;
+let hasExportableConversation = false;
 let isSubmitting = false;
 let pendingAgentTurn = null;
 
@@ -124,6 +125,7 @@ async function reloadInvestigation() {
 
 function renderEmptyInvestigation() {
   currentInvestigationId = null;
+  hasExportableConversation = false;
   pendingAgentTurn = null;
   clearActiveInvestigation();
   resultTitle.textContent = "Investigation";
@@ -138,6 +140,7 @@ function renderInvestigation(investigation) {
   hideError();
   pendingAgentTurn = null;
   currentInvestigationId = investigation.investigation_id;
+  hasExportableConversation = investigation.turns.some(hasExportableTurn);
   persistActiveInvestigation(currentInvestigationId);
   resultTitle.textContent = "Investigation";
   setStatus(investigation.status);
@@ -660,16 +663,24 @@ function setSubmitting() {
 }
 
 function syncControls() {
-  const hasInvestigation = Boolean(currentInvestigationId);
   composerMessage.disabled = isSubmitting;
   composerButton.disabled = isSubmitting;
   composerButton.setAttribute("aria-label", "Send message");
   composerButton.title = "Send message";
   newInvestigationButton.disabled = isSubmitting;
-  exportPdfButton.disabled = !hasInvestigation;
+  exportPdfButton.disabled = !(currentInvestigationId && hasExportableConversation);
   for (const action of history.querySelectorAll(".next-step-action, .reference-action")) {
     action.disabled = isSubmitting;
   }
+}
+
+function hasExportableTurn(turn) {
+  return Boolean(
+    turn.request?.trim() ||
+    turn.answer?.trim() ||
+    turn.error?.code ||
+    turn.approval_request?.action,
+  );
 }
 
 function useAsFollowUp(nextStep) {

@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from industrial_ai_agent.agent.agent_run import (
     AgentRunResult,
@@ -17,9 +18,11 @@ from industrial_ai_agent.agent.agent_run import (
 )
 from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunClassificationPolicy,
     AgentRunProfile,
     InternalDiagnosticTarget,
 )
+from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
 from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
@@ -149,6 +152,272 @@ def test_agent_run_store_survives_store_recreation_and_rls() -> None:
         ),
     )
     assert hidden_from_public is None
+
+
+def test_recovery_incomplete_run_persists_as_failed_with_its_bounded_code() -> None:
+    assert DATABASE_URL is not None
+    run_id = uuid4()
+    result = AgentRunResult(
+        status=AgentRunStatus.RECOVERY_INCOMPLETE,
+        final_answer="The requested recovery was not completed.",
+        investigation_steps=(
+            InvestigationStep(
+                step=1,
+                action="get_position_reference_status",
+                finding="The position reference is invalid.",
+            ),
+        ),
+        tool_call_count=1,
+        executed_tool_calls=(
+            {
+                "tool": "get_position_reference_status",
+                "arguments": {"station_id": "S04"},
+            },
+        ),
+        model_profile_name="nvidia_quality",
+    )
+    factory = PostgreSqlSessionFactory(DATABASE_URL)
+    store = PostgreSqlAgentRunStore(factory, _context(DataClassification.CONFIDENTIAL))
+    try:
+        asyncio.run(
+            store.create(
+                run_id,
+                request_text="Synthetic recovery terminal-state test.",
+                data_classification=DataClassification.CONFIDENTIAL,
+                run_profile=AgentRunProfile.CONFIDENTIAL_RECOVERY,
+            )
+        )
+        asyncio.run(
+            store.bind_execution_context(
+                run_id,
+                data_classification=DataClassification.CONFIDENTIAL,
+                run_profile=AgentRunProfile.CONFIDENTIAL_RECOVERY,
+                model_profile="nvidia_quality",
+            )
+        )
+        completed = asyncio.run(store.complete(run_id, result))
+        restored = asyncio.run(store.get(run_id))
+    finally:
+        factory.dispose()
+
+    assert completed.status is RunStatus.FAILED
+    assert completed.error_code == "recovery_incomplete"
+    assert restored is not None
+    assert restored.status is RunStatus.FAILED
+    assert restored.error_code == "recovery_incomplete"
+    assert restored.result == result
+
+
+def test_recovery_not_required_persists_as_successful_no_action_outcome() -> None:
+    assert DATABASE_URL is not None
+    run_id = uuid4()
+    result = AgentRunResult(
+        status=AgentRunStatus.SUCCESS,
+        final_answer="No recovery is required.",
+        recovery_outcome=RecoveryOutcome.NOT_REQUIRED,
+        tool_call_count=1,
+        executed_tool_calls=(
+            {
+                "tool": "get_position_reference_status",
+                "arguments": {"station_id": "S04"},
+            },
+        ),
+        model_profile_name="nvidia_quality",
+    )
+    factory = PostgreSqlSessionFactory(DATABASE_URL)
+    store = PostgreSqlAgentRunStore(factory, _context(DataClassification.CONFIDENTIAL))
+    try:
+        asyncio.run(
+            store.create(
+                run_id,
+                request_text="Synthetic healthy recovery persistence test.",
+                data_classification=DataClassification.CONFIDENTIAL,
+                run_profile=AgentRunProfile.CONFIDENTIAL_RECOVERY,
+            )
+        )
+        asyncio.run(
+            store.bind_execution_context(
+                run_id,
+                data_classification=DataClassification.CONFIDENTIAL,
+                run_profile=AgentRunProfile.CONFIDENTIAL_RECOVERY,
+                model_profile="nvidia_quality",
+            )
+        )
+        completed = asyncio.run(store.complete(run_id, result))
+        restored = asyncio.run(store.get(run_id))
+    finally:
+        factory.dispose()
+
+    assert completed.status is RunStatus.SUCCESS
+    assert completed.error_code is None
+    assert restored is not None
+    assert restored.result == result
+
+
+def test_confidential_recovery_approval_persists_reloads_and_claims_once() -> None:
+    assert DATABASE_URL is not None
+    run_id = uuid4()
+    factory = PostgreSqlSessionFactory(DATABASE_URL)
+    store = PostgreSqlAgentRunStore(factory, _context(DataClassification.CONFIDENTIAL))
+    try:
+        created = asyncio.run(
+            store.create(
+                run_id,
+                request_text="Synthetic recovery persistence test.",
+                data_classification=DataClassification.CONFIDENTIAL,
+                run_profile=AgentRunProfile.CONFIDENTIAL_RECOVERY,
+            )
+        )
+        bound = asyncio.run(
+            store.bind_execution_context(
+                run_id,
+                data_classification=DataClassification.CONFIDENTIAL,
+                run_profile=AgentRunProfile.CONFIDENTIAL_RECOVERY,
+                model_profile="nvidia_quality",
+            )
+        )
+        asyncio.run(
+            store.wait_for_approval(
+                run_id,
+                _reference_calibration_approval_request(),
+            )
+        )
+        pending = asyncio.run(store.get(run_id))
+        claimed = asyncio.run(store.claim_resume(run_id, decision="approve"))
+        restored = asyncio.run(store.get(run_id))
+        approval_claimed = asyncio.run(
+            store.claim_reference_calibration_approval(
+                run_id,
+                action_id="reference-calibration-action-1",
+                station_id="S04",
+                device_id="POSITION-ENC-02",
+            )
+        )
+        replay_claimed = asyncio.run(
+            store.claim_reference_calibration_approval(
+                run_id,
+                action_id="reference-calibration-action-1",
+                station_id="S04",
+                device_id="POSITION-ENC-02",
+            )
+        )
+    finally:
+        factory.dispose()
+
+    assert created.run_profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
+    assert bound.model_profile == "nvidia_quality"
+    assert pending is not None
+    assert pending.approval_action == "execute_reference_calibration"
+    assert pending.approval_request == _reference_calibration_approval_request()
+    assert claimed is not None
+    assert claimed.run_profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
+    assert restored is not None
+    assert restored.run_profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
+    assert approval_claimed is True
+    assert replay_claimed is False
+
+
+def test_agent_run_profile_constraint_accepts_known_profiles_and_rejects_unknown() -> (
+    None
+):
+    assert DATABASE_URL is not None
+    factory = PostgreSqlSessionFactory(DATABASE_URL)
+    try:
+        for profile in AgentRunProfile:
+            policy = AgentRunClassificationPolicy().resolve(profile)
+            store = PostgreSqlAgentRunStore(
+                factory, _context(policy.data_classification)
+            )
+            stored = asyncio.run(
+                store.create(
+                    uuid4(),
+                    request_text="Synthetic profile validation test.",
+                    data_classification=policy.data_classification,
+                    run_profile=profile,
+                )
+            )
+            assert stored.run_profile is profile
+
+        with factory.session(_context(DataClassification.CONFIDENTIAL)) as session:
+            with pytest.raises(IntegrityError):
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO agent_runtime.agent_runs (
+                            run_id, thread_id, investigation_id,
+                            investigation_sequence, status, data_classification,
+                            run_profile, request_text, response_language,
+                            investigation_steps, next_steps, identifiers, documents,
+                            tool_call_summary
+                        ) VALUES (
+                            :run_id, :thread_id, :investigation_id,
+                            1, 'running', 2, 'UNSUPPORTED_PROFILE', 'synthetic', 'EN',
+                            '[]'::json, '[]'::json, '[]'::json, '[]'::json, '[]'::json
+                        )
+                        """
+                    ),
+                    {
+                        "run_id": uuid4(),
+                        "thread_id": uuid4(),
+                        "investigation_id": uuid4(),
+                    },
+                )
+            session.rollback()
+    finally:
+        factory.dispose()
+
+
+def test_approval_action_constraint_preserves_ticket_action_and_rejects_unknown() -> (
+    None
+):
+    assert DATABASE_URL is not None
+    run_id = uuid4()
+    factory = PostgreSqlSessionFactory(DATABASE_URL)
+    store = PostgreSqlAgentRunStore(factory, _context(DataClassification.CONFIDENTIAL))
+    try:
+        asyncio.run(
+            store.create(
+                run_id,
+                request_text="Synthetic approval action validation test.",
+                data_classification=DataClassification.CONFIDENTIAL,
+            )
+        )
+        ticket_pending = asyncio.run(
+            store.wait_for_approval(
+                run_id,
+                {"action": "create_maintenance_ticket"},
+            )
+        )
+        with factory.session(_context(DataClassification.CONFIDENTIAL)) as session:
+            with pytest.raises(IntegrityError):
+                session.execute(
+                    text(
+                        """
+                        UPDATE agent_runtime.agent_runs
+                        SET approval_action = 'UNSUPPORTED_ACTION'
+                        WHERE run_id = :run_id
+                        """
+                    ),
+                    {"run_id": run_id},
+                )
+            session.rollback()
+    finally:
+        factory.dispose()
+
+    assert ticket_pending.approval_action == "create_maintenance_ticket"
+
+
+def _reference_calibration_approval_request() -> dict[str, object]:
+    return {
+        "kind": "action_approval",
+        "action": "execute_reference_calibration",
+        "action_id": "reference-calibration-action-1",
+        "arguments": {
+            "station_id": "S04",
+            "device_id": "POSITION-ENC-02",
+            "operation_type": "reference_calibration",
+        },
+    }
 
 
 def test_agent_runtime_rls_and_framework_checkpoint_schema_exist() -> None:

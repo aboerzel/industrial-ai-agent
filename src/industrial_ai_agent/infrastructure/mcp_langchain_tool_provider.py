@@ -65,6 +65,13 @@ INTERNAL_DIAGNOSTIC_FACTORY_TOOLS = frozenset(
     }
 )
 DEFAULT_ALLOWED_KNOWLEDGE_TOOLS = frozenset({"search_documentation"})
+DEFAULT_ALLOWED_HARDWARE_TOOLS = frozenset(
+    {
+        "get_position_reference_status",
+        "prepare_reference_calibration",
+        "execute_reference_calibration",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)

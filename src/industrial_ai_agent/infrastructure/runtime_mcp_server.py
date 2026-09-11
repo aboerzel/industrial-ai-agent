@@ -60,7 +60,9 @@ RunStatusFilter = Literal[
     "running", "waiting_for_approval", "success", "limit_reached", "failed"
 ]
 ClassificationFilter = Literal["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"]
-ModelProfileFilter = Literal["local_fast", "local_quality", "public_fast"]
+ModelProfileFilter = Literal[
+    "local_fast", "local_quality", "public_fast", "nvidia_quality"
+]
 Lookback = Literal["15m", "1h", "6h", "24h"]
 
 _RUNTIME_TOOL_PERMISSIONS = {

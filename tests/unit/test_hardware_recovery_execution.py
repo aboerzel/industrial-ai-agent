@@ -208,6 +208,7 @@ def test_hardware_mcp_execute_accepts_only_server_injected_execution_fields() ->
         recovery_preparation=HardwareRecoveryPreparationService(
             physical_devices=adapter
         ),
+        position_reference_devices=adapter,
         recovery_execution=_execution_service(adapter),
     )
 
@@ -240,6 +241,7 @@ def test_hardware_mcp_emits_bounded_lifecycle_signals_for_execution() -> None:
         recovery_preparation=HardwareRecoveryPreparationService(
             physical_devices=adapter
         ),
+        position_reference_devices=adapter,
         recovery_execution=_execution_service(adapter),
         telemetry=telemetry,  # type: ignore[arg-type]
     )

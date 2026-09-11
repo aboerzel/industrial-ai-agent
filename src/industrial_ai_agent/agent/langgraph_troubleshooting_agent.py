@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from enum import StrEnum
 from typing import Annotated, Literal, cast
+from uuid import uuid4
 
 from langchain_core.messages import (
     AIMessage,
@@ -55,6 +56,7 @@ from industrial_ai_agent.agent.response_language import (
 )
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
+from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
 from industrial_ai_agent.domain.maintenance_ticket import (
     MAINTENANCE_TICKET_ID_PATTERN,
 )
@@ -66,6 +68,8 @@ from industrial_ai_agent.tools.tool_contracts import (
 
 CREATE_MAINTENANCE_TICKET_TOOL_NAME = "create_maintenance_ticket"
 EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME = "execute_reference_calibration"
+GET_POSITION_REFERENCE_STATUS_TOOL_NAME = "get_position_reference_status"
+PREPARE_REFERENCE_CALIBRATION_TOOL_NAME = "prepare_reference_calibration"
 MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "You are an industrial troubleshooting assistant. Use the provided tools when "
     "their evidence is necessary to answer the explicit user request. Call one tool at "
@@ -150,6 +154,39 @@ class PendingReferenceCalibrationAction(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
 
 
+class _TrustedPreconditionEvaluation(BaseModel):
+    """Bounded deterministic precondition result from Hardware MCP."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+
+    status: Literal["PASSED", "FAILED"]
+
+
+class _TrustedReferenceCalibrationPreparation(BaseModel):
+    """Validated target emitted by the bounded preparation capability."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+
+    station_id: str = Field(min_length=3, max_length=16)
+    device_id: str = Field(min_length=3, max_length=64)
+    proposed_operation: Literal["reference_calibration"]
+    requires_approval: Literal[True]
+    precondition_evaluations: tuple[_TrustedPreconditionEvaluation, ...]
+
+
+class _TrustedPositionReferenceStatus(BaseModel):
+    """Minimal trusted status used only for bounded recovery lifecycle decisions."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+
+    station_id: str = Field(min_length=3, max_length=16)
+    device_id: str = Field(min_length=3, max_length=64)
+    reference_valid: bool
+    position_deviation_mm: float
+    configured_tolerance_mm: float = Field(ge=0)
+    calibration_supported: bool
+
+
 class ApprovalInterruptDetails(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -187,6 +224,9 @@ class TroubleshootingGraphState(TypedDict):
     effective_classification: DataClassification | None
     response_language: ResponseLanguage
     run_id: str | None
+    requires_verified_recovery: bool
+    recovery_execution_verified: bool
+    recovery_outcome: RecoveryOutcome | None
 
 
 class CheckpointedTroubleshootingGraphState(TypedDict):
@@ -208,6 +248,9 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     effective_classification: int | None
     response_language: str
     run_id: str | None
+    requires_verified_recovery: bool
+    recovery_execution_verified: bool
+    recovery_outcome: str | None
 
 
 class LangGraphTroubleshootingAgent:
@@ -220,6 +263,7 @@ class LangGraphTroubleshootingAgent:
         run_classification: DataClassification | None = None,
         system_message: str = MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
         normalize_structured_final_output: bool = True,
+        requires_verified_recovery: bool = False,
     ) -> None:
         self._checkpointer = checkpointer
         self._run_classification = run_classification
@@ -227,6 +271,7 @@ class LangGraphTroubleshootingAgent:
         self._chat_model = chat_model
         self._system_message = system_message
         self._normalize_structured_final_output = normalize_structured_final_output
+        self._requires_verified_recovery = requires_verified_recovery
 
     async def request_tool_selection_via_mcp(
         self,
@@ -307,6 +352,7 @@ class LangGraphTroubleshootingAgent:
             tool_call_count=state["executed_tool_count"],
             executed_tool_calls=state["executed_tool_calls"],
             model_profile_name=self._chat_model.model_profile.name,
+            recovery_outcome=state["recovery_outcome"],
         )
 
     async def astart_via_mcp(
@@ -422,6 +468,13 @@ class LangGraphTroubleshootingAgent:
                 tools_by_name, tool_policies, state
             )
 
+        async def prepare_recovery_node(
+            state: CheckpointedTroubleshootingGraphState,
+        ) -> dict[str, object]:
+            return await self._aprepare_reference_calibration_node(
+                tools_by_name, tool_policies, state
+            )
+
         # noinspection PyTypeChecker
         builder = StateGraph(CheckpointedTroubleshootingGraphState)
         builder.add_node(
@@ -433,6 +486,8 @@ class LangGraphTroubleshootingAgent:
             ),
         )
         builder.add_node("tool", tool_node)
+        builder.add_node("prepare_recovery", prepare_recovery_node)
+        builder.add_node("recovery_not_required", self._recovery_not_required_node)
         builder.add_node(
             "prepare_action",
             lambda state: self._prepare_mcp_action_node(
@@ -449,10 +504,16 @@ class LangGraphTroubleshootingAgent:
         builder.add_conditional_edges(
             "model", lambda state: self._route_after_model(state, tool_policies)
         )
-        builder.add_edge("tool", "model")
+        builder.add_conditional_edges("tool", self._route_after_tool)
+        builder.add_conditional_edges(
+            "prepare_recovery", self._route_after_recovery_preparation
+        )
+        builder.add_edge("recovery_not_required", END)
         builder.add_edge("prepare_action", "approval")
         builder.add_conditional_edges("approval", self._route_after_approval)
-        builder.add_edge("execute_action", "model")
+        builder.add_conditional_edges(
+            "execute_action", self._route_after_recovery_execution
+        )
         builder.add_edge("cancel_action", END)
         return builder.compile(checkpointer=self._checkpointer)
 
@@ -476,6 +537,16 @@ class LangGraphTroubleshootingAgent:
             )
             response = to_llm_response(message)
         if not response.tool_calls:
+            if (
+                state["requires_verified_recovery"]
+                and not state["recovery_execution_verified"]
+            ):
+                return _recovery_terminal_update(
+                    state,
+                    messages=[message],
+                    status=AgentRunStatus.RECOVERY_INCOMPLETE,
+                    error_code="recovery_incomplete",
+                )
             final_messages: list[AIMessage] = [message]
             if response.text is None:
                 raise MissingLLMResponseTextError("LLM response did not contain text")
@@ -516,7 +587,9 @@ class LangGraphTroubleshootingAgent:
                 state["executed_tool_calls"],
                 final_output.investigation_steps,
                 ResponseLanguage(state["response_language"]),
-                _tool_observation_contents(state),
+                observations_by_tool_call_id=_tool_observations_by_call_id(
+                    state["messages"]
+                ),
             )
             identifiers, documents = _derive_structured_references(state)
             return {
@@ -583,6 +656,75 @@ class LangGraphTroubleshootingAgent:
             return "cancel_action"
         raise RuntimeError("Approval node did not produce a valid decision")
 
+    @staticmethod
+    def _route_after_recovery_execution(
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> Literal["model", "__end__"]:
+        return END if state["run_status"] is not None else "model"
+
+    @staticmethod
+    def _route_after_tool(
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> Literal["model", "prepare_recovery", "recovery_not_required", "__end__"]:
+        if state["run_status"] is not None:
+            return END
+        if (
+            state.get("requires_verified_recovery", False)
+            and _recoverable_position_reference_status(state["messages"]) is not None
+        ):
+            return "prepare_recovery"
+        if (
+            state.get("requires_verified_recovery", False)
+            and _healthy_position_reference_status(state["messages"]) is not None
+        ):
+            return "recovery_not_required"
+        return "model"
+
+    @staticmethod
+    def _recovery_not_required_node(
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> dict[str, object]:
+        """Finish a bounded recovery only after trusted status says it is unnecessary."""
+        status = _healthy_position_reference_status(state["messages"])
+        if status is None:
+            return _recovery_terminal_update(
+                state,
+                messages=(),
+                status=AgentRunStatus.RECOVERY_INCOMPLETE,
+                error_code="recovery_incomplete",
+            )
+        response_language = ResponseLanguage(state["response_language"])
+        investigation_steps = _resolve_investigation_steps(
+            state["executed_tool_calls"],
+            (),
+            response_language,
+            observations_by_tool_call_id=_tool_observations_by_call_id(
+                state["messages"]
+            ),
+        )
+        identifiers, documents = _derive_structured_references(state)
+        return {
+            "run_status": AgentRunStatus.SUCCESS.value,
+            "final_answer": (
+                f"Keine Recovery erforderlich. Die Positionsreferenz an Station {status.station_id} ist bereits gültig."
+                if response_language is ResponseLanguage.DE
+                else f"No recovery is required. The position reference at station {status.station_id} is already valid."
+            ),
+            "investigation_steps": tuple(
+                step.model_dump() for step in investigation_steps
+            ),
+            "next_steps": (),
+            "identifiers": tuple(reference.model_dump() for reference in identifiers),
+            "documents": tuple(reference.model_dump() for reference in documents),
+            "recovery_outcome": RecoveryOutcome.NOT_REQUIRED.value,
+        }
+
+    @staticmethod
+    def _route_after_recovery_preparation(
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> Literal["approval", "__end__"]:
+        return "approval" if state["pending_action"] is not None else END
+
     async def _atool_node(
         self,
         tools_by_name: dict[str, BaseTool],
@@ -605,6 +747,7 @@ class LangGraphTroubleshootingAgent:
             )
 
         arguments = dict(tool_call["args"])
+        tool_call_id = _require_tool_call_id(tool_call.get("id"))
         try:
             result = await tool.ainvoke(arguments)
         except ValidationError as error:
@@ -612,17 +755,116 @@ class LangGraphTroubleshootingAgent:
                 f"Invalid arguments for {tool_name}"
             ) from error
         effective_classification = self._observe_result_classification(state, result)
-        executed_call = {"tool": tool_name, "arguments": arguments}
+        executed_call = {
+            "tool": tool_name,
+            "arguments": arguments,
+            "tool_call_id": tool_call_id,
+        }
         return {
             "messages": [
                 ToolMessage(
                     content=_serialized_tool_observation(result),
-                    tool_call_id=_require_tool_call_id(tool_call.get("id")),
+                    name=tool_name,
+                    tool_call_id=tool_call_id,
                 )
             ],
             "executed_tool_count": state["executed_tool_count"] + 1,
             "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
             "effective_classification": effective_classification,
+        }
+
+    async def _aprepare_reference_calibration_node(
+        self,
+        tools_by_name: dict[str, BaseTool],
+        tool_policies: dict[str, ToolPolicy],
+        state: CheckpointedTroubleshootingGraphState,
+    ) -> dict[str, object]:
+        """Advance the bounded recovery lifecycle from trusted status to preparation."""
+        status = _recoverable_position_reference_status(state["messages"])
+        if status is None:
+            return _recovery_terminal_update(
+                state,
+                messages=(),
+                status=AgentRunStatus.RECOVERY_INCOMPLETE,
+                error_code="recovery_incomplete",
+            )
+        tool = tools_by_name.get(PREPARE_REFERENCE_CALIBRATION_TOOL_NAME)
+        policy = tool_policies.get(PREPARE_REFERENCE_CALIBRATION_TOOL_NAME)
+        if tool is None or policy is None or policy.operation is not ToolOperation.READ:
+            raise UnknownToolError("Recovery preparation tool is not authorized")
+        arguments = {"station_id": status.station_id}
+        try:
+            result = await tool.ainvoke(arguments)
+        except ValidationError as error:
+            raise InvalidToolArgumentsError(
+                "Invalid arguments for recovery preparation"
+            ) from error
+        tool_call_id = f"recovery-preparation-{uuid4().hex}"
+        messages = [
+            ToolMessage(
+                content=_serialized_tool_observation(result),
+                name=PREPARE_REFERENCE_CALIBRATION_TOOL_NAME,
+                tool_call_id=tool_call_id,
+            )
+        ]
+        executed_tool_calls = (
+            *state["executed_tool_calls"],
+            {
+                "tool": PREPARE_REFERENCE_CALIBRATION_TOOL_NAME,
+                "arguments": arguments,
+                "tool_call_id": tool_call_id,
+            },
+        )
+        executed_tool_count = state["executed_tool_count"] + 1
+        effective_classification = self._observe_result_classification(state, result)
+        preparation = _trusted_reference_calibration_preparation(result)
+        if (
+            preparation is None
+            or preparation.station_id != status.station_id
+            or preparation.device_id != status.device_id
+        ):
+            return {
+                "effective_classification": effective_classification,
+                **_recovery_terminal_update(
+                    state,
+                    messages=messages,
+                    status=AgentRunStatus.RECOVERY_INCOMPLETE,
+                    error_code="recovery_incomplete",
+                    executed_tool_count=executed_tool_count,
+                    executed_tool_calls=executed_tool_calls,
+                ),
+            }
+        if _preparation_is_blocked(preparation):
+            return {
+                "effective_classification": effective_classification,
+                **_recovery_terminal_update(
+                    state,
+                    messages=messages,
+                    status=AgentRunStatus.RECOVERY_BLOCKED,
+                    error_code="recovery_blocked",
+                    executed_tool_count=executed_tool_count,
+                    executed_tool_calls=executed_tool_calls,
+                ),
+            }
+        action_id = f"recovery-execute-{uuid4().hex}"
+        return {
+            "messages": messages,
+            "executed_tool_count": executed_tool_count,
+            "executed_tool_calls": executed_tool_calls,
+            "effective_classification": effective_classification,
+            "pending_action": PendingReferenceCalibrationAction(
+                action=EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
+                request_id=action_id,
+                tool_call_id=action_id,
+                station_id=preparation.station_id,
+                device_id=preparation.device_id,
+                operation_type="reference_calibration",
+                summary=(
+                    "Run controlled reference calibration for "
+                    f"{preparation.device_id} at {preparation.station_id}."
+                ),
+            ).model_dump(),
+            "approval_result": None,
         }
 
     @staticmethod
@@ -668,17 +910,20 @@ class LangGraphTroubleshootingAgent:
         tool_call_id = _require_tool_call_id(tool_call.get("id"))
         if tool_name == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME:
             assert isinstance(arguments, ReferenceCalibrationProposalArguments)
+            device_id = _prepared_reference_calibration_device(
+                state["messages"], arguments.station_id
+            )
             return {
                 "pending_action": PendingReferenceCalibrationAction(
                     action=EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
                     request_id=tool_call_id,
                     tool_call_id=tool_call_id,
                     station_id=arguments.station_id,
-                    device_id=arguments.device_id,
+                    device_id=device_id,
                     operation_type="reference_calibration",
                     summary=(
                         "Run controlled reference calibration for "
-                        f"{arguments.device_id} at {arguments.station_id}."
+                        f"{device_id} at {arguments.station_id}."
                     ),
                 ).model_dump(),
                 "approval_result": None,
@@ -774,8 +1019,9 @@ class LangGraphTroubleshootingAgent:
         executed_call = {
             "tool": action,
             "arguments": executed_arguments,
+            "tool_call_id": pending_action["tool_call_id"],
         }
-        return {
+        update: dict[str, object] = {
             "messages": [
                 ToolMessage(
                     content=str(result), tool_call_id=pending_action["tool_call_id"]
@@ -784,6 +1030,32 @@ class LangGraphTroubleshootingAgent:
             "executed_tool_count": state["executed_tool_count"] + 1,
             "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
             "pending_action": None,
+        }
+        if action != EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME:
+            return update
+
+        recovery_terminal = _recovery_execution_terminal(result)
+        if recovery_terminal is None:
+            return {
+                **update,
+                **_recovery_success_update(
+                    state,
+                    messages=update["messages"],
+                    executed_tool_count=update["executed_tool_count"],
+                    executed_tool_calls=update["executed_tool_calls"],
+                ),
+            }
+        status, error_code = recovery_terminal
+        return {
+            **update,
+            **_recovery_terminal_update(
+                state,
+                messages=update["messages"],
+                status=status,
+                error_code=error_code,
+                executed_tool_count=update["executed_tool_count"],
+                executed_tool_calls=update["executed_tool_calls"],
+            ),
         }
 
     @staticmethod
@@ -796,9 +1068,19 @@ class LangGraphTroubleshootingAgent:
             state["executed_tool_calls"],
             (),
             response_language,
-            _tool_observation_contents(state),
+            observations_by_tool_call_id=_tool_observations_by_call_id(
+                state["messages"]
+            ),
         )
         identifiers, documents = _derive_structured_references(state)
+        if pending_action["action"] == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME:
+            return _recovery_terminal_update(
+                state,
+                messages=(),
+                status=AgentRunStatus.RECOVERY_BLOCKED,
+                error_code="recovery_blocked",
+                pending_action=None,
+            )
         return {
             "pending_action": None,
             "run_status": AgentRunStatus.SUCCESS.value,
@@ -868,6 +1150,9 @@ class LangGraphTroubleshootingAgent:
             ),
             "response_language": resolved_response_language.value,
             "run_id": run_id,
+            "requires_verified_recovery": self._requires_verified_recovery,
+            "recovery_execution_verified": False,
+            "recovery_outcome": None,
         }
 
     @staticmethod
@@ -971,6 +1256,15 @@ class LangGraphTroubleshootingAgent:
             ),
             "response_language": ResponseLanguage(state["response_language"]),
             "run_id": state.get("run_id"),
+            "requires_verified_recovery": bool(
+                state.get("requires_verified_recovery", False)
+            ),
+            "recovery_execution_verified": bool(
+                state.get("recovery_execution_verified", False)
+            ),
+            "recovery_outcome": RecoveryOutcome(state["recovery_outcome"])
+            if state.get("recovery_outcome") is not None
+            else None,
         }
 
     def _observe_result_classification(
@@ -1012,6 +1306,236 @@ def _require_tool_call_id(tool_call_id: object | None) -> str:
     if not isinstance(tool_call_id, str) or not tool_call_id:
         raise ValueError("Tool call requires a non-empty ID")
     return tool_call_id
+
+
+def _recovery_execution_terminal(
+    result: object,
+) -> tuple[AgentRunStatus, str] | None:
+    """Accept successful recovery only from the bounded execution projection."""
+    payload = _structured_tool_result(result)
+    outcome = payload.get("recovery_outcome")
+    verification_status = payload.get("verification_status")
+    action_executed = payload.get("action_executed")
+    if (
+        outcome == "SUCCEEDED"
+        and verification_status == "PASSED"
+        and action_executed is True
+    ):
+        return None
+    if outcome == "BLOCKED":
+        return AgentRunStatus.RECOVERY_BLOCKED, "recovery_blocked"
+    return AgentRunStatus.RECOVERY_FAILED, "recovery_failed"
+
+
+def _structured_tool_result(result: object) -> dict[str, object]:
+    if isinstance(result, str):
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+    if isinstance(result, dict):
+        return result
+    model_dump = getattr(result, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump(mode="json")
+        return payload if isinstance(payload, dict) else {}
+    return {}
+
+
+def _recoverable_position_reference_status(
+    messages: list[AnyMessage],
+) -> _TrustedPositionReferenceStatus | None:
+    """Return trusted status only when the bounded calibration is applicable."""
+    content = _latest_tool_observation(
+        messages, GET_POSITION_REFERENCE_STATUS_TOOL_NAME
+    )
+    if content is None:
+        return None
+    try:
+        status = _TrustedPositionReferenceStatus.model_validate_json(content)
+    except ValidationError:
+        return None
+    if (
+        status.reference_valid
+        or not status.calibration_supported
+        or status.position_deviation_mm <= status.configured_tolerance_mm
+    ):
+        return None
+    return status
+
+
+def _healthy_position_reference_status(
+    messages: list[AnyMessage],
+) -> _TrustedPositionReferenceStatus | None:
+    """Return trusted status only when the bounded recovery is demonstrably unnecessary."""
+    content = _latest_tool_observation(
+        messages, GET_POSITION_REFERENCE_STATUS_TOOL_NAME
+    )
+    if content is None:
+        return None
+    try:
+        status = _TrustedPositionReferenceStatus.model_validate_json(content)
+    except ValidationError:
+        return None
+    return status if status.reference_valid else None
+
+
+def _trusted_reference_calibration_preparation(
+    result: object,
+) -> _TrustedReferenceCalibrationPreparation | None:
+    payload = _structured_tool_result(result)
+    evaluations = payload.get("precondition_evaluations")
+    if isinstance(evaluations, list):
+        payload = {**payload, "precondition_evaluations": tuple(evaluations)}
+    try:
+        return _TrustedReferenceCalibrationPreparation.model_validate(payload)
+    except ValidationError:
+        return None
+
+
+def _preparation_is_blocked(
+    preparation: _TrustedReferenceCalibrationPreparation,
+) -> bool:
+    return any(
+        evaluation.status == "FAILED"
+        for evaluation in preparation.precondition_evaluations
+    )
+
+
+def _latest_tool_observation(messages: list[AnyMessage], tool_name: str) -> str | None:
+    tool_names_by_call_id = {
+        _require_tool_call_id(tool_call.get("id")): tool_call["name"]
+        for message in messages
+        if isinstance(message, AIMessage)
+        for tool_call in message.tool_calls
+        if isinstance(tool_call.get("name"), str)
+    }
+    for message in reversed(messages):
+        if not isinstance(message, ToolMessage) or not isinstance(message.content, str):
+            continue
+        observed_tool_name = message.name or tool_names_by_call_id.get(
+            message.tool_call_id
+        )
+        if observed_tool_name == tool_name:
+            return message.content
+    return None
+
+
+def _recovery_success_update(
+    state: CheckpointedTroubleshootingGraphState,
+    *,
+    messages: list[AnyMessage],
+    executed_tool_count: int,
+    executed_tool_calls: tuple[dict[str, object], ...],
+) -> dict[str, object]:
+    response_language = ResponseLanguage(state["response_language"])
+    observations_by_tool_call_id = _tool_observations_by_call_id(
+        (*state["messages"], *messages)
+    )
+    investigation_steps = _resolve_investigation_steps(
+        executed_tool_calls,
+        (),
+        response_language,
+        observations_by_tool_call_id=observations_by_tool_call_id,
+    )
+    identifiers, documents = _derive_structured_references(state)
+    return {
+        "messages": messages,
+        "run_status": AgentRunStatus.SUCCESS.value,
+        "final_answer": (
+            "Die angeforderte Recovery wurde nach einer unabhängigen "
+            "Post-Action-Verifikation erfolgreich abgeschlossen."
+            if response_language is ResponseLanguage.DE
+            else "The requested recovery completed successfully after independent "
+            "post-action verification."
+        ),
+        "investigation_steps": tuple(step.model_dump() for step in investigation_steps),
+        "next_steps": (),
+        "identifiers": tuple(reference.model_dump() for reference in identifiers),
+        "documents": tuple(reference.model_dump() for reference in documents),
+        "executed_tool_count": executed_tool_count,
+        "executed_tool_calls": executed_tool_calls,
+        "recovery_execution_verified": True,
+        "recovery_outcome": RecoveryOutcome.SUCCEEDED.value,
+    }
+
+
+def _recovery_terminal_update(
+    state: CheckpointedTroubleshootingGraphState,
+    *,
+    messages: list[AnyMessage] | tuple[AnyMessage, ...],
+    status: AgentRunStatus,
+    error_code: str,
+    executed_tool_count: int | None = None,
+    executed_tool_calls: tuple[dict[str, object], ...] | None = None,
+    pending_action: dict[str, str] | None | object = ...,
+) -> dict[str, object]:
+    """Create a bounded non-success terminal projection for a recovery lifecycle."""
+    calls = executed_tool_calls or state["executed_tool_calls"]
+    response_language = ResponseLanguage(state["response_language"])
+    observations_by_tool_call_id = _tool_observations_by_call_id(
+        (*state["messages"], *messages)
+    )
+    investigation_steps = _resolve_investigation_steps(
+        calls,
+        (),
+        response_language,
+        observations_by_tool_call_id=observations_by_tool_call_id,
+    )
+    identifiers, documents = _derive_structured_references(state)
+    update: dict[str, object] = {
+        "messages": list(messages),
+        "run_status": status.value,
+        "final_answer": _recovery_terminal_answer(error_code, response_language),
+        "investigation_steps": tuple(step.model_dump() for step in investigation_steps),
+        "next_steps": (),
+        "identifiers": tuple(reference.model_dump() for reference in identifiers),
+        "documents": tuple(reference.model_dump() for reference in documents),
+    }
+    if status is AgentRunStatus.RECOVERY_BLOCKED:
+        update["recovery_outcome"] = RecoveryOutcome.BLOCKED.value
+    elif status is AgentRunStatus.RECOVERY_FAILED:
+        update["recovery_outcome"] = RecoveryOutcome.FAILED.value
+    if executed_tool_count is not None:
+        update["executed_tool_count"] = executed_tool_count
+    if executed_tool_calls is not None:
+        update["executed_tool_calls"] = executed_tool_calls
+    if pending_action is not ...:
+        update["pending_action"] = pending_action
+    return update
+
+
+def _recovery_terminal_answer(
+    error_code: str, response_language: ResponseLanguage
+) -> str:
+    german = {
+        "recovery_incomplete": (
+            "Die angeforderte Recovery wurde nicht abgeschlossen; die erforderliche "
+            "kontrollierte Aktion wurde nicht vorbereitet und nicht ausgeführt."
+        ),
+        "recovery_blocked": (
+            "Die angeforderte Recovery wurde blockiert; es wurde keine erfolgreiche "
+            "physische Wiederherstellung bestätigt."
+        ),
+        "recovery_failed": (
+            "Die angeforderte Recovery hat keine verifizierte Wiederherstellung ergeben."
+        ),
+    }
+    english = {
+        "recovery_incomplete": (
+            "The requested recovery was not completed; the required controlled action "
+            "was not prepared or executed."
+        ),
+        "recovery_blocked": (
+            "The requested recovery was blocked; no successful physical recovery was confirmed."
+        ),
+        "recovery_failed": (
+            "The requested recovery did not produce a verified recovery."
+        ),
+    }
+    messages = german if response_language is ResponseLanguage.DE else english
+    return messages[error_code]
 
 
 def _final_output_response_format() -> LLMResponseFormat:
@@ -1057,34 +1581,33 @@ def _authorized_tool_observations(
     state: CheckpointedTroubleshootingGraphState,
 ) -> tuple[dict[str, object], ...]:
     """Pass only in-loop, already-authorized observations to finalization."""
-    tool_messages = [
-        message for message in state["messages"] if isinstance(message, ToolMessage)
-    ]
+    observations_by_tool_call_id = _tool_observations_by_call_id(state["messages"])
     observations: list[dict[str, object]] = []
     for index, call in enumerate(state["executed_tool_calls"], start=1):
         tool_name = call.get("tool")
         if not isinstance(tool_name, str):
             raise FinalAgentOutputContractError("Executed tool call has no valid tool")
+        tool_call_id = call.get("tool_call_id")
         content = (
-            str(tool_messages[index - 1].content)
-            if index <= len(tool_messages)
-            else "No user-facing observation was recorded."
-        )
+            observations_by_tool_call_id.get(tool_call_id)
+            if isinstance(tool_call_id, str)
+            else None
+        ) or "No user-facing observation was recorded."
         observations.append(
             {"step": index, "action": tool_name, "observation": content}
         )
     return tuple(observations)
 
 
-def _tool_observation_contents(
-    state: CheckpointedTroubleshootingGraphState,
-) -> tuple[str, ...]:
-    """Return only the current run's already-authorized tool observations."""
-    return tuple(
-        str(message.content)
-        for message in state["messages"]
-        if isinstance(message, ToolMessage)
-    )
+def _tool_observations_by_call_id(
+    messages: tuple[AnyMessage, ...] | list[AnyMessage],
+) -> dict[str, str]:
+    """Correlate each completed tool observation to its exact invocation."""
+    return {
+        message.tool_call_id: str(message.content)
+        for message in messages
+        if isinstance(message, ToolMessage) and isinstance(message.tool_call_id, str)
+    }
 
 
 _STATION_IDENTIFIER_PATTERN = re.compile(r"\bS\d{2,3}\b", re.IGNORECASE)
@@ -1390,11 +1913,45 @@ def _serialized_tool_observation(result: object) -> str:
     return str(result)
 
 
+def _prepared_reference_calibration_device(
+    messages: list[AnyMessage], station_id: str
+) -> str:
+    """Extract the server-resolved device from a matching preparation observation."""
+    tool_names_by_call_id = {
+        _require_tool_call_id(tool_call.get("id")): tool_call["name"]
+        for message in messages
+        if isinstance(message, AIMessage)
+        for tool_call in message.tool_calls
+        if isinstance(tool_call.get("name"), str)
+    }
+    for message in reversed(messages):
+        if not isinstance(message, ToolMessage):
+            continue
+        tool_name = message.name or tool_names_by_call_id.get(message.tool_call_id)
+        if tool_name != "prepare_reference_calibration":
+            continue
+        if not isinstance(message.content, str):
+            continue
+        try:
+            preparation = _TrustedReferenceCalibrationPreparation.model_validate_json(
+                message.content
+            )
+        except ValidationError:
+            continue
+        if preparation.station_id == station_id:
+            return preparation.device_id
+    raise InvalidToolArgumentsError(
+        "Reference calibration requires a matching trusted preparation"
+    )
+
+
 def _resolve_investigation_steps(
     executed_tool_calls: tuple[dict[str, object], ...],
     proposed_steps: tuple[InvestigationStep, ...],
     response_language: ResponseLanguage,
     observations: tuple[str, ...] = (),
+    *,
+    observations_by_tool_call_id: dict[str, str] | None = None,
 ) -> tuple[InvestigationStep, ...]:
     """Publish system-derived trajectory and bounded findings from each observation."""
     expected_actions: tuple[str, ...] = tuple(
@@ -1410,25 +1967,36 @@ def _resolve_investigation_steps(
         and tuple(step.step for step in proposed_steps) == expected_steps
         and tuple(step.action for step in proposed_steps) == expected_actions
     )
+
+    def finding_for_call(index: int, action: str, call: dict[str, object]) -> str:
+        tool_call_id = call.get("tool_call_id")
+        has_stable_correlation = isinstance(tool_call_id, str)
+        observation = (
+            observations_by_tool_call_id.get(tool_call_id)
+            if has_stable_correlation and observations_by_tool_call_id is not None
+            else observations[index - 1]
+            if not has_stable_correlation and index <= len(observations)
+            else None
+        )
+        return (
+            _finding_from_authorized_observation(action, observation, response_language)
+            or (
+                proposed_steps[index - 1].finding
+                if not has_stable_correlation and has_matching_trajectory
+                else None
+            )
+            or _fallback_investigation_finding(action, response_language)
+        )
+
     return tuple(
         InvestigationStep(
             step=index,
             action=action,
-            finding=(
-                _finding_from_authorized_observation(
-                    action,
-                    observations[index - 1] if index <= len(observations) else None,
-                    response_language,
-                )
-                or (
-                    proposed_steps[index - 1].finding
-                    if has_matching_trajectory
-                    else None
-                )
-                or _fallback_investigation_finding(action, response_language)
-            ),
+            finding=finding_for_call(index, action, call),
         )
-        for index, action in enumerate(expected_actions, start=1)
+        for index, (action, call) in enumerate(
+            zip(expected_actions, executed_tool_calls, strict=True), start=1
+        )
     )
 
 
@@ -1452,6 +2020,100 @@ def _finding_from_authorized_observation(
         return _documentation_search_finding(payload, response_language)
     if action == "get_product_history":
         return _product_history_finding(payload, response_language)
+    if action == GET_POSITION_REFERENCE_STATUS_TOOL_NAME:
+        return _position_reference_status_finding(payload, response_language)
+    if action == PREPARE_REFERENCE_CALIBRATION_TOOL_NAME:
+        return _reference_calibration_preparation_finding(payload, response_language)
+    if action == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME:
+        return _reference_calibration_execution_finding(payload, response_language)
+    return None
+
+
+def _position_reference_status_finding(
+    payload: dict[object, object], response_language: ResponseLanguage
+) -> str | None:
+    station_id = payload.get("station_id")
+    reference_valid = payload.get("reference_valid")
+    deviation = payload.get("position_deviation_mm")
+    tolerance = payload.get("configured_tolerance_mm")
+    if not isinstance(station_id, str) or not isinstance(reference_valid, bool):
+        return None
+    if not isinstance(deviation, (int, float)) or not isinstance(
+        tolerance, (int, float)
+    ):
+        return None
+    if reference_valid:
+        return (
+            f"Die Positionsreferenz an {station_id} ist gueltig."
+            if response_language is ResponseLanguage.DE
+            else f"The position reference at {station_id} is valid."
+        )
+    return (
+        f"Die Positionsreferenz an {station_id} ist ungueltig; die Abweichung "
+        f"{deviation:g} mm liegt ueber der Toleranz von {tolerance:g} mm."
+        if response_language is ResponseLanguage.DE
+        else f"The position reference at {station_id} is invalid; deviation "
+        f"{deviation:g} mm exceeds the {tolerance:g} mm tolerance."
+    )
+
+
+def _reference_calibration_preparation_finding(
+    payload: dict[object, object], response_language: ResponseLanguage
+) -> str | None:
+    station_id = payload.get("station_id")
+    requires_approval = payload.get("requires_approval")
+    evaluations = payload.get("precondition_evaluations")
+    if not isinstance(station_id, str) or requires_approval is not True:
+        return None
+    if not isinstance(evaluations, list):
+        return None
+    is_blocked = any(
+        isinstance(evaluation, dict) and evaluation.get("status") == "FAILED"
+        for evaluation in evaluations
+    )
+    if is_blocked:
+        return (
+            f"Die Referenzkalibrierung an {station_id} wurde durch eine "
+            "deterministische Vorbedingung blockiert."
+            if response_language is ResponseLanguage.DE
+            else f"Reference calibration at {station_id} was blocked by a deterministic precondition."
+        )
+    return (
+        f"Die kontrollierte Referenzkalibrierung an {station_id} wurde vorbereitet "
+        "und erfordert menschliche Freigabe."
+        if response_language is ResponseLanguage.DE
+        else f"Controlled reference calibration at {station_id} was prepared and requires human approval."
+    )
+
+
+def _reference_calibration_execution_finding(
+    payload: dict[object, object], response_language: ResponseLanguage
+) -> str | None:
+    executed = payload.get("action_executed")
+    verification_status = payload.get("verification_status")
+    recovery_outcome = payload.get("recovery_outcome")
+    if not isinstance(executed, bool) or not isinstance(verification_status, str):
+        return None
+    if executed and verification_status == "PASSED" and recovery_outcome == "SUCCEEDED":
+        return (
+            "Die Referenzkalibrierung wurde ausgefuehrt und die unabhaengige "
+            "Post-Action-Verifikation war erfolgreich."
+            if response_language is ResponseLanguage.DE
+            else "Reference calibration executed and independent post-action verification passed."
+        )
+    if executed and verification_status == "FAILED":
+        return (
+            "Die Referenzkalibrierung wurde ausgefuehrt, aber die unabhaengige "
+            "Post-Action-Verifikation ist fehlgeschlagen."
+            if response_language is ResponseLanguage.DE
+            else "Reference calibration executed, but independent post-action verification failed."
+        )
+    if not executed:
+        return (
+            "Die Referenzkalibrierung wurde nicht ausgefuehrt."
+            if response_language is ResponseLanguage.DE
+            else "Reference calibration was not executed."
+        )
     return None
 
 

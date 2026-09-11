@@ -127,6 +127,92 @@ def test_full_demo_routes_eligible_public_classifications_to_public_fast(
     assert selected == ModelProfile("public_fast")
 
 
+def test_s04_position_reference_recovery_requires_nvidia_quality() -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+    profile = resolve_demo_run_profile(
+        "Untersuche den Positionsreferenzfehler an Station S04 und stelle die Station wieder her."
+    )
+    task = AgentRunClassificationPolicy().resolve(profile).task_requirements
+
+    selected = DeterministicModelRouter().route(
+        task, configuration.get_routing_profiles()
+    )
+
+    assert profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
+    assert task.required_model_profile == ModelProfile("nvidia_quality")
+    assert selected == ModelProfile("nvidia_quality")
+
+
+def test_s04_position_reference_recovery_fails_closed_without_nvidia_profile() -> None:
+    task = (
+        AgentRunClassificationPolicy()
+        .resolve(AgentRunProfile.CONFIDENTIAL_RECOVERY)
+        .task_requirements
+    )
+
+    with pytest.raises(NoEligibleModelError):
+        DeterministicModelRouter().route(
+            task,
+            (
+                make_profile(
+                    "public_fast",
+                    quality=QualityClass.HIGH,
+                    zone=ExecutionZone.PUBLIC_CLOUD,
+                    max_data_classification=DataClassification.CONFIDENTIAL,
+                ),
+            ),
+        )
+
+
+def test_s04_position_reference_recovery_does_not_fall_back_when_nvidia_key_is_absent() -> (
+    None
+):
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+    task = (
+        AgentRunClassificationPolicy()
+        .resolve(AgentRunProfile.CONFIDENTIAL_RECOVERY)
+        .task_requirements
+    )
+    available_profiles = configuration.get_available_routing_profiles(
+        environment={"GROQ_API_KEY": "configured"}
+    )
+
+    with pytest.raises(NoEligibleModelError):
+        DeterministicModelRouter().route(task, available_profiles)
+
+
+def test_s04_position_reference_recovery_keeps_final_egress_check() -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+    task = (
+        AgentRunClassificationPolicy()
+        .resolve(AgentRunProfile.CONFIDENTIAL_RECOVERY)
+        .task_requirements
+    )
+    selected = DeterministicModelRouter().route(
+        task, configuration.get_routing_profiles()
+    )
+    adapter = RecordingLLMClient()
+    client = EgressCheckedLLMClient(
+        adapter,
+        configuration,
+        task.data_classification,
+    )
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="synthetic request"),)
+    )
+
+    client.chat(selected, request)
+
+    assert selected == ModelProfile("nvidia_quality")
+    assert adapter.calls == [(selected, request)]
+
+
 def test_local_only_configuration_excludes_public_profiles_and_routes_confidential_locally() -> (
     None
 ):

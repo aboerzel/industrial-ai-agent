@@ -176,8 +176,51 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
         if turn.tool_calls:
             names = "<br/>".join(escape(call.tool) for call in turn.tool_calls)
             story.extend([Paragraph("Executed tools", label), Paragraph(names, text)])
+        if turn.error is not None:
+            error_label = "Fehler" if turn.response_language == "DE" else "Error"
+            story.extend(
+                [
+                    Paragraph(error_label, label),
+                    Paragraph(escape(turn.error.code), text),
+                    Paragraph(_inline_markup(turn.error.message, code_font), text),
+                ]
+            )
+        if turn.recovery_outcome is not None:
+            recovery_label = (
+                "Recovery-Ergebnis"
+                if turn.response_language == "DE"
+                else "Recovery outcome"
+            )
+            recovery_text = (
+                "Keine Aktion war erforderlich."
+                if turn.recovery_outcome.value == "NOT_REQUIRED"
+                and turn.response_language == "DE"
+                else "No action was required."
+                if turn.recovery_outcome.value == "NOT_REQUIRED"
+                else "Die Recovery wurde ausgeführt und unabhängig verifiziert."
+                if turn.recovery_outcome.value == "SUCCEEDED"
+                and turn.response_language == "DE"
+                else "Recovery was executed and verified."
+                if turn.recovery_outcome.value == "SUCCEEDED"
+                else "Die Recovery wurde blockiert, bevor eine Aktion ausgeführt wurde."
+                if turn.recovery_outcome.value == "BLOCKED"
+                and turn.response_language == "DE"
+                else "Recovery was blocked before an action was executed."
+                if turn.recovery_outcome.value == "BLOCKED"
+                else "Die Recovery ergab keine verifizierte Wiederherstellung."
+                if turn.recovery_outcome.value == "FAILED"
+                and turn.response_language == "DE"
+                else "Recovery did not produce a verified restoration."
+                if turn.recovery_outcome.value == "FAILED"
+                else turn.recovery_outcome.value
+            )
+            story.extend(
+                [Paragraph(recovery_label, label), Paragraph(recovery_text, text)]
+            )
         story.extend(
             [
+                Paragraph("Status", label),
+                Paragraph(escape(turn.status.value), text),
                 Paragraph("Classification", label),
                 Paragraph(escape(turn.data_classification.value), text),
                 Paragraph(f"Created: {turn.created_at or 'Not recorded'}", text),
