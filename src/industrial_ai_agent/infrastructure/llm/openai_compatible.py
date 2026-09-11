@@ -64,7 +64,9 @@ class OpenAICompatibleLLMClient:
         profile_config = self._configuration.get_profile(profile.name)
         client = self._get_client(profile)
         parameters: dict[str, Any] = {
-            "model": profile_config.model,
+            "model": _resolve_configured_value(
+                profile_config.model, profile_config.model_env, self._environment
+            ),
             "messages": [_serialize_message(message) for message in request.messages],
             "temperature": profile_config.temperature,
         }
@@ -148,7 +150,11 @@ class OpenAICompatibleLLMClient:
             profile_config = self._configuration.get_profile(profile.name)
             self._clients[profile.name] = self._client_factory(
                 api_key=self._resolve_api_key(profile_config),
-                base_url=str(profile_config.base_url),
+                base_url=_resolve_configured_value(
+                    str(profile_config.base_url),
+                    profile_config.base_url_env,
+                    self._environment,
+                ),
                 # Let the application classify a provider limit immediately. The
                 # OpenAI SDK otherwise retries 429 responses with backoff inside
                 # the bounded Agent execution deadline.
@@ -178,6 +184,17 @@ def _parse_tool_call(tool_call: Any) -> LLMToolCall:
         name=tool_call.function.name,
         arguments=arguments,
     )
+
+
+def _resolve_configured_value(
+    default: str, environment_variable: str | None, environment: Mapping[str, str]
+) -> str:
+    """Prefer a non-empty deployment override while retaining a validated default."""
+    if environment_variable:
+        value = environment.get(environment_variable, "").strip()
+        if value:
+            return value
+    return default
 
 
 def _response_text(message: Any, *, structured_output: bool) -> str | None:

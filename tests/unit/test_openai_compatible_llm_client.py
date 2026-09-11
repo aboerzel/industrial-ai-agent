@@ -31,6 +31,8 @@ from industrial_ai_agent.infrastructure.llm.openai_compatible import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_QUALITY_PROFILE = ModelProfile("local_quality")
 PUBLIC_FAST_PROFILE = ModelProfile("public_fast")
+MISTRAL_FAST_PROFILE = ModelProfile("mistral_fast")
+NVIDIA_QUALITY_PROFILE = ModelProfile("nvidia_quality")
 
 
 class FakeCompletions:
@@ -402,6 +404,136 @@ def test_maps_tool_definitions_and_tool_calls_without_executing_them() -> None:
         "get_product_history"
     )
     assert fake_client.completions.parameters["parallel_tool_calls"] is False
+
+
+@pytest.mark.parametrize(
+    ("profile", "api_key_env", "api_key", "model_override", "base_url_override"),
+    (
+        (
+            MISTRAL_FAST_PROFILE,
+            "MISTRAL_API_KEY",
+            "mistral-test-key",
+            "mistral-override",
+            "https://mistral.example.test/v1",
+        ),
+        (
+            NVIDIA_QUALITY_PROFILE,
+            "NVIDIA_API_KEY",
+            "nvidia-test-key",
+            "nvidia-override",
+            "https://nvidia.example.test/v1",
+        ),
+    ),
+)
+def test_external_profiles_reuse_openai_compatible_tool_and_usage_contract(
+    profile: ModelProfile,
+    api_key_env: str,
+    api_key: str,
+    model_override: str,
+    base_url_override: str,
+) -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=None,
+                    tool_calls=(
+                        SimpleNamespace(
+                            id="call-provider",
+                            function=SimpleNamespace(
+                                name="get_product_history",
+                                arguments='{"product_id":"P4711"}',
+                            ),
+                        ),
+                    ),
+                ),
+                finish_reason="tool_calls",
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+    )
+    fake_client = FakeOpenAIClient(completion)
+    client_arguments: dict[str, object] = {}
+    environment = {
+        api_key_env: api_key,
+        f"{api_key_env.removesuffix('_API_KEY')}_MODEL": model_override,
+        f"{api_key_env.removesuffix('_API_KEY')}_BASE_URL": base_url_override,
+    }
+    client = OpenAICompatibleLLMClient(
+        load_llm_configuration(PROJECT_ROOT / "config" / "model_profiles.toml"),
+        environment=environment,
+        client_factory=lambda **kwargs: client_arguments.update(kwargs) or fake_client,
+    )
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="Inspect P4711"),),
+        tools=(
+            LLMToolDefinition(
+                name="get_product_history",
+                description="Get the production history for a product.",
+                parameters={"type": "object"},
+            ),
+        ),
+    )
+
+    response = client.chat(profile, request)
+
+    assert client_arguments == {
+        "api_key": api_key,
+        "base_url": base_url_override,
+        "max_retries": 0,
+    }
+    assert fake_client.completions.parameters is not None
+    assert fake_client.completions.parameters["model"] == model_override
+    assert fake_client.completions.parameters["parallel_tool_calls"] is False
+    assert response.tool_calls == (
+        LLMToolCall(
+            id="call-provider",
+            name="get_product_history",
+            arguments={"product_id": "P4711"},
+        ),
+    )
+    assert response.usage is not None
+    assert response.usage.input_tokens == 11
+    assert response.usage.output_tokens == 7
+    assert response.usage.total_tokens == 18
+
+
+def test_nvidia_profile_uses_the_existing_structured_output_contract() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content='{"status":"ok","provider":"nvidia"}', tool_calls=None
+                ),
+                finish_reason="stop",
+            )
+        ]
+    )
+    fake_client = FakeOpenAIClient(completion)
+    client = OpenAICompatibleLLMClient(
+        load_llm_configuration(PROJECT_ROOT / "config" / "model_profiles.toml"),
+        environment={"NVIDIA_API_KEY": "nvidia-test-key"},
+        client_factory=lambda **_: fake_client,
+    )
+    request = LLMRequest(
+        messages=(
+            LLMMessage(role=MessageRole.USER, content="Return structured output"),
+        ),
+        response_format=LLMResponseFormat(
+            json_schema=LLMJsonSchema(
+                name="provider_probe",
+                schema_definition={"type": "object", "additionalProperties": False},
+            )
+        ),
+    )
+
+    response = client.chat(NVIDIA_QUALITY_PROFILE, request)
+
+    assert response.text == '{"status":"ok","provider":"nvidia"}'
+    assert fake_client.completions.parameters is not None
+    assert fake_client.completions.parameters["response_format"] == (
+        request.response_format.model_dump(mode="json", by_alias=True)
+    )
 
 
 def test_maps_assistant_tool_call_and_tool_result_messages() -> None:

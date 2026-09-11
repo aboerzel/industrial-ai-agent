@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -19,8 +20,12 @@ from industrial_ai_agent.agent.model_egress import (
     ModelEgressPolicy,
     effective_data_classification,
 )
+from industrial_ai_agent.infrastructure.llm.configuration import (
+    load_llm_configuration,
+)
 
 PROFILE = ModelProfile("test-profile")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass
@@ -190,6 +195,32 @@ def test_denied_public_cloud_request_never_reaches_adapter() -> None:
         client.chat(PROFILE, create_request("confidential production value"))
 
     assert adapter.calls == []
+
+
+@pytest.mark.parametrize("profile_name", ("mistral_fast", "nvidia_quality"))
+def test_s04_confidential_egress_uses_the_same_final_policy_for_new_public_profiles(
+    profile_name: str,
+) -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+    adapter = RecordingLLMClient()
+    request = create_request("S04 position-reference observation")
+    client = EgressCheckedLLMClient(
+        adapter,
+        configuration,
+        DataClassification.CONFIDENTIAL,
+    )
+
+    response = client.chat(ModelProfile(profile_name), request)
+
+    assert response.text == "response"
+    assert adapter.calls == [(ModelProfile(profile_name), request)]
+    assert ModelEgressPolicy().is_allowed(
+        DataClassification.CONFIDENTIAL,
+        configuration.get_execution_zone(profile_name),
+        configuration.get_max_data_classification(profile_name),
+    )
 
 
 def test_deny_error_does_not_expose_request_content_or_secrets() -> None:

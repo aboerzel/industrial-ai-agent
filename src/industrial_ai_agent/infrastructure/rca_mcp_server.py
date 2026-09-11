@@ -386,8 +386,9 @@ def _create_rca_reasoner(telemetry: Telemetry | None) -> RcaReasoner | None:
     adapter = OpenAICompatibleLLMClient(configuration)
     return LlmRcaReasoner(
         router=DeterministicModelRouter(),
-        profiles=configuration.get_routing_profiles(
-            local_only=local_only_mode_enabled()
+        profiles=configuration.get_available_routing_profiles(
+            environment=os.environ,
+            local_only=local_only_mode_enabled(),
         ),
         timeout_seconds=float(os.getenv("RCA_REASONING_TIMEOUT_SECONDS", "90")),
         client_factory=lambda classification, focus: _reasoning_llm_client(

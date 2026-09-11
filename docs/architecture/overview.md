@@ -1001,6 +1001,18 @@ Cost and quality preferences cannot override the security filter. See
 [ADR-008](../decisions/ADR-008-task-level-model-routing.md) and
 [ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.md).
 
+Mistral and NVIDIA NIM are additional external OpenAI-compatible providers behind the
+same `LLMClient` adapter as Groq. `mistral_fast` defaults to
+`https://api.mistral.ai/v1` and `mistral-small-latest` and uses `MISTRAL_API_KEY`;
+`nvidia_quality` defaults to `https://integrate.api.nvidia.com/v1` and
+`nvidia/nemotron-3.5-lightning-30b-a3b` and uses `NVIDIA_API_KEY`. Their model and base
+URL have optional environment overrides. They are candidates only when their API key is
+configured, remain subject to the normal public-cloud egress policy, and have
+provider-controlled availability and rate limits. No provider fallback is implemented.
+NVIDIA's configured profile supports the existing JSON-schema structured-output path;
+Mistral structured output remains disabled: its initial live verification was blocked by
+a provider-side rate limit and must be repeated successfully before enabling the profile.
+
 ### Retrieval Evolution
 
 The lexical baselines and the first semantic baseline are now also compared with a

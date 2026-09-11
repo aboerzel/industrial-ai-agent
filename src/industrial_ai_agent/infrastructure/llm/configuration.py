@@ -1,5 +1,6 @@
 import os
 import tomllib
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -51,6 +52,8 @@ class ModelProfileConfig(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=1, le=4096)
     api_cost_usd: Decimal | None = Field(default=None, ge=0)
     api_key_env: str | None = Field(default=None, min_length=1)
+    model_env: str | None = Field(default=None, min_length=1)
+    base_url_env: str | None = Field(default=None, min_length=1)
 
     @field_validator("max_data_classification", mode="before")
     @classmethod
@@ -106,6 +109,27 @@ class LLMConfiguration(BaseModel):
             )
             for profile_name, profile in sorted(self.profiles.items())
             if not local_only or profile.execution_zone is ExecutionZone.LOCAL
+        )
+
+    def get_available_routing_profiles(
+        self,
+        *,
+        environment: Mapping[str, str],
+        local_only: bool = False,
+    ) -> tuple[ModelProfileMetadata, ...]:
+        """Return routing candidates whose required credentials are configured."""
+        return tuple(
+            metadata
+            for metadata in self.get_routing_profiles(local_only=local_only)
+            if self.is_profile_available(metadata.profile.name, environment=environment)
+        )
+
+    def is_profile_available(
+        self, profile_name: str, *, environment: Mapping[str, str]
+    ) -> bool:
+        profile = self.get_profile(profile_name)
+        return profile.authentication is AuthenticationMode.NONE or bool(
+            profile.api_key_env and environment.get(profile.api_key_env, "").strip()
         )
 
 

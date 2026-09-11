@@ -180,8 +180,9 @@ def create_default_troubleshooting_run_service(
 
     return TroubleshootingRunService(
         router=DeterministicModelRouter(policy),
-        profiles=configuration.get_routing_profiles(
-            local_only=local_only_mode_enabled()
+        profiles=configuration.get_available_routing_profiles(
+            environment=os.environ,
+            local_only=local_only_mode_enabled(),
         ),
         agent_factory=_LangGraphTroubleshootingAgentFactory(
             configuration=configuration,
