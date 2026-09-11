@@ -72,6 +72,8 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "langfuse.observation.model.name",
         "langfuse.observation.type",
         "mcp.operation",
+        "mcp.readiness.stage",
+        "mcp.retry.attempt",
         "mcp.server",
         "mcp.tool",
         "model.name",
@@ -113,6 +115,8 @@ _METRIC_ATTRIBUTE_KEYS = frozenset(
         "error.stage",
         "execution.zone",
         "mcp.operation",
+        "mcp.readiness.stage",
+        "mcp.retry.attempt",
         "mcp.server",
         "mcp.tool",
         "model.profile",
@@ -190,6 +194,7 @@ class Telemetry:
         self._agent_errors = meter.create_counter("agent_errors_total")
         self._mcp_calls = meter.create_counter("mcp_tool_calls_total")
         self._mcp_discovery = meter.create_counter("mcp_discovery_total")
+        self._mcp_reconnect = meter.create_counter("mcp_reconnect_total")
         self._llm_calls = meter.create_counter("llm_calls_total")
         self._llm_input_tokens = meter.create_counter("llm_input_tokens_total")
         self._llm_output_tokens = meter.create_counter("llm_output_tokens_total")
@@ -413,6 +418,10 @@ class Telemetry:
 
     def record_mcp_discovery(self, *, attributes: Mapping[str, object]) -> None:
         self._mcp_discovery.add(1, metric_attributes(attributes))
+
+    def record_mcp_reconnect(self, *, attributes: Mapping[str, object]) -> None:
+        """Record a bounded retry after MCP discovery was temporarily unavailable."""
+        self._mcp_reconnect.add(1, metric_attributes(attributes))
 
     def record_retrieval(self, *, attributes: Mapping[str, object]) -> None:
         self._retrieval_calls.add(1, metric_attributes(attributes))

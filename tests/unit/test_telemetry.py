@@ -173,6 +173,33 @@ def test_recovery_lifecycle_metrics_keep_only_bounded_dimensions() -> None:
     ]
 
 
+def test_mcp_reconnect_metric_uses_only_bounded_readiness_dimensions() -> None:
+    telemetry, reader = _metric_telemetry()
+
+    telemetry.record_mcp_reconnect(
+        attributes={
+            "mcp.server": "knowledge",
+            "mcp.retry.attempt": 1,
+            "mcp.readiness.stage": "discovery",
+            "run.profile": "CONFIDENTIAL_TROUBLESHOOTING",
+            "run.id": "must-not-be-a-metric-label",
+            "error_message": "must-not-be-a-metric-label",
+        }
+    )
+
+    assert _counter_values(reader, "mcp_reconnect_total") == [
+        (
+            {
+                "mcp.server": "knowledge",
+                "mcp.retry.attempt": 1,
+                "mcp.readiness.stage": "discovery",
+                "run.profile": "CONFIDENTIAL_TROUBLESHOOTING",
+            },
+            1,
+        )
+    ]
+
+
 def test_llm_usage_metrics_aggregate_only_bounded_dimensions() -> None:
     telemetry, reader = _metric_telemetry()
     attributes = {

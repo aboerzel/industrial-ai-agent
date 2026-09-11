@@ -41,7 +41,7 @@ services:
     volumes:
       - ${FACTORY_DATA_HOST_PATH:-./demo_factory}/metadata:/app/data/factory/metadata:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 2).close()"]
+      test: ["CMD", "python", "-m", "industrial_ai_agent.infrastructure.mcp_readiness", "--url", "http://127.0.0.1:8001/mcp", "--bearer-token-env", "MCP_INDUSTRIAL_AGENT_TOKEN", "--required-tool", "get_machine_status", "--required-tool", "get_product_history"]
       interval: 10s
       timeout: 3s
       start_period: 20s
@@ -82,7 +82,7 @@ services:
       - ${FACTORY_IMAGE_HOST_PATH:-./demo_factory/images}:/app/data/document-content/images:ro
       - ${KNOWLEDGE_HOST_PATH:-./knowledge_base}:/app/data/knowledge:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8002), 2).close()"]
+      test: ["CMD", "python", "-m", "industrial_ai_agent.infrastructure.mcp_readiness", "--url", "http://127.0.0.1:8002/mcp", "--bearer-token-env", "MCP_INDUSTRIAL_AGENT_TOKEN", "--required-tool", "search_documentation"]
       interval: 10s
       timeout: 3s
       # Cold cache creation parses every local demo asset and loads local models.
@@ -110,7 +110,7 @@ services:
     ports:
       - "127.0.0.1:8006:8006"
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8006), 2).close()"]
+      test: ["CMD", "python", "-m", "industrial_ai_agent.infrastructure.mcp_readiness", "--url", "http://127.0.0.1:8006/mcp", "--bearer-token-env", "MCP_INDUSTRIAL_AGENT_TOKEN", "--required-tool", "get_position_reference_status", "--required-tool", "prepare_reference_calibration", "--required-tool", "execute_reference_calibration"]
       interval: 10s
       timeout: 3s
       start_period: 5s

@@ -47,6 +47,35 @@ def test_persistent_demo_services_restart_unless_stopped() -> None:
         assert service.get("restart") == "unless-stopped", service_name
 
 
+def test_agent_dependencies_use_protocol_aware_mcp_readiness() -> None:
+    configuration = _compose_configuration()
+    services = configuration["services"]
+    assert isinstance(services, dict)
+
+    for service_name, expected_tool in (
+        ("factory-mcp", "get_machine_status"),
+        ("knowledge-mcp", "search_documentation"),
+        ("hardware-mcp", "get_position_reference_status"),
+    ):
+        service = services[service_name]
+        assert isinstance(service, dict)
+        healthcheck = service["healthcheck"]
+        assert isinstance(healthcheck, dict)
+        test = healthcheck["test"]
+        assert isinstance(test, list)
+        assert "industrial_ai_agent.infrastructure.mcp_readiness" in test
+        assert expected_tool in test
+
+    agent_api = services["agent-api"]
+    assert isinstance(agent_api, dict)
+    dependencies = agent_api["depends_on"]
+    assert isinstance(dependencies, dict)
+    for service_name in ("factory-mcp", "knowledge-mcp", "hardware-mcp"):
+        dependency = dependencies[service_name]
+        assert isinstance(dependency, dict)
+        assert dependency["condition"] == "service_healthy"
+
+
 def test_frontend_is_a_loopback_only_static_service() -> None:
     configuration = _compose_configuration()
     services = configuration["services"]

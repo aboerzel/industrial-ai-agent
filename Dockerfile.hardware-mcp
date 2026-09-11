@@ -28,6 +28,6 @@ USER app
 EXPOSE 8006
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import socket; socket.create_connection(('127.0.0.1', 8006), 2).close()"
+    CMD python -m industrial_ai_agent.infrastructure.mcp_readiness --url http://127.0.0.1:8006/mcp --bearer-token-env MCP_INDUSTRIAL_AGENT_TOKEN --required-tool get_position_reference_status --required-tool prepare_reference_calibration --required-tool execute_reference_calibration
 
 CMD ["python", "-m", "industrial_ai_agent.infrastructure.hardware_mcp_server", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8006"]

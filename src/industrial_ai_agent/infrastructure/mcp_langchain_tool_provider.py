@@ -3,6 +3,7 @@
 Review this module when a stable langchain-mcp-adapters release supports MCP SDK v2.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import (
@@ -72,6 +73,8 @@ DEFAULT_ALLOWED_HARDWARE_TOOLS = frozenset(
         "execute_reference_calibration",
     }
 )
+# A short bounded exponential backoff absorbs transport-manager startup and restart races.
+DEFAULT_MCP_DISCOVERY_RETRY_DELAYS_SECONDS = (0.25, 0.75, 1.5)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +103,9 @@ class McpLangChainToolProvider(McpToolProvider):
         telemetry: Telemetry | None = None,
         data_classification: str = "CONFIDENTIAL",
         run_profile: str = "CONFIDENTIAL_TROUBLESHOOTING",
+        discovery_retry_delays_seconds: tuple[float, ...] = (
+            DEFAULT_MCP_DISCOVERY_RETRY_DELAYS_SECONDS
+        ),
     ) -> None:
         if isinstance(transport_or_servers, (tuple, list)):
             self._servers = tuple(transport_or_servers)
@@ -119,13 +125,44 @@ class McpLangChainToolProvider(McpToolProvider):
         self._telemetry = telemetry
         self._data_classification = data_classification
         self._run_profile = run_profile
+        if any(delay < 0 for delay in discovery_retry_delays_seconds):
+            raise ValueError("MCP discovery retry delays must not be negative")
+        self._discovery_retry_delays_seconds = discovery_retry_delays_seconds
 
     def open_session(self) -> AbstractAsyncContextManager[McpToolSession]:
         return self._open_session()
 
     @asynccontextmanager
     async def _open_session(self) -> AsyncIterator[McpToolSession]:
+        """Retry only transient discovery before a run receives an MCP session."""
+        for attempt, retry_delay in enumerate(
+            (*self._discovery_retry_delays_seconds, None)
+        ):
+            opened = False
+            try:
+                async with self._open_session_once() as session:
+                    opened = True
+                    yield session
+                    return
+            except McpServiceUnavailableError as error:
+                if opened or retry_delay is None:
+                    raise
+                if self._telemetry is not None:
+                    self._telemetry.record_mcp_reconnect(
+                        attributes={
+                            "mcp.server": getattr(error, "mcp_server_id", "unknown"),
+                            "mcp.retry.attempt": attempt + 1,
+                            "data.classification": self._data_classification,
+                            "run.profile": self._run_profile,
+                            "mcp.readiness.stage": "discovery",
+                        }
+                    )
+                await asyncio.sleep(retry_delay)
+
+    @asynccontextmanager
+    async def _open_session_once(self) -> AsyncIterator[McpToolSession]:
         """Initialize, discover, authorize, and close one session per server."""
+        active_server_id = "unknown"
         try:
             async with AsyncExitStack() as stack:
                 authorized_tools: list[BaseTool] = []
@@ -134,6 +171,7 @@ class McpLangChainToolProvider(McpToolProvider):
                 server_sessions: list[McpServerSession] = []
                 seen_tool_names: set[str] = set()
                 for configuration in self._servers:
+                    active_server_id = configuration.server_id
                     discovery_attributes = {
                         "mcp.server": configuration.server_id,
                         "data.classification": self._data_classification,
@@ -240,7 +278,9 @@ class McpLangChainToolProvider(McpToolProvider):
                     tool_policies=tuple(authorized_tool_policies),
                 )
         except* (OSError, TimeoutError, httpx.HTTPError, httpx2.HTTPError) as error:
-            raise McpServiceUnavailableError("MCP service is unavailable") from error
+            unavailable = McpServiceUnavailableError("MCP service is unavailable")
+            unavailable.mcp_server_id = active_server_id
+            raise unavailable from error
 
     def _span(self, name: str, attributes: Mapping[str, object]):
         if self._telemetry is None:
