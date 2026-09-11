@@ -18,6 +18,7 @@ class McpPermission(StrEnum):
     CREATE_MAINTENANCE_TICKET = "create_maintenance_ticket"
     READ_HARDWARE_STATUS = "read_hardware_status"
     PREPARE_HARDWARE_RECOVERY = "prepare_hardware_recovery"
+    EXECUTE_HARDWARE_RECOVERY = "execute_hardware_recovery"
 
 
 @dataclass(frozen=True, slots=True)

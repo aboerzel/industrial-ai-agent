@@ -112,6 +112,15 @@ class AgentRunStore(Protocol):
         self, run_id: UUID, *, decision: str
     ) -> StoredAgentRun | None: ...
 
+    async def claim_reference_calibration_approval(
+        self,
+        run_id: UUID,
+        *,
+        action_id: str,
+        station_id: str,
+        device_id: str,
+    ) -> bool: ...
+
     async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None: ...
 
     async def list_recent(
@@ -261,13 +270,41 @@ class InMemoryAgentRunStore:
             record = replace(
                 existing,
                 status=RunStatus.RUNNING,
-                approval_request=None,
                 approval_decision=decision,
                 approval_decided_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
             self._records[run_id] = record
             return record
+
+    async def claim_reference_calibration_approval(
+        self,
+        run_id: UUID,
+        *,
+        action_id: str,
+        station_id: str,
+        device_id: str,
+    ) -> bool:
+        async with self._lock:
+            existing = self._records.get(run_id)
+            if (
+                existing is None
+                or existing.status is not RunStatus.RUNNING
+                or existing.approval_decision != "approve"
+                or not _matches_reference_calibration_approval(
+                    existing.approval_request,
+                    action_id=action_id,
+                    station_id=station_id,
+                    device_id=device_id,
+                )
+            ):
+                return False
+            self._records[run_id] = replace(
+                existing,
+                approval_request=None,
+                updated_at=datetime.now(UTC),
+            )
+            return True
 
     async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None:
         record = await self.get(run_id)
@@ -378,6 +415,26 @@ def _matches_recent_query(
     if query.model_profile is not None and record.model_profile != query.model_profile:
         return False
     return record.created_at is None or record.created_at >= query.created_after
+
+
+def _matches_reference_calibration_approval(
+    approval_request: dict[str, object] | None,
+    *,
+    action_id: str,
+    station_id: str,
+    device_id: str,
+) -> bool:
+    if not isinstance(approval_request, dict):
+        return False
+    details = approval_request.get("arguments")
+    return (
+        approval_request.get("action") == "execute_reference_calibration"
+        and approval_request.get("action_id") == action_id
+        and isinstance(details, dict)
+        and details.get("station_id") == station_id
+        and details.get("device_id") == device_id
+        and details.get("operation_type") == "reference_calibration"
+    )
 
 
 def _approval_action(approval_request: dict[str, object]) -> str | None:

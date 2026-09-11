@@ -831,10 +831,12 @@ verification, and result contracts. The implemented `SimulatedPositionEncoderAda
 is a deterministic in-process Infrastructure adapter for `POSITION-ENC-02` at `S04`;
 it exercises the bounded port for the reference-calibration demonstrator only.
 `hardware_mcp` exposes the bounded `get_position_reference_status` and
-`prepare_reference_calibration` read/preparation surface over the same port and trusted
-application contracts. It has no controlled execution tool or HITL execution handoff.
-An MHS adapter, real hardware, closed-loop Agent orchestration, and Vision integration
-remain unimplemented.
+`prepare_reference_calibration` read/preparation surface and the controlled
+`execute_reference_calibration` capability over the same port and trusted application
+contracts. Execution consumes an approved, run-, target-, and operation-bound HITL
+decision and delegates the fresh observe-precondition-authorize-act-observe-verify loop
+to `ClosedLoopRecoveryService`; neither the model nor a tool argument supplies approval.
+An MHS adapter, real hardware, and Vision integration remain unimplemented.
 
 Must remain independent from:
 
@@ -918,10 +920,14 @@ neither Hardware MCP nor an MHS or real-hardware adapter.
 `ClosedLoopRecoveryService` is the deterministic Application use case over the same
 port: it observes, evaluates bounded preconditions, invokes an authorization boundary,
 acts, obtains a fresh state, and verifies before returning a recovery result.
-`hardware_mcp` is the Infrastructure transport over the trusted read/preparation
-application surface. It exposes `get_position_reference_status` and
-`prepare_reference_calibration` only; controlled execution, HITL wiring, an MHS adapter,
-real hardware, Agent orchestration, and Vision integration remain unimplemented.
+`hardware_mcp` is the Infrastructure transport over the trusted recovery application
+surface. It exposes `get_position_reference_status`,
+`prepare_reference_calibration`, and the bounded controlled
+`execute_reference_calibration` capability. The LangGraph HITL interrupt stores an
+approval bound to its run, station, device, and operation; the execution capability
+consumes it once and delegates to `ClosedLoopRecoveryService`, which always re-reads
+preconditions and independently verifies the resulting state. An MHS adapter, real
+hardware, and Vision integration remain unimplemented.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores
@@ -1077,7 +1083,7 @@ flowchart TD
     Multiplexer --> Production["Production MCP"]
     Multiplexer --> Knowledge["Knowledge MCP"]
     Multiplexer --> Vision["Vision MCP"]
-    Multiplexer --> Hardware["Hardware MCP<br/>implemented read/preparation;<br/>controlled execution planned"]
+    Multiplexer --> Hardware["Hardware MCP<br/>implemented status, preparation,<br/>and HITL-controlled execution"]
 
     classDef runtime fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
@@ -1092,8 +1098,10 @@ This is a target direction, not the current implementation.
 Future physical-device integration and Closed-Loop Recovery are governed by
 [ADR-018](../decisions/ADR-018-physical-device-integration-and-closed-loop-recovery.md).
 Hardware MCP is a bounded capability boundary over an inner `PhysicalDevicePort`, not a
-raw hardware proxy. Its implemented S04 surface is limited to status and controlled-
-action preparation; controlled execution and Agent/HITL wiring remain planned.
+raw hardware proxy. Its implemented S04 surface provides status, controlled-action
+preparation, and execution only after a trusted, run-bound HITL approval. Execution is
+owned by `ClosedLoopRecoveryService`, including fresh precondition evaluation and
+post-action verification.
 
 Model profiles such as `vision`, `planning`, or `evaluation` can be added through
 configuration when their capabilities are implemented. A non-OpenAI-compatible
@@ -1112,9 +1120,9 @@ sequenceDiagram
     participant Store as Run store and checkpoint
     actor Human as Human / Web UI
     participant Resume as FastAPI resume endpoint
-    participant Factory as Factory MCP
+    participant Action as Factory or Hardware MCP
 
-    Agent->>Policy: Propose create_maintenance_ticket
+    Agent->>Policy: Propose bounded controlled action
     Policy->>Policy: Validate strict proposal and permission
     Policy->>Store: Persist pending approval and checkpoint
     Store-->>Human: Run is waiting_for_approval
@@ -1122,8 +1130,8 @@ sequenceDiagram
     Resume->>Store: Atomically claim persisted pending action
     Store-->>Agent: Resume same thread and decision
     alt approved
-        Agent->>Factory: Execute ticket action once
-        Factory-->>Agent: Structured action result
+        Agent->>Action: Execute approved action once
+        Action-->>Agent: Structured action result
     else rejected
         Agent->>Agent: Do not execute the action
     end
@@ -1146,4 +1154,6 @@ stateDiagram-v2
 The public run record persists lifecycle and approval data; official LangGraph
 checkpoints remain framework-managed. The process does not keep a Python thread blocked
 while waiting. Factory MCP owns the cohesive maintenance action and its request-ID unique
-constraint; the action node is reached only after an approved resume.
+constraint. Hardware MCP additionally consumes a persisted approval exactly once, bound
+to the run, station, device, and operation, before it delegates deterministic recovery.
+Every protected action node is reached only after an approved resume.

@@ -247,7 +247,6 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 )
                 .values(
                     status=RunStatus.RUNNING.value,
-                    approval_payload=None,
                     approval_decision=decision,
                     approval_decided_at=datetime.now(UTC),
                 )
@@ -255,6 +254,45 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             if changed != 1:
                 return None
             return _stored(_require_record(session, run_id))
+
+    async def claim_reference_calibration_approval(
+        self,
+        run_id: UUID,
+        *,
+        action_id: str,
+        station_id: str,
+        device_id: str,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._claim_reference_calibration_approval,
+            run_id,
+            action_id,
+            station_id,
+            device_id,
+        )
+
+    def _claim_reference_calibration_approval(
+        self,
+        run_id: UUID,
+        action_id: str,
+        station_id: str,
+        device_id: str,
+    ) -> bool:
+        with self._session_factory.session(self._security_context) as session:
+            record = session.scalar(
+                select(AgentRunRecord)
+                .where(AgentRunRecord.run_id == run_id)
+                .with_for_update()
+            )
+            if record is None or not _matches_reference_calibration_approval(
+                record,
+                action_id=action_id,
+                station_id=station_id,
+                device_id=device_id,
+            ):
+                return False
+            record.approval_payload = None
+            return True
 
     async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None:
         return await asyncio.to_thread(self._inspect, run_id)
@@ -354,6 +392,29 @@ def _safe_error_message(error_code: str) -> str:
         "llm_provider_unavailable": "The language model provider is temporarily unavailable.",
         "agent_execution_timeout": "The agent run exceeded its execution time limit.",
     }.get(error_code, "The agent run could not be completed.")
+
+
+def _matches_reference_calibration_approval(
+    record: AgentRunRecord,
+    *,
+    action_id: str,
+    station_id: str,
+    device_id: str,
+) -> bool:
+    payload = record.approval_payload
+    if not isinstance(payload, dict):
+        return False
+    details = payload.get("arguments")
+    return (
+        record.status == RunStatus.RUNNING.value
+        and record.approval_decision == "approve"
+        and payload.get("action") == "execute_reference_calibration"
+        and payload.get("action_id") == action_id
+        and isinstance(details, dict)
+        and details.get("station_id") == station_id
+        and details.get("device_id") == device_id
+        and details.get("operation_type") == "reference_calibration"
+    )
 
 
 def _inspection(record: AgentRunRecord) -> RuntimeRunInspection:

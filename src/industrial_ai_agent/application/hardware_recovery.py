@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
+from uuid import UUID
 
 from industrial_ai_agent.application.closed_loop_recovery import (
+    ClosedLoopRecoveryService,
+    RecoveryAuthorizationDecision,
+    RecoveryAuthorizationPort,
     evaluate_recovery_preconditions,
 )
 from industrial_ai_agent.domain.closed_loop_recovery import (
@@ -13,6 +18,7 @@ from industrial_ai_agent.domain.closed_loop_recovery import (
     RecoveryPrecondition,
     RecoveryPreconditionType,
     RecoveryProposal,
+    RecoveryResult,
     RecoveryTarget,
     VerificationCriterion,
     VerificationCriterionType,
@@ -50,6 +56,48 @@ class ReferenceCalibrationPreparation:
     proposal: RecoveryProposal
     precondition_evaluations: tuple[PreconditionEvaluation, ...]
     classification: DataClassification
+
+
+class TrustedRecoveryApprovalClaimPort(Protocol):
+    """Consume one approved, run-bound reference-calibration action."""
+
+    async def claim_reference_calibration(
+        self,
+        *,
+        run_id: UUID,
+        action_id: str,
+        station_id: StationId,
+        device_id: DeviceId,
+    ) -> bool:
+        """Return whether the exact trusted approval was claimed once."""
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedReferenceCalibrationAuthorization(RecoveryAuthorizationPort):
+    """Authorize only a server-validated approved reference-calibration proposal."""
+
+    security_context: SecurityContext
+    classification: DataClassification
+    target: RecoveryTarget
+    approved: bool
+    mcp_execution_permitted: bool
+
+    def authorize(
+        self,
+        proposal: RecoveryProposal,
+        precondition_evaluations: tuple[PreconditionEvaluation, ...],
+    ) -> RecoveryAuthorizationDecision:
+        del precondition_evaluations
+        if (
+            not self.approved
+            or not self.mcp_execution_permitted
+            or self.security_context.clearance < self.classification
+            or proposal.target != self.target
+            or proposal.proposed_action.operation_type
+            is not DeviceOperationType.REFERENCE_CALIBRATION
+        ):
+            return RecoveryAuthorizationDecision.DENIED
+        return RecoveryAuthorizationDecision.AUTHORIZED
 
 
 class HardwareRecoveryPreparationService:
@@ -198,3 +246,52 @@ def _position_reference_evidence(state: DeviceState) -> str:
         f"position_deviation={deviation}; "
         f"operational_state={state.operational_state}"
     )
+
+
+class HardwareRecoveryExecutionService:
+    """Execute one already-approved bounded recovery through the closed-loop use case."""
+
+    def __init__(
+        self,
+        *,
+        preparation: HardwareRecoveryPreparationService,
+        physical_devices: PhysicalDevicePort,
+        approval_claims: TrustedRecoveryApprovalClaimPort,
+    ) -> None:
+        self._preparation = preparation
+        self._physical_devices = physical_devices
+        self._approval_claims = approval_claims
+
+    async def execute_reference_calibration(
+        self,
+        *,
+        run_id: UUID,
+        action_id: str,
+        station_id: StationId,
+        device_id: DeviceId,
+        security_context: SecurityContext,
+        mcp_execution_permitted: bool,
+    ) -> RecoveryResult:
+        """Consume approval and delegate the fresh recovery loop to its owner."""
+        preparation = self._preparation.prepare_reference_calibration(
+            station_id=station_id,
+            device_id=device_id,
+            security_context=security_context,
+        )
+        approved = await self._approval_claims.claim_reference_calibration(
+            run_id=run_id,
+            action_id=action_id,
+            station_id=station_id,
+            device_id=device_id,
+        )
+        authorization = TrustedReferenceCalibrationAuthorization(
+            security_context=security_context,
+            classification=preparation.classification,
+            target=preparation.proposal.target,
+            approved=approved,
+            mcp_execution_permitted=mcp_execution_permitted,
+        )
+        return ClosedLoopRecoveryService(
+            physical_devices=self._physical_devices,
+            authorization=authorization,
+        ).execute(preparation.proposal)

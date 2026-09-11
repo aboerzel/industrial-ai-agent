@@ -37,6 +37,11 @@ TROUBLESHOOTING_TOOL_POLICIES = {
         ToolPolicy("get_machine_status", ToolOperation.READ),
         ToolPolicy("get_position_reference_status", ToolOperation.READ),
         ToolPolicy("prepare_reference_calibration", ToolOperation.READ),
+        ToolPolicy(
+            "execute_reference_calibration",
+            ToolOperation.WRITE,
+            requires_approval=True,
+        ),
         ToolPolicy("get_maintenance_ticket", ToolOperation.READ),
         ToolPolicy("search_documentation", ToolOperation.READ),
         ToolPolicy(

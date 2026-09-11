@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any
+from uuid import UUID
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
@@ -10,6 +11,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from industrial_ai_agent.application.hardware_recovery import (
+    HardwareRecoveryExecutionService,
     HardwareRecoveryNotAccessibleError,
     HardwareRecoveryPreparationService,
     PositionReferenceStatus,
@@ -49,10 +51,25 @@ DeviceIdentifier = Annotated[
     str,
     StringConstraints(strip_whitespace=True, pattern=r"^[A-Z][A-Z0-9-]{2,63}$"),
 ]
+RunIdentifier = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        pattern=(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+            r"[0-9a-f]{4}-[0-9a-f]{12}$"
+        ),
+    ),
+]
+ActionIdentifier = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+]
 
 _HARDWARE_TOOL_PERMISSIONS = {
     "get_position_reference_status": McpPermission.READ_HARDWARE_STATUS,
     "prepare_reference_calibration": McpPermission.PREPARE_HARDWARE_RECOVERY,
+    "execute_reference_calibration": McpPermission.EXECUTE_HARDWARE_RECOVERY,
 }
 
 
@@ -111,9 +128,27 @@ class _ReferenceCalibrationPreparationProjection(_McpModel):
     classification: str
 
 
+class _VerificationEvidenceProjection(_McpModel):
+    criterion_type: str
+    passed: bool
+    observed_value: bool | float
+
+
+class _RecoveryResultProjection(_McpModel):
+    station_id: str
+    device_id: str
+    action_executed: bool
+    operation_status: str | None
+    precondition_evaluations: tuple[_PreconditionEvaluationProjection, ...]
+    verification_status: str
+    verification_evidence: tuple[_VerificationEvidenceProjection, ...]
+    recovery_outcome: str
+
+
 def create_hardware_mcp_server(
     *,
     recovery_preparation: HardwareRecoveryPreparationService,
+    recovery_execution: HardwareRecoveryExecutionService | None = None,
     access_control: McpHttpAccessControl | None = None,
     default_security_context: SecurityContext = DEMO_ENGINEER_SECURITY_CONTEXT,
 ) -> MCPServer:
@@ -189,6 +224,45 @@ def create_hardware_mcp_server(
             ) from error
         return _project_preparation(result).model_dump(mode="json")
 
+    @server.tool(
+        name="execute_reference_calibration",
+        description=(
+            "Execute one server-approved reference calibration. Approval and execution "
+            "identifiers are injected by the trusted HITL resume path, never by the model."
+        ),
+        structured_output=True,
+        annotations=ToolAnnotations(read_only_hint=False),
+    )
+    async def execute_reference_calibration(
+        station_id: StationIdentifier,
+        device_id: DeviceIdentifier,
+        run_id: RunIdentifier,
+        action_id: ActionIdentifier,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        security_context = _security_context_for_request(
+            ctx=ctx,
+            access_control=access_control,
+            tool_name="execute_reference_calibration",
+            default_security_context=default_security_context,
+        )
+        if recovery_execution is None:
+            raise LookupError("Position-reference information is unavailable")
+        try:
+            result = await recovery_execution.execute_reference_calibration(
+                run_id=UUID(run_id),
+                action_id=action_id,
+                station_id=_station_id(station_id),
+                device_id=_device_id(device_id),
+                security_context=security_context,
+                mcp_execution_permitted=True,
+            )
+        except (HardwareRecoveryNotAccessibleError, TypeError, ValueError) as error:
+            raise LookupError(
+                "Position-reference information is unavailable"
+            ) from error
+        return _project_recovery_result(result).model_dump(mode="json")
+
     for tool_name in _HARDWARE_TOOL_PERMISSIONS:
         require_strict_mcp_tool_arguments(server, tool_name)
     if access_control is not None:
@@ -202,9 +276,10 @@ def create_demo_hardware_mcp_server(
     default_security_context: SecurityContext = DEMO_ENGINEER_SECURITY_CONTEXT,
 ) -> MCPServer:
     """Compose the local deterministic S04 demonstrator at the Infrastructure edge."""
+    adapter = SimulatedPositionEncoderAdapter()
     return create_hardware_mcp_server(
         recovery_preparation=HardwareRecoveryPreparationService(
-            physical_devices=SimulatedPositionEncoderAdapter()
+            physical_devices=adapter
         ),
         access_control=access_control,
         default_security_context=default_security_context,
@@ -331,4 +406,34 @@ def _project_verification_criterion(
     return _VerificationCriterionProjection(
         criterion_type=criterion.criterion_type.value,
         maximum_abs_deviation=criterion.maximum_abs_deviation,
+    )
+
+
+def _project_recovery_result(result: Any) -> _RecoveryResultProjection:
+    pre_action_state = result.pre_action_state
+    if pre_action_state is None or pre_action_state.station_id is None:
+        raise ValueError("Recovery result does not contain a bounded target")
+    return _RecoveryResultProjection(
+        station_id=pre_action_state.station_id.value,
+        device_id=pre_action_state.device_id.value,
+        action_executed=result.action_executed,
+        operation_status=(
+            result.operation_result.status.value
+            if result.operation_result is not None
+            else None
+        ),
+        precondition_evaluations=tuple(
+            _project_precondition_evaluation(evaluation)
+            for evaluation in result.precondition_evaluations
+        ),
+        verification_status=result.verification.status.value,
+        verification_evidence=tuple(
+            _VerificationEvidenceProjection(
+                criterion_type=evidence.criterion.criterion_type.value,
+                passed=evidence.passed,
+                observed_value=evidence.observed_value,
+            )
+            for evidence in result.verification.evidence
+        ),
+        recovery_outcome=result.outcome.value,
     )

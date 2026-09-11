@@ -107,6 +107,7 @@ class PublicToolName(StrEnum):
     GET_MAINTENANCE_TICKET = "get_maintenance_ticket"
     SEARCH_DOCUMENTATION = "search_documentation"
     CREATE_MAINTENANCE_TICKET = "create_maintenance_ticket"
+    EXECUTE_REFERENCE_CALIBRATION = "execute_reference_calibration"
 
 
 class ToolCallResponse(BaseModel):

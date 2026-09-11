@@ -902,18 +902,18 @@ async def _persist_execution(
     record = await store.get(run_id)
     if record is None or record.model_profile is None:
         raise RuntimeError("Approval requires a bound execution context")
-    return await store.wait_for_approval(
-        run_id,
-        {
-            "action": approval.action,
-            "summary": approval.summary,
-            "arguments": approval.arguments,
-            "classification": record.data_classification.name,
-            "model_profile": record.model_profile,
-            "status": RunStatus.WAITING_FOR_APPROVAL.value,
-            "created_at": datetime.now(UTC).isoformat(),
-        },
-    )
+    approval_request: dict[str, object] = {
+        "action": approval.action,
+        "summary": approval.summary,
+        "arguments": approval.arguments,
+        "classification": record.data_classification.name,
+        "model_profile": record.model_profile,
+        "status": RunStatus.WAITING_FOR_APPROVAL.value,
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    if approval.action_id is not None:
+        approval_request["action_id"] = approval.action_id
+    return await store.wait_for_approval(run_id, approval_request)
 
 
 def _to_approval_request(
@@ -921,7 +921,10 @@ def _to_approval_request(
 ) -> ApprovalRequestResponse | None:
     if payload is None:
         return None
-    return ApprovalRequestResponse.model_validate(sanitize_public_value(payload))
+    public_payload = {
+        key: value for key, value in payload.items() if key != "action_id"
+    }
+    return ApprovalRequestResponse.model_validate(sanitize_public_value(public_payload))
 
 
 def _to_persisted_run_error(record: StoredAgentRun) -> ApiErrorResponse | None:

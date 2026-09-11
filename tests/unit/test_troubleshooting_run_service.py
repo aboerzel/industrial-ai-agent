@@ -24,6 +24,7 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpBackedTroubleshootingAgent,
     RoutedTroubleshootingAgentFactory,
     TroubleshootingRunService,
+    _execution_from_state,
 )
 
 
@@ -152,3 +153,29 @@ def test_single_cause_exception_group_preserves_invalid_tool_arguments_error() -
 
     with pytest.raises(InvalidToolArgumentsError, match="get_product_history"):
         asyncio.run(service.run("Investigate P4711."))
+
+
+def test_hardware_approval_preserves_the_graph_action_identity() -> None:
+    execution = _execution_from_state(
+        {},
+        {
+            "kind": "action_approval",
+            "action": "execute_reference_calibration",
+            "action_id": "reference-calibration-call-1",
+            "details": {
+                "station_id": "S04",
+                "device_id": "POSITION-ENC-02",
+                "operation_type": "reference_calibration",
+                "summary": "Run controlled reference calibration.",
+            },
+        },
+    )
+
+    assert execution.approval is not None
+    assert execution.approval.action_id == "reference-calibration-call-1"
+    assert execution.approval.arguments == {
+        "station_id": "S04",
+        "device_id": "POSITION-ENC-02",
+        "operation_type": "reference_calibration",
+        "summary": "Run controlled reference calibration.",
+    }

@@ -67,9 +67,10 @@ class PendingApproval(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    action: Literal["create_maintenance_ticket"]
+    action: Literal["create_maintenance_ticket", "execute_reference_calibration"]
     arguments: dict[str, str]
     summary: str = Field(min_length=1, max_length=500)
+    action_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,13 +304,20 @@ def _execution_from_state(
     run_status = values.get("run_status")
     if payload is not None:
         details = payload.get("details")
-        if not isinstance(details, dict) or not isinstance(payload.get("action"), str):
+        action = payload.get("action")
+        action_id = payload.get("action_id")
+        if not isinstance(details, dict) or not isinstance(action, str):
             raise RuntimeError("LangGraph returned an invalid approval payload")
+        if action == "execute_reference_calibration" and not isinstance(action_id, str):
+            raise RuntimeError("Hardware recovery approval requires an action ID")
         arguments = {str(key): str(value) for key, value in details.items()}
         summary = arguments.get("summary", "Approval required.")
         return RunExecution(
             approval=PendingApproval(
-                action=payload["action"], arguments=arguments, summary=summary
+                action=action,
+                arguments=arguments,
+                summary=summary,
+                action_id=action_id if isinstance(action_id, str) else None,
             )
         )
     if run_status is None:

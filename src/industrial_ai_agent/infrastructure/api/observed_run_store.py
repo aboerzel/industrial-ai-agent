@@ -93,6 +93,24 @@ class ObservedAgentRunStore:
             decision=decision,
         )
 
+    async def claim_reference_calibration_approval(
+        self,
+        run_id: UUID,
+        *,
+        action_id: str,
+        station_id: str,
+        device_id: str,
+    ) -> bool:
+        return await self._observe(
+            "claim_reference_calibration_approval",
+            run_id,
+            self._delegate.claim_reference_calibration_approval,
+            run_id,
+            action_id=action_id,
+            station_id=station_id,
+            device_id=device_id,
+        )
+
     async def _observe(
         self,
         operation: str,

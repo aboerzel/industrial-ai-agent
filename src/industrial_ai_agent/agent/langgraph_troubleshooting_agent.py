@@ -61,9 +61,11 @@ from industrial_ai_agent.domain.maintenance_ticket import (
 from industrial_ai_agent.domain.security import effective_data_classification
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketProposalArguments,
+    ReferenceCalibrationProposalArguments,
 )
 
 CREATE_MAINTENANCE_TICKET_TOOL_NAME = "create_maintenance_ticket"
+EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME = "execute_reference_calibration"
 MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "You are an industrial troubleshooting assistant. Use the provided tools when "
     "their evidence is necessary to answer the explicit user request. Call one tool at "
@@ -134,18 +136,35 @@ class PendingMaintenanceAction(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
 
 
+class PendingReferenceCalibrationAction(BaseModel):
+    """Serializer-safe controlled recovery state retained across approval."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    action: Literal["execute_reference_calibration"]
+    request_id: str = Field(min_length=1, max_length=128)
+    tool_call_id: str = Field(min_length=1, max_length=128)
+    station_id: str = Field(min_length=3, max_length=16)
+    device_id: str = Field(min_length=3, max_length=64)
+    operation_type: Literal["reference_calibration"]
+    summary: str = Field(min_length=1, max_length=500)
+
+
 class ApprovalInterruptDetails(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     station_id: str = Field(min_length=3, max_length=16)
     summary: str = Field(min_length=1, max_length=500)
+    device_id: str | None = Field(default=None, min_length=3, max_length=64)
+    operation_type: Literal["reference_calibration"] | None = None
 
 
 class ApprovalInterruptPayload(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     kind: Literal["action_approval"]
-    action: Literal["create_maintenance_ticket"]
+    action: Literal["create_maintenance_ticket", "execute_reference_calibration"]
+    action_id: str | None = Field(default=None, min_length=1, max_length=128)
     details: ApprovalInterruptDetails
 
 
@@ -167,6 +186,7 @@ class TroubleshootingGraphState(TypedDict):
     run_classification: DataClassification | None
     effective_classification: DataClassification | None
     response_language: ResponseLanguage
+    run_id: str | None
 
 
 class CheckpointedTroubleshootingGraphState(TypedDict):
@@ -187,6 +207,7 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     run_classification: int | None
     effective_classification: int | None
     response_language: str
+    run_id: str | None
 
 
 class LangGraphTroubleshootingAgent:
@@ -313,6 +334,7 @@ class LangGraphTroubleshootingAgent:
                     system_content=self._system_message,
                     response_language=response_language,
                     conversation_context=conversation_context,
+                    run_id=thread_id,
                 ),
                 config=config,
             )
@@ -613,31 +635,55 @@ class LangGraphTroubleshootingAgent:
         if not isinstance(message, AIMessage) or len(message.tool_calls) != 1:
             raise RuntimeError("Action preparation requires exactly one AI tool call")
         tool_call = message.tool_calls[0]
-        if tool_call["name"] != CREATE_MAINTENANCE_TICKET_TOOL_NAME:
+        tool_name = tool_call["name"]
+        if tool_name not in {
+            CREATE_MAINTENANCE_TICKET_TOOL_NAME,
+            EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
+        }:
             raise UnknownToolError(f"Unknown tool: {tool_call['name']}")
-        tool = tools_by_name.get(CREATE_MAINTENANCE_TICKET_TOOL_NAME)
+        tool = tools_by_name.get(tool_name)
         if tool is None:
-            raise UnknownToolError(
-                f"Unknown tool: {CREATE_MAINTENANCE_TICKET_TOOL_NAME}"
-            )
-        policy = tool_policies.get(CREATE_MAINTENANCE_TICKET_TOOL_NAME)
+            raise UnknownToolError(f"Unknown tool: {tool_name}")
+        policy = tool_policies.get(tool_name)
         if (
             policy is None
             or policy.operation is not ToolOperation.WRITE
             or not policy.requires_approval
         ):
-            raise UnknownToolError("Maintenance ticket action is not authorized")
+            raise UnknownToolError("Controlled action is not authorized")
         try:
-            # The model can only propose domain arguments. A supplied request_id or
-            # idempotency_key is an unknown field and therefore rejected here.
-            arguments = CreateMaintenanceTicketProposalArguments.model_validate(
-                dict(tool_call["args"])
+            arguments = (
+                CreateMaintenanceTicketProposalArguments.model_validate(
+                    dict(tool_call["args"])
+                )
+                if tool_name == CREATE_MAINTENANCE_TICKET_TOOL_NAME
+                else ReferenceCalibrationProposalArguments.model_validate(
+                    dict(tool_call["args"])
+                )
             )
         except ValidationError as error:
             raise InvalidToolArgumentsError(
-                f"Invalid arguments for {CREATE_MAINTENANCE_TICKET_TOOL_NAME}"
+                f"Invalid arguments for {tool_name}"
             ) from error
         tool_call_id = _require_tool_call_id(tool_call.get("id"))
+        if tool_name == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME:
+            assert isinstance(arguments, ReferenceCalibrationProposalArguments)
+            return {
+                "pending_action": PendingReferenceCalibrationAction(
+                    action=EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
+                    request_id=tool_call_id,
+                    tool_call_id=tool_call_id,
+                    station_id=arguments.station_id,
+                    device_id=arguments.device_id,
+                    operation_type="reference_calibration",
+                    summary=(
+                        "Run controlled reference calibration for "
+                        f"{arguments.device_id} at {arguments.station_id}."
+                    ),
+                ).model_dump(),
+                "approval_result": None,
+            }
+        assert isinstance(arguments, CreateMaintenanceTicketProposalArguments)
         return {
             "pending_action": PendingMaintenanceAction(
                 action=CREATE_MAINTENANCE_TICKET_TOOL_NAME,
@@ -654,16 +700,29 @@ class LangGraphTroubleshootingAgent:
         state: CheckpointedTroubleshootingGraphState,
     ) -> dict[str, object]:
         pending_action = _require_pending_action(state)
+        details = ApprovalInterruptDetails(
+            station_id=pending_action["station_id"],
+            summary=pending_action["summary"],
+            device_id=pending_action.get("device_id"),
+            operation_type=(
+                "reference_calibration"
+                if pending_action["action"] == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME
+                else None
+            ),
+        )
         approval = _parse_approval(
             interrupt(
                 ApprovalInterruptPayload(
                     kind="action_approval",
-                    action=CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-                    details=ApprovalInterruptDetails(
-                        station_id=pending_action["station_id"],
-                        summary=pending_action["summary"],
+                    action=pending_action["action"],
+                    action_id=(
+                        pending_action["request_id"]
+                        if pending_action["action"]
+                        == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME
+                        else None
                     ),
-                ).model_dump()
+                    details=details,
+                ).model_dump(exclude_none=True)
             )
         )
         return {"approval_result": approval.value}
@@ -676,28 +735,45 @@ class LangGraphTroubleshootingAgent:
     ) -> dict[str, object]:
         pending_action = _require_pending_action(state)
         if state["approval_result"] != ApprovalDecision.APPROVE.value:
-            raise RuntimeError("Maintenance ticket execution requires approval")
-        tool = tools_by_name.get(CREATE_MAINTENANCE_TICKET_TOOL_NAME)
+            raise RuntimeError("Controlled execution requires approval")
+        action = pending_action["action"]
+        tool = tools_by_name.get(action)
         if tool is None:
-            raise UnknownToolError(
-                f"Unknown tool: {CREATE_MAINTENANCE_TICKET_TOOL_NAME}"
-            )
-        policy = tool_policies.get(CREATE_MAINTENANCE_TICKET_TOOL_NAME)
+            raise UnknownToolError(f"Unknown tool: {action}")
+        policy = tool_policies.get(action)
         if policy is None or not policy.requires_approval:
-            raise RuntimeError("Maintenance ticket execution is not approval-protected")
-        result = await tool.ainvoke(
-            {
+            raise RuntimeError("Controlled execution is not approval-protected")
+        if action == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME:
+            run_id = state["run_id"]
+            if run_id is None:
+                raise RuntimeError("Hardware recovery execution requires a run ID")
+            result = await tool.ainvoke(
+                {
+                    "station_id": pending_action["station_id"],
+                    "device_id": pending_action["device_id"],
+                    "run_id": run_id,
+                    "action_id": pending_action["request_id"],
+                }
+            )
+            executed_arguments = {
                 "station_id": pending_action["station_id"],
-                "summary": pending_action["summary"],
-                "request_id": pending_action["request_id"],
+                "device_id": pending_action["device_id"],
             }
-        )
-        executed_call = {
-            "tool": CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-            "arguments": {
+        else:
+            result = await tool.ainvoke(
+                {
+                    "station_id": pending_action["station_id"],
+                    "summary": pending_action["summary"],
+                    "request_id": pending_action["request_id"],
+                }
+            )
+            executed_arguments = {
                 "station_id": pending_action["station_id"],
                 "summary": pending_action["summary"],
-            },
+            }
+        executed_call = {
+            "tool": action,
+            "arguments": executed_arguments,
         }
         return {
             "messages": [
@@ -714,7 +790,7 @@ class LangGraphTroubleshootingAgent:
     def _cancel_action_node(
         state: CheckpointedTroubleshootingGraphState,
     ) -> dict[str, object]:
-        _require_pending_action(state)
+        pending_action = _require_pending_action(state)
         response_language = ResponseLanguage(state["response_language"])
         investigation_steps = _resolve_investigation_steps(
             state["executed_tool_calls"],
@@ -727,9 +803,12 @@ class LangGraphTroubleshootingAgent:
             "pending_action": None,
             "run_status": AgentRunStatus.SUCCESS.value,
             "final_answer": (
-                "Die Erstellung des Wartungstickets wurde abgelehnt; es wurde kein "
-                "Ticket erstellt."
+                "Die kontrollierte Referenzkalibrierung wurde abgelehnt; es wurde "
+                "keine physische Aktion ausgeführt."
                 if response_language is ResponseLanguage.DE
+                and pending_action["action"] == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME
+                else "Reference calibration was rejected; no physical action was executed."
+                if pending_action["action"] == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME
                 else "Maintenance ticket creation was rejected; no ticket was created."
             ),
             "investigation_steps": tuple(
@@ -754,6 +833,7 @@ class LangGraphTroubleshootingAgent:
         system_content: str,
         response_language: ResponseLanguage | None = None,
         conversation_context: tuple[ConversationTurn, ...] = (),
+        run_id: str | None = None,
     ) -> CheckpointedTroubleshootingGraphState:
         resolved_response_language = response_language or detect_response_language(
             user_request
@@ -787,6 +867,7 @@ class LangGraphTroubleshootingAgent:
                 else None
             ),
             "response_language": resolved_response_language.value,
+            "run_id": run_id,
         }
 
     @staticmethod
@@ -889,6 +970,7 @@ class LangGraphTroubleshootingAgent:
                 else None
             ),
             "response_language": ResponseLanguage(state["response_language"]),
+            "run_id": state.get("run_id"),
         }
 
     def _observe_result_classification(
@@ -1553,8 +1635,19 @@ def _require_pending_action(
     pending_action = state["pending_action"]
     if pending_action is None:
         raise RuntimeError("Approval flow requires a pending action")
+    action = pending_action.get("action")
+    if action not in {
+        CREATE_MAINTENANCE_TICKET_TOOL_NAME,
+        EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
+    }:
+        raise RuntimeError("Approval flow has an invalid pending action")
     try:
-        return PendingMaintenanceAction.model_validate(pending_action).model_dump()
+        model = (
+            PendingMaintenanceAction
+            if action == CREATE_MAINTENANCE_TICKET_TOOL_NAME
+            else PendingReferenceCalibrationAction
+        )
+        return model.model_validate(pending_action).model_dump()
     except ValidationError as error:
         raise RuntimeError("Approval flow has an invalid pending action") from error
 
@@ -1632,14 +1725,21 @@ def _model_visible_tools(
         if policy.operation is ToolOperation.READ:
             visible_tools.append(tool)
             continue
-        if tool.name != CREATE_MAINTENANCE_TICKET_TOOL_NAME:
+        if tool.name not in {
+            CREATE_MAINTENANCE_TICKET_TOOL_NAME,
+            EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
+        }:
             raise UnknownToolError(f"Unsupported write tool: {tool.name}")
         visible_tools.append(
             StructuredTool.from_function(
-                func=lambda station_id, summary: "Approval required before execution.",
+                func=lambda **_: "Approval required before execution.",
                 name=tool.name,
                 description=tool.description,
-                args_schema=CreateMaintenanceTicketProposalArguments,
+                args_schema=(
+                    CreateMaintenanceTicketProposalArguments
+                    if tool.name == CREATE_MAINTENANCE_TICKET_TOOL_NAME
+                    else ReferenceCalibrationProposalArguments
+                ),
             )
         )
     return tuple(visible_tools)

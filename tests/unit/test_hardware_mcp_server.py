@@ -1,10 +1,12 @@
 import asyncio
+import inspect
 from pathlib import Path
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from industrial_ai_agent.application.hardware_recovery import (
+    HardwareRecoveryExecutionService,
     HardwareRecoveryPreparationService,
 )
 from industrial_ai_agent.application.mcp_access import McpPermission
@@ -37,7 +39,7 @@ class _RecordingPositionEncoderAdapter(SimulatedPositionEncoderAdapter):
         return super().execute_operation(operation)
 
 
-def test_hardware_mcp_exposes_only_strict_bounded_read_and_preparation_tools() -> None:
+def test_hardware_mcp_exposes_only_strict_bounded_hardware_recovery_tools() -> None:
     server, _ = _server()
     tools = asyncio.run(server.list_tools())
 
@@ -45,11 +47,21 @@ def test_hardware_mcp_exposes_only_strict_bounded_read_and_preparation_tools() -
     assert [tool.name for tool in tools] == [
         "get_position_reference_status",
         "prepare_reference_calibration",
+        "execute_reference_calibration",
     ]
-    assert all(tool.annotations.read_only_hint for tool in tools)
-    for tool in tools:
+    assert tools[0].annotations.read_only_hint is True
+    assert tools[1].annotations.read_only_hint is True
+    assert tools[2].annotations.read_only_hint is False
+    for tool in tools[:2]:
         assert tool.input_schema["additionalProperties"] is False
         assert set(tool.input_schema["properties"]) == {"station_id", "device_id"}
+    assert tools[2].input_schema["additionalProperties"] is False
+    assert set(tools[2].input_schema["properties"]) == {
+        "station_id",
+        "device_id",
+        "run_id",
+        "action_id",
+    }
 
 
 def test_status_returns_bounded_s04_state_without_mutation() -> None:
@@ -119,6 +131,32 @@ def test_preparation_reports_failed_precondition_without_execution() -> None:
     assert adapter.execute_calls == 0
 
 
+def test_execute_is_unavailable_without_a_trusted_execution_service() -> None:
+    server, adapter = _server()
+
+    error = _tool_error(
+        server,
+        "execute_reference_calibration",
+        "S04",
+        "POSITION-ENC-02",
+        run_id="11111111-1111-1111-1111-111111111111",
+        action_id="controlled-action-1",
+    )
+
+    assert "POSITION-ENC-02" not in str(error)
+    assert adapter.execute_calls == 0
+
+
+def test_mcp_execute_delegates_to_the_closed_loop_execution_service() -> None:
+    source = inspect.getsource(create_hardware_mcp_server)
+
+    assert "recovery_execution.execute_reference_calibration" in source
+    assert "execute_operation(" not in source
+    assert "HardwareRecoveryExecutionService" in inspect.getsource(
+        HardwareRecoveryExecutionService
+    )
+
+
 @pytest.mark.parametrize(
     ("tool_name", "extra_argument"),
     (
@@ -145,7 +183,7 @@ def test_tool_inputs_reject_model_supplied_safety_and_backend_values(
     assert adapter.execute_calls == 0
 
 
-def test_permissions_are_distinct_for_status_and_preparation() -> None:
+def test_permissions_are_distinct_for_status_preparation_and_execution() -> None:
     status_context = _registration(
         token="status-token",
         client_id="status-reader",
@@ -158,13 +196,19 @@ def test_permissions_are_distinct_for_status_and_preparation() -> None:
         clearance=DataClassification.CONFIDENTIAL,
         permissions=frozenset({McpPermission.PREPARE_HARDWARE_RECOVERY}),
     )
+    execution_context = _registration(
+        token="execution-token",
+        client_id="recovery-executor",
+        clearance=DataClassification.CONFIDENTIAL,
+        permissions=frozenset({McpPermission.EXECUTE_HARDWARE_RECOVERY}),
+    )
     server, _ = _server()
     access = McpHttpAccessControl(
         authenticator=DemoBearerTokenAuthenticator(
-            (status_context, preparation_context)
+            (status_context, preparation_context, execution_context)
         ),
         resolver=RegisteredMcpClientContextResolver(
-            (status_context, preparation_context)
+            (status_context, preparation_context, execution_context)
         ),
         tools=server.list_tools,
         required_permission=lambda name: _HARDWARE_TOOL_PERMISSIONS[name],
@@ -175,22 +219,34 @@ def test_permissions_are_distinct_for_status_and_preparation() -> None:
     preparation = access.access_context_from_headers(
         {"authorization": "Bearer preparation-token"}
     )
+    execution = access.access_context_from_headers(
+        {"authorization": "Bearer execution-token"}
+    )
 
     access.authorize_tool(status, "get_position_reference_status")
     access.authorize_tool(preparation, "prepare_reference_calibration")
+    access.authorize_tool(execution, "execute_reference_calibration")
     with pytest.raises(McpAuthorizationError, match="MCP tool is not authorized"):
         access.authorize_tool(status, "prepare_reference_calibration")
     with pytest.raises(McpAuthorizationError, match="MCP tool is not authorized"):
         access.authorize_tool(preparation, "get_position_reference_status")
+    with pytest.raises(McpAuthorizationError, match="MCP tool is not authorized"):
+        access.authorize_tool(preparation, "execute_reference_calibration")
+    with pytest.raises(McpAuthorizationError, match="MCP tool is not authorized"):
+        access.authorize_tool(status, "execute_reference_calibration")
     assert [tool.name for tool in asyncio.run(access.visible_tools(status))] == [
         "get_position_reference_status"
     ]
     assert [tool.name for tool in asyncio.run(access.visible_tools(preparation))] == [
         "prepare_reference_calibration"
     ]
+    assert [tool.name for tool in asyncio.run(access.visible_tools(execution))] == [
+        "execute_reference_calibration"
+    ]
     assert set(_HARDWARE_TOOL_PERMISSIONS) == {
         "get_position_reference_status",
         "prepare_reference_calibration",
+        "execute_reference_calibration",
     }
 
 
@@ -261,12 +317,22 @@ def _call(server, tool_name: str) -> dict[str, object]:  # type: ignore[no-untyp
     return asyncio.run(call())
 
 
-def _tool_error(server, tool_name: str, station_id: str, device_id: str) -> ToolError:  # type: ignore[no-untyped-def]
+def _tool_error(  # type: ignore[no-untyped-def]
+    server,
+    tool_name: str,
+    station_id: str,
+    device_id: str,
+    **extra_arguments: object,
+) -> ToolError:
     async def call() -> ToolError:
         with pytest.raises(ToolError) as error:
             await server.call_tool(
                 tool_name,
-                {"station_id": station_id, "device_id": device_id},
+                {
+                    "station_id": station_id,
+                    "device_id": device_id,
+                    **extra_arguments,
+                },
             )
         return error.value
 
