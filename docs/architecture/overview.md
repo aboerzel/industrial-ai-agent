@@ -820,6 +820,11 @@ The current slices define `ProductId`, the shared `StationId`, `ProductionStep`,
 `MachineStatusRepository`, `FactoryDiscoveryRepository`, `KnowledgeRetriever`, and `EmbeddingClient`. The HITL demonstration additionally
 defines `MaintenanceTicketRequestId` and `MaintenanceTicket` plus the
 `MaintenanceTicketRepository` inner port.
+The physical-device recovery core additionally defines bounded `DeviceId`,
+`DeviceCapability`, `DeviceState`, `DeviceOperation`, and `DeviceOperationResult`
+contracts, `PhysicalDevicePort`, and Closed-Loop Recovery proposal, precondition,
+verification, and result contracts. These are Core-only contracts; no Hardware MCP
+server or physical-device adapter is implemented.
 
 Must remain independent from:
 
