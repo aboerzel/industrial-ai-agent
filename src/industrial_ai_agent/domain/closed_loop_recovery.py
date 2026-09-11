@@ -8,6 +8,7 @@ from enum import StrEnum
 
 from industrial_ai_agent.domain.machine_status import MachineState
 from industrial_ai_agent.domain.physical_device import (
+    AxisMotionState,
     DeviceConnectionState,
     DeviceId,
     DeviceOperation,
@@ -26,12 +27,6 @@ def _bounded_text(value: str, field_name: str, maximum_length: int) -> str:
             f"{field_name} must be between 1 and {maximum_length} characters"
         )
     return normalized_value
-
-
-class AxisMotionState(StrEnum):
-    IDLE = "IDLE"
-    MOVING = "MOVING"
-    UNKNOWN = "UNKNOWN"
 
 
 class RecoveryPreconditionType(StrEnum):

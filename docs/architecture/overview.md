@@ -823,8 +823,11 @@ defines `MaintenanceTicketRequestId` and `MaintenanceTicket` plus the
 The physical-device recovery core additionally defines bounded `DeviceId`,
 `DeviceCapability`, `DeviceState`, `DeviceOperation`, and `DeviceOperationResult`
 contracts, `PhysicalDevicePort`, and Closed-Loop Recovery proposal, precondition,
-verification, and result contracts. These are Core-only contracts; no Hardware MCP
-server or physical-device adapter is implemented.
+verification, and result contracts. The implemented `SimulatedPositionEncoderAdapter`
+is a deterministic in-process Infrastructure adapter for `POSITION-ENC-02` at `S04`;
+it exercises the bounded port for the reference-calibration demonstrator only. Hardware
+MCP, an MHS adapter, closed-loop Agent orchestration, and Vision integration remain
+unimplemented.
 
 Must remain independent from:
 
@@ -902,6 +905,9 @@ it does not construct providers or duplicate profile and security configuration.
 metadata into the existing OTel trace and its strictly filtered Langfuse processor.
 `InMemoryMaintenanceTicketRepository` is a deterministic test fake for the Factory-MCP
 maintenance-ticket capability; it is not an external ticketing integration.
+`SimulatedPositionEncoderAdapter` deterministically implements the inner
+`PhysicalDevicePort` for the position-encoder reference-calibration demonstrator. It is
+neither Hardware MCP nor an MHS or real-hardware adapter.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores

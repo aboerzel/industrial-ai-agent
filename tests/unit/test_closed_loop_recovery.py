@@ -3,7 +3,6 @@ import inspect
 import pytest
 
 from industrial_ai_agent.domain.closed_loop_recovery import (
-    AxisMotionState,
     PreconditionEvaluation,
     PreconditionStatus,
     RecoveryEvidence,
@@ -23,6 +22,7 @@ from industrial_ai_agent.domain.closed_loop_recovery import (
 from industrial_ai_agent.domain.machine_status import MachineState
 from industrial_ai_agent.domain.physical_device import (
     ActionRiskClass,
+    AxisMotionState,
     DeviceConnectionState,
     DeviceId,
     DeviceOperation,

@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
+from industrial_ai_agent.domain.machine_status import MachineState
 from industrial_ai_agent.domain.product_history import StationId
 
 _device_id_pattern = re.compile(r"^[A-Z][A-Z0-9-]{2,63}$")
@@ -67,11 +68,27 @@ class DeviceConnectionState(StrEnum):
     DISCONNECTED = "DISCONNECTED"
 
 
+class DeviceOperationalState(StrEnum):
+    FAULT = "FAULT"
+    CALIBRATING = "CALIBRATING"
+    READY = "READY"
+
+
+class AxisMotionState(StrEnum):
+    IDLE = "IDLE"
+    MOVING = "MOVING"
+    UNKNOWN = "UNKNOWN"
+
+
 @dataclass(frozen=True, slots=True)
 class DeviceState:
     device_id: DeviceId
     station_id: StationId | None
     connection_state: DeviceConnectionState
+    operational_state: DeviceOperationalState | None = None
+    station_mode: MachineState | None = None
+    axis_motion_state: AxisMotionState | None = None
+    product_present: bool | None = None
     reference_valid: bool | None = None
     position_deviation: float | None = None
 
@@ -82,6 +99,22 @@ class DeviceState:
             raise TypeError("station_id must be a StationId or None")
         if not isinstance(self.connection_state, DeviceConnectionState):
             raise TypeError("Unknown device connection state")
+        if self.operational_state is not None and not isinstance(
+            self.operational_state, DeviceOperationalState
+        ):
+            raise TypeError("Unknown device operational state")
+        if self.station_mode is not None and not isinstance(
+            self.station_mode, MachineState
+        ):
+            raise TypeError("station_mode must be a MachineState or None")
+        if self.axis_motion_state is not None and not isinstance(
+            self.axis_motion_state, AxisMotionState
+        ):
+            raise TypeError("Unknown axis motion state")
+        if self.product_present is not None and not isinstance(
+            self.product_present, bool
+        ):
+            raise TypeError("product_present must be a bool or None")
         if self.reference_valid is not None and not isinstance(
             self.reference_valid, bool
         ):
