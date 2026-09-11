@@ -119,7 +119,7 @@ invoking the provider adapter. LangGraph and LangChain Core are used narrowly fo
 orchestration. The runtime uses LangGraph's official PostgreSQL async checkpointer for
 durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
 dynamic tool registry, LangSmith integration, or general evaluation framework.
-Five MCP services expose bounded capabilities through the official MCP SDK v2.
+Five deployed MCP services expose bounded capabilities through the official MCP SDK v2.
 `factory_mcp` provides product history, machine status, server-authorized maintenance-ticket retrieval by ticket ID, and the approval-gated
 maintenance-ticket action; `knowledge_mcp` provides documentation search; and the
 read-only `observability_mcp` provides safe RCA evidence over Tempo, Loki, and
@@ -129,6 +129,10 @@ recent runs. Runtime MCP never reads LangGraph checkpoint tables and has no writ
 resume operation. The Industrial Agent discovers only Factory and Knowledge tools; it has no
 runtime dependency on Runtime MCP or Observability MCP. All retain stdio for process-coupled development
 and deterministic tests, and run as separate Streamable HTTP `/mcp` Docker services.
+A sixth injected `hardware_mcp` composition currently exposes only the deterministic
+S04 status and reference-calibration-preparation surface over the simulated port. It is
+not yet configured as an Agent MCP server, an HTTP deployment, or a physical-action
+service.
 `LangGraphTroubleshootingAgent` opens one session per explicitly configured server,
 discovers and authorizes tools through the temporary LangChain bridge, executes the
 bounded sequential loop, then closes all sessions. Transport selection is made by an
@@ -825,9 +829,12 @@ The physical-device recovery core additionally defines bounded `DeviceId`,
 contracts, `PhysicalDevicePort`, and Closed-Loop Recovery proposal, precondition,
 verification, and result contracts. The implemented `SimulatedPositionEncoderAdapter`
 is a deterministic in-process Infrastructure adapter for `POSITION-ENC-02` at `S04`;
-it exercises the bounded port for the reference-calibration demonstrator only. Hardware
-MCP, an MHS adapter, closed-loop Agent orchestration, and Vision integration remain
-unimplemented.
+it exercises the bounded port for the reference-calibration demonstrator only.
+`hardware_mcp` exposes the bounded `get_position_reference_status` and
+`prepare_reference_calibration` read/preparation surface over the same port and trusted
+application contracts. It has no controlled execution tool or HITL execution handoff.
+An MHS adapter, real hardware, closed-loop Agent orchestration, and Vision integration
+remain unimplemented.
 
 Must remain independent from:
 
@@ -910,9 +917,11 @@ maintenance-ticket capability; it is not an external ticketing integration.
 neither Hardware MCP nor an MHS or real-hardware adapter.
 `ClosedLoopRecoveryService` is the deterministic Application use case over the same
 port: it observes, evaluates bounded preconditions, invokes an authorization boundary,
-acts, obtains a fresh state, and verifies before returning a recovery result. Hardware
-MCP, Agent orchestration, HITL wiring, an MHS adapter, and Vision integration remain
-unimplemented.
+acts, obtains a fresh state, and verifies before returning a recovery result.
+`hardware_mcp` is the Infrastructure transport over the trusted read/preparation
+application surface. It exposes `get_position_reference_status` and
+`prepare_reference_calibration` only; controlled execution, HITL wiring, an MHS adapter,
+real hardware, Agent orchestration, and Vision integration remain unimplemented.
 
 Normal model settings and secret values are separate. Configuration explicitly marks a
 profile as unauthenticated or API-key authenticated. An authenticated profile stores
@@ -1068,7 +1077,7 @@ flowchart TD
     Multiplexer --> Production["Production MCP"]
     Multiplexer --> Knowledge["Knowledge MCP"]
     Multiplexer --> Vision["Vision MCP"]
-    Multiplexer --> Hardware["Hardware MCP<br/>planned bounded capabilities"]
+    Multiplexer --> Hardware["Hardware MCP<br/>implemented read/preparation;<br/>controlled execution planned"]
 
     classDef runtime fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef routing fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
@@ -1082,8 +1091,9 @@ This is a target direction, not the current implementation.
 
 Future physical-device integration and Closed-Loop Recovery are governed by
 [ADR-018](../decisions/ADR-018-physical-device-integration-and-closed-loop-recovery.md).
-Hardware MCP is planned as a bounded capability boundary over an inner
-`PhysicalDevicePort`; it is neither implemented nor a raw hardware proxy.
+Hardware MCP is a bounded capability boundary over an inner `PhysicalDevicePort`, not a
+raw hardware proxy. Its implemented S04 surface is limited to status and controlled-
+action preparation; controlled execution and Agent/HITL wiring remain planned.
 
 Model profiles such as `vision`, `planning`, or `evaluation` can be added through
 configuration when their capabilities are implemented. A non-OpenAI-compatible

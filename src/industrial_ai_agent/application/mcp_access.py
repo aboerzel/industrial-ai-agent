@@ -16,6 +16,8 @@ class McpPermission(StrEnum):
     READ_AGENT_RUNTIME = "read_agent_runtime"
     READ_RCA = "read_rca"
     CREATE_MAINTENANCE_TICKET = "create_maintenance_ticket"
+    READ_HARDWARE_STATUS = "read_hardware_status"
+    PREPARE_HARDWARE_RECOVERY = "prepare_hardware_recovery"
 
 
 @dataclass(frozen=True, slots=True)

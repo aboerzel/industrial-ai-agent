@@ -166,6 +166,8 @@ def create_demo_mcp_access_control(
                     McpPermission.READ_OBSERVABILITY,
                     McpPermission.READ_AGENT_RUNTIME,
                     McpPermission.CREATE_MAINTENANCE_TICKET,
+                    McpPermission.READ_HARDWARE_STATUS,
+                    McpPermission.PREPARE_HARDWARE_RECOVERY,
                 }
             ),
         ),
@@ -233,6 +235,8 @@ def _optional_agent_registration(
                 McpPermission.READ_OBSERVABILITY,
                 McpPermission.READ_AGENT_RUNTIME,
                 McpPermission.CREATE_MAINTENANCE_TICKET,
+                McpPermission.READ_HARDWARE_STATUS,
+                McpPermission.PREPARE_HARDWARE_RECOVERY,
             }
         ),
     )

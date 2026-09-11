@@ -63,9 +63,8 @@ class ClosedLoopRecoveryService:
 
         pre_action_state = self._physical_devices.read_state(proposal.target.device_id)
         self._validate_observed_target(pre_action_state, proposal)
-        precondition_evaluations = tuple(
-            self._evaluate_precondition(item, pre_action_state)
-            for item in proposal.preconditions
+        precondition_evaluations = evaluate_recovery_preconditions(
+            proposal.preconditions, pre_action_state
         )
         if not all(
             item.status is PreconditionStatus.PASSED
@@ -137,37 +136,6 @@ class ClosedLoopRecoveryService:
             raise ValueError("Observed station does not match the recovery target")
 
     @staticmethod
-    def _evaluate_precondition(
-        precondition: RecoveryPrecondition, state: DeviceState
-    ) -> PreconditionEvaluation:
-        observed_value = {
-            RecoveryPreconditionType.STATION_STOPPED: state.station_mode,
-            RecoveryPreconditionType.AXIS_IDLE: state.axis_motion_state,
-            RecoveryPreconditionType.NO_PRODUCT_PRESENT: state.product_present,
-            RecoveryPreconditionType.DEVICE_CONNECTED: state.connection_state,
-        }[precondition.condition_type]
-        if observed_value is None:
-            return PreconditionEvaluation(
-                precondition=precondition,
-                status=PreconditionStatus.NOT_EVALUATED,
-            )
-        expected_value = {
-            RecoveryPreconditionType.STATION_STOPPED: MachineState.STOPPED,
-            RecoveryPreconditionType.AXIS_IDLE: AxisMotionState.IDLE,
-            RecoveryPreconditionType.NO_PRODUCT_PRESENT: False,
-            RecoveryPreconditionType.DEVICE_CONNECTED: DeviceConnectionState.CONNECTED,
-        }[precondition.condition_type]
-        return PreconditionEvaluation(
-            precondition=precondition,
-            status=(
-                PreconditionStatus.PASSED
-                if observed_value == expected_value
-                else PreconditionStatus.FAILED
-            ),
-            observed_value=observed_value,
-        )
-
-    @staticmethod
     def _evaluate_verification(
         proposal: RecoveryProposal, state: DeviceState
     ) -> VerificationResult:
@@ -209,3 +177,41 @@ class ClosedLoopRecoveryService:
                 observed_value=state.position_deviation,
             )
         raise ValueError("Verification criterion is unsupported by PhysicalDevicePort")
+
+
+def evaluate_recovery_preconditions(
+    preconditions: tuple[RecoveryPrecondition, ...], state: DeviceState
+) -> tuple[PreconditionEvaluation, ...]:
+    """Evaluate bounded recovery preconditions against one observed device state."""
+    return tuple(_evaluate_precondition(item, state) for item in preconditions)
+
+
+def _evaluate_precondition(
+    precondition: RecoveryPrecondition, state: DeviceState
+) -> PreconditionEvaluation:
+    observed_value = {
+        RecoveryPreconditionType.STATION_STOPPED: state.station_mode,
+        RecoveryPreconditionType.AXIS_IDLE: state.axis_motion_state,
+        RecoveryPreconditionType.NO_PRODUCT_PRESENT: state.product_present,
+        RecoveryPreconditionType.DEVICE_CONNECTED: state.connection_state,
+    }[precondition.condition_type]
+    if observed_value is None:
+        return PreconditionEvaluation(
+            precondition=precondition,
+            status=PreconditionStatus.NOT_EVALUATED,
+        )
+    expected_value = {
+        RecoveryPreconditionType.STATION_STOPPED: MachineState.STOPPED,
+        RecoveryPreconditionType.AXIS_IDLE: AxisMotionState.IDLE,
+        RecoveryPreconditionType.NO_PRODUCT_PRESENT: False,
+        RecoveryPreconditionType.DEVICE_CONNECTED: DeviceConnectionState.CONNECTED,
+    }[precondition.condition_type]
+    return PreconditionEvaluation(
+        precondition=precondition,
+        status=(
+            PreconditionStatus.PASSED
+            if observed_value == expected_value
+            else PreconditionStatus.FAILED
+        ),
+        observed_value=observed_value,
+    )
