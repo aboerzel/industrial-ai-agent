@@ -24,13 +24,15 @@ flowchart LR
         Runtime["Runtime MCP"]
         Observe["Observability MCP"]
         RCA["RCA MCP"]
+        Hardware["Hardware MCP\nS04 bounded recovery"]
     end
 
     subgraph Data["Controlled data and model execution"]
         Postgres["PostgreSQL<br/>classified records and RLS"]
         Documents["Cataloged knowledge documents"]
         Local["Local Ollama"]
-        Public["Approved public provider<br/>Groq"]
+        Public["Approved public profiles<br/>Groq, Mistral, NVIDIA NIM"]
+        Device["Simulated S04 position encoder<br/>future replaceable MHS adapter"]
     end
 
     subgraph Telemetry["Observability"]
@@ -47,6 +49,7 @@ flowchart LR
     Agent --> Factory
     Agent --> Knowledge
     Agent --> HITL
+    Agent --> Hardware
     Factory --> Postgres
     Knowledge --> Postgres
     Knowledge --> Documents
@@ -63,6 +66,8 @@ flowchart LR
     RCA --> Postgres
     RCA --> Backends
     RCA --> Langfuse
+    Hardware --> Postgres
+    Hardware --> Device
 
     classDef client fill:#1e3a5f,stroke:#0f172a,color:#ffffff
     classDef core fill:#0f766e,stroke:#134e4a,color:#ffffff
@@ -71,15 +76,17 @@ flowchart LR
     classDef telemetry fill:#6b21a8,stroke:#3b0764,color:#ffffff
     class UI,APIClient,Codex client
     class API,Run,Agent,Policy,HITL core
-    class Factory,Knowledge,Runtime,Observe,RCA mcp
-    class Postgres,Documents,Local,Public data
+    class Factory,Knowledge,Runtime,Observe,RCA,Hardware mcp
+    class Postgres,Documents,Local,Public,Device data
     class OTel,Backends,Grafana,Langfuse telemetry
 ```
 
 The Industrial AI Agent is the controlled application boundary: only it orchestrates
 the troubleshooting workflow and selects the bounded Factory and Knowledge tools. The
-other MCP services are independent, read-only diagnostic interfaces for authorized
-clients; they are not agent tools. Server-side authorization and PostgreSQL RLS remain
+other MCP services are independent diagnostic interfaces for authorized clients; Runtime,
+Observability, and RCA are read-only and are not agent tools. Hardware MCP is an
+approval-gated bounded recovery interface available only to the dedicated recovery path.
+Server-side authorization and PostgreSQL RLS remain
 between every MCP capability and classified data. The policy component, not the model,
 decides eligible profiles and enforces the final data-to-model check. `RESTRICTED` data
 can only use approved local profiles; a configured public profile can be eligible only
@@ -119,7 +126,7 @@ invoking the provider adapter. LangGraph and LangChain Core are used narrowly fo
 orchestration. The runtime uses LangGraph's official PostgreSQL async checkpointer for
 durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
 dynamic tool registry, LangSmith integration, or general evaluation framework.
-Five deployed MCP services expose bounded capabilities through the official MCP SDK v2.
+Six deployed MCP services expose bounded capabilities through the official MCP SDK v2.
 `factory_mcp` provides product history, machine status, server-authorized maintenance-ticket retrieval by ticket ID, and the approval-gated
 maintenance-ticket action; `knowledge_mcp` provides documentation search; and the
 read-only `observability_mcp` provides safe RCA evidence over Tempo, Loki, and
@@ -129,10 +136,16 @@ recent runs. Runtime MCP never reads LangGraph checkpoint tables and has no writ
 resume operation. The Industrial Agent discovers only Factory and Knowledge tools; it has no
 runtime dependency on Runtime MCP or Observability MCP. All retain stdio for process-coupled development
 and deterministic tests, and run as separate Streamable HTTP `/mcp` Docker services.
-A sixth injected `hardware_mcp` composition currently exposes only the deterministic
-S04 status and reference-calibration-preparation surface over the simulated port. It is
-not yet configured as an Agent MCP server, an HTTP deployment, or a physical-action
-service.
+`hardware_mcp` is a deployed Streamable HTTP service for the dedicated
+`CONFIDENTIAL_RECOVERY` path. It exposes the deterministic S04 status,
+reference-calibration preparation, and approval-bound execution surface over the
+simulated position-encoder port. Trusted infrastructure resolves the station to its
+single bounded device; the model cannot select or enumerate device identities.
+At the public recovery boundary, `SUCCEEDED` requires action execution plus independent
+post-action verification, while an already valid reference completes as the deterministic
+`NOT_REQUIRED` no-op. `BLOCKED` and `FAILED` remain non-success recovery outcomes;
+`RECOVERY_INCOMPLETE` is the separate Agent terminal status when the required recovery
+lifecycle was not completed and has no successful recovery outcome.
 `LangGraphTroubleshootingAgent` opens one session per explicitly configured server,
 discovers and authorizes tools through the temporary LangChain bridge, executes the
 bounded sequential loop, then closes all sessions. Transport selection is made by an

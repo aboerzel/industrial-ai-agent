@@ -4,9 +4,20 @@
 
 Accepted
 
+## Implementation Status
+
+The decision originally established the boundary before implementation. The first
+bounded slice is now implemented: `PhysicalDevicePort`, the simulated S04
+`POSITION-ENC-02` adapter, Hardware MCP, persisted approval claims, and
+`ClosedLoopRecoveryService`. It supports only reference calibration and independently
+verifies a fresh post-action observation. `SUCCEEDED` requires both an executed action
+and passed verification; a healthy device produces deterministic `NOT_REQUIRED` without
+an action, while blocked or failed paths remain non-success outcomes. MHS, real hardware,
+and Vision recovery remain unimplemented; no MHS conformance is claimed.
+
 ## Context
 
-The current Industrial AI Agent investigates production and machine data through
+At the time of this decision, the Industrial AI Agent investigated production and machine data through
 bounded MCP capabilities. Its only write capability is an approval-gated local
 maintenance-ticket demonstration. It has no hardware MCP server, device adapter,
 physical-device port, MHS integration, camera integration, or physical recovery

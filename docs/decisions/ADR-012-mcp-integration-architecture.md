@@ -2,6 +2,14 @@
 
 **Status:** Accepted
 
+## Implementation Status
+
+The original decision is retained as history. Its initially deferred write and
+approval scope is now implemented for the bounded `create_maintenance_ticket` action
+and the S04 Hardware MCP reference-calibration flow. Both remain explicitly
+allowlisted, authorization- and HITL-gated capabilities; generalized write tooling,
+dynamic server selection, and MCP-based authorization policy remain out of scope.
+
 ## Context
 
 The project has two established, read-only application capabilities:

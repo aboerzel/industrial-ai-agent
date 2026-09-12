@@ -24,11 +24,19 @@ flowchart LR
         API["FastAPI / Industrial AI Agent"]
         Factory["Factory MCP"]
         Knowledge["Knowledge MCP"]
+        Hardware["Hardware MCP"]
+        Runtime["Runtime MCP"]
+        Observability["Observability MCP"]
+        RCA["RCA MCP"]
     end
     SDK["OpenTelemetry SDK<br/>safe allowlisted metadata"] --> Collector["OTel Collector"]
     API --> SDK
     Factory --> SDK
     Knowledge --> SDK
+    Hardware --> SDK
+    Runtime --> SDK
+    Observability --> SDK
+    RCA --> SDK
     Collector --> Tempo["Tempo<br/>traces"]
     Collector --> Loki["Loki<br/>metadata-only logs"]
     Collector --> Prometheus["Prometheus<br/>bounded metrics"]
@@ -41,7 +49,7 @@ flowchart LR
     classDef pipeline fill:#1e3a5f,stroke:#0f172a,color:#ffffff
     classDef backend fill:#334155,stroke:#0f172a,color:#ffffff
     classDef metadata fill:#6b21a8,stroke:#3b0764,color:#ffffff
-    class API,Factory,Knowledge app
+    class API,Factory,Knowledge,Hardware,Runtime,Observability,RCA app
     class SDK,Collector pipeline
     class Tempo,Loki,Prometheus,Grafana backend
     class Langfuse metadata

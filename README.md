@@ -26,8 +26,8 @@ For the full industrial-value and scope statement, see [Capabilities and Industr
 
 - **Classification-aware model routing:** Semantic model profiles are selected deterministically from task requirements; `RESTRICTED` data is eligible only for approved local execution.
 - **Final egress enforcement:** An independent, deny-by-default check runs immediately before every model-provider call; model selection alone cannot authorize data transfer.
-- **Bounded industrial tools:** Factory, Knowledge, Runtime, Observability, and RCA capabilities are exposed through five authenticated MCP (Model Context Protocol) services with strict schemas and bounded operations.
-- **MHS-ready physical integration:** An internal `PhysicalDevicePort` keeps the MCP layer above a replaceable, future `MHSDeviceAdapter` concept for physical-device and closed-loop recovery integration; MHS conformance is not claimed.
+- **Bounded industrial tools:** Factory, Knowledge, Hardware, Runtime, Observability, and RCA capabilities are exposed through six authenticated MCP (Model Context Protocol) services with strict schemas and bounded operations.
+- **MHS-ready physical integration:** The implemented S04 reference-calibration demonstrator uses an internal `PhysicalDevicePort`, a simulated position-encoder adapter, Hardware MCP, and closed-loop verification. A future `MHSDeviceAdapter` remains replaceable below that port; MHS conformance is not claimed.
 - **Deterministic security boundaries:** Authorization, RLS, validation, tool allowlists, execution limits, and approval policy remain outside the LLM.
 - **Hybrid deterministic and AI processing:** Code owns guarantees; the model is used for bounded semantic decisions such as selecting the next approved tool or formulating an explanation.
 - **Human-in-the-loop write protection:** The implemented `create_maintenance_ticket` action pauses and executes only after explicit approval.
@@ -64,6 +64,7 @@ flowchart LR
         RuntimeMcp["Runtime MCP\nread-only"]
         ObservabilityMcp["Observability MCP\nread-only"]
         RcaMcp["RCA MCP\nread-only"]
+        HardwareMcp["Hardware MCP\nS04 bounded recovery"]
     end
 
     subgraph Data["Classified data and access boundary"]
@@ -76,7 +77,8 @@ flowchart LR
 
     subgraph Models["Approved model execution"]
         Ollama["Local Ollama models\nPUBLIC to RESTRICTED"]
-        Groq["Groq public profile\nPUBLIC to CONFIDENTIAL\nwhen policy permits"]
+        PublicModels["Public profiles: Groq, Mistral, NVIDIA NIM\nPUBLIC to CONFIDENTIAL\nwhen policy permits"]
+        Device["Simulated S04 position encoder\nreplaceable future MHS adapter"]
     end
 
     subgraph Observe["Metadata-only observability"]
@@ -95,7 +97,7 @@ flowchart LR
     FactoryMcp --> RLS
     KnowledgeMcp --> RLS
     Routing --> Ollama
-    Routing --> Groq
+    Routing --> PublicModels
     Workflow -. "technical metadata" .-> OTel
     Workflow -. "allowed model metadata" .-> Langfuse
 
@@ -112,6 +114,9 @@ flowchart LR
     RCA -. "authorized runtime evidence" .-> RLS
     RCA -. "bounded telemetry evidence" .-> Tempo
     RCA -. "allowed AI metadata" .-> Langfuse
+    Tools --> HardwareMcp
+    HardwareMcp --> RLS
+    HardwareMcp --> Device
 
     classDef client fill:#0f172a,stroke:#475569,color:#f8fafc
     classDef core fill:#14532d,stroke:#22c55e,color:#f0fdf4
@@ -121,9 +126,9 @@ flowchart LR
     classDef observe fill:#164e63,stroke:#22d3ee,color:#ecfeff
     class User,UI,API,Codex client
     class Workflow,Policies,Tools,Routing,HITL,RCA core
-    class FactoryMcp,KnowledgeMcp,RuntimeMcp,ObservabilityMcp,RcaMcp service
+    class FactoryMcp,KnowledgeMcp,RuntimeMcp,ObservabilityMcp,RcaMcp,HardwareMcp service
     class RLS,FactoryData,Documents data
-    class Ollama,Groq model
+    class Ollama,PublicModels,Device model
     class OTel,Collector,Tempo,Loki,Prometheus,Grafana,Langfuse observe
 ```
 
@@ -239,7 +244,7 @@ The deterministic analyzer remains authoritative. Optional AI reasoning receives
 | Area | Technologies in use |
 |---|---|
 | Application and AI workflow | Python 3.12+, FastAPI, Pydantic, LangGraph, LangChain Core |
-| Models | Local Ollama profiles; an OpenAI-compatible adapter with an optional configured Groq public profile |
+| Models | Local Ollama profiles; OpenAI-compatible public profiles for Groq, Mistral, and NVIDIA NIM, selected deterministically when configured and egress-eligible |
 | Integration | MCP SDK v2 and authenticated Streamable HTTP MCP services |
 | Data and security | PostgreSQL, Alembic, Row-Level Security, server-derived security context |
 | Observability | OpenTelemetry, OTel Collector, Tempo, Loki, Prometheus, Grafana, Langfuse |
