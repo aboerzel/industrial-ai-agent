@@ -104,7 +104,8 @@ MCP is not a model-egress boundary. The graph's model node continues to use the 
 profile through `EgressCheckedLLMClient`; ADR-009 still blocks confidential or restricted
 context from public-cloud model profiles. A local HTTP connection to either container is
 MCP service-network transport, not authorization to send factory or knowledge results to
-`public_fast`. Knowledge MCP's documents, chunks, queries, embeddings, and reranker
+the selected egress-eligible cloud profile. Knowledge MCP's documents, chunks, queries,
+embeddings, and reranker
 inputs stay local: Ollama is local and the cross-encoder loads only from its local cache.
 MCP does not authorize model calls or cloud egress. ADR-014 additionally propagates
 classification from PostgreSQL rows and catalog documents to chunks and structured MCP

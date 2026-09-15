@@ -327,8 +327,8 @@ public-cloud profiles from routing. The bounded S04 position-reference recovery 
 uses the server-owned `CONFIDENTIAL_RECOVERY` scope and requires `nvidia_quality`; it does
 not fall back to another provider when NVIDIA is unavailable. That scope exposes only the
 three bounded position-reference recovery capabilities, while other Confidential
-troubleshooting remains on the configured `public_fast` profile. All routes retain the
-same final public-cloud egress check.
+troubleshooting uses the configured `nvidia_quality` profile. All routes retain the same
+final public-cloud egress check.
 
 `POST /api/v1/diagnostics` is the only INTERNAL run entry point. It accepts only
 bounded product and station identifiers, verifies the required projections through an
@@ -603,9 +603,10 @@ flowchart LR
 ```
 
 `config/model_profiles.toml` assigns every profile explicit, validated capabilities,
-quality and relative cost classes, and an Execution Zone independent from its provider.
-`local_fast` and `local_quality` use `LOCAL`; `public_fast` uses
-`PUBLIC_CLOUD`. A caller creates `TaskRequirements`; the router applies the existing
+quality and relative cost classes, an Execution Zone independent from its provider, and
+whether it participates in automatic routing. `local_fast` and `local_quality` use
+`LOCAL`; `nvidia_quality` is the automatic `PUBLIC_CLOUD` profile. A caller creates
+`TaskRequirements`; the router applies the existing
 egress policy before capability, minimum-quality, and cost/quality ordering. Callers
 also supply the request classification to the controlled client for the independent
 final check. The current policy allows all four classifications locally and allows
@@ -1032,13 +1033,15 @@ Cost and quality preferences cannot override the security filter. See
 [ADR-008](../decisions/ADR-008-task-level-model-routing.md) and
 [ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.md).
 
-Mistral and NVIDIA NIM are additional external OpenAI-compatible providers behind the
-same `LLMClient` adapter as Groq. `mistral_fast` defaults to
+Mistral and NVIDIA NIM are external OpenAI-compatible providers behind the same
+`LLMClient` adapter as Groq. `nvidia_quality` is the sole automatic external profile;
+`groq_benchmark` and `mistral_fast` remain configured for explicit benchmark use and are
+excluded from automatic routing. `mistral_fast` defaults to
 `https://api.mistral.ai/v1` and `mistral-small-latest` and uses `MISTRAL_API_KEY`;
 `nvidia_quality` defaults to `https://integrate.api.nvidia.com/v1` and
 `nvidia/nemotron-3.5-lightning-30b-a3b` and uses `NVIDIA_API_KEY`. Their model and base
-URL have optional environment overrides. They are candidates only when their API key is
-configured, remain subject to the normal public-cloud egress policy, and have
+URL have optional environment overrides. Automatic profiles are candidates only when
+their API key is configured, remain subject to the normal public-cloud egress policy, and have
 provider-controlled availability and rate limits. No provider fallback is implemented.
 NVIDIA's configured profile supports the existing JSON-schema structured-output path;
 Mistral structured output remains disabled: its initial live verification was blocked by

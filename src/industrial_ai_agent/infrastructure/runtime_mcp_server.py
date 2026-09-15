@@ -61,7 +61,12 @@ RunStatusFilter = Literal[
 ]
 ClassificationFilter = Literal["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"]
 ModelProfileFilter = Literal[
-    "local_fast", "local_quality", "public_fast", "nvidia_quality"
+    "local_fast",
+    "local_quality",
+    "public_fast",
+    "groq_benchmark",
+    "mistral_fast",
+    "nvidia_quality",
 ]
 Lookback = Literal["15m", "1h", "6h", "24h"]
 

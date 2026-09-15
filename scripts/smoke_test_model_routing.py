@@ -9,7 +9,6 @@ from industrial_ai_agent.agent.model_routing import (
     CostPreference,
     DeterministicModelRouter,
     LLMCapability,
-    NoEligibleModelError,
     QualityClass,
     TaskRequirements,
     TaskRole,
@@ -56,15 +55,12 @@ def main() -> None:
         f"scenario=confidential_troubleshooting selected={selected_confidential.name}"
     )
 
-    public_fast_only = tuple(
-        profile for profile in profiles if profile.profile.name == "public_fast"
-    )
-    try:
-        router.route(confidential_troubleshooting, public_fast_only)
-    except NoEligibleModelError:
-        print("scenario=confidential_public_only result=NO_ELIGIBLE_MODEL")
-    else:
-        raise RuntimeError("CONFIDENTIAL task selected public_fast")
+    if any(
+        profile.profile.name == "groq_benchmark"
+        for profile in configuration.get_routing_profiles()
+    ):
+        raise RuntimeError("groq_benchmark must remain explicit-only")
+    print("scenario=groq_benchmark_automatic_routing result=DISABLED")
 
 
 if __name__ == "__main__":

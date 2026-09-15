@@ -26,7 +26,7 @@ from industrial_ai_agent.infrastructure.local_environment import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROFILES = ("local_fast", "local_quality")
-PUBLIC_PROFILE = "public_fast"
+PUBLIC_PROFILE = "groq_benchmark"
 LOCAL_EXPECTED_RESPONSE = "Industrial AI Agent ready"
 PUBLIC_EXPECTED_RESPONSE = "PUBLIC_LLM_OK"
 
@@ -74,17 +74,17 @@ def run_profile_smoke_test(
     profile_config = configuration.get_profile(profile_name)
     if profile_name == PUBLIC_PROFILE:
         if profile_config.provider != "groq":
-            raise RuntimeError("public_fast is not configured for Groq")
+            raise RuntimeError("groq_benchmark is not configured for Groq")
         if profile_config.authentication is not AuthenticationMode.API_KEY:
-            raise RuntimeError("public_fast must require API-key authentication")
+            raise RuntimeError("groq_benchmark must require API-key authentication")
         if profile_config.api_key_env != "GROQ_API_KEY":
-            raise RuntimeError("public_fast must use GROQ_API_KEY")
+            raise RuntimeError("groq_benchmark must use GROQ_API_KEY")
         prompt = f"Reply exactly with {PUBLIC_EXPECTED_RESPONSE}"
         expected_response = PUBLIC_EXPECTED_RESPONSE
     else:
         if profile_config.provider != "ollama":
             raise RuntimeError(
-                "Only public_fast may call a non-Ollama provider from this smoke test"
+                "Only groq_benchmark may call a non-Ollama provider from this smoke test"
             )
         if profile_config.authentication is not AuthenticationMode.NONE:
             raise RuntimeError(

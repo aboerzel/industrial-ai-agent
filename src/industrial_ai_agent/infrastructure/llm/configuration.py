@@ -47,6 +47,7 @@ class ModelProfileConfig(BaseModel):
     capabilities: frozenset[LLMCapability] = Field(min_length=1)
     quality_class: QualityClass
     cost_class: CostClass
+    automatic_routing: bool = True
     supports_structured_output: bool = False
     supports_reasoning_effort: bool = False
     max_output_tokens: int | None = Field(default=None, ge=1, le=4096)
@@ -108,7 +109,8 @@ class LLMConfiguration(BaseModel):
                 max_data_classification=profile.max_data_classification,
             )
             for profile_name, profile in sorted(self.profiles.items())
-            if not local_only or profile.execution_zone is ExecutionZone.LOCAL
+            if profile.automatic_routing
+            and (not local_only or profile.execution_zone is ExecutionZone.LOCAL)
         )
 
     def get_available_routing_profiles(

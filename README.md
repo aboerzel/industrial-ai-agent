@@ -278,15 +278,16 @@ Windows NVIDIA driver before tuning Agent timeouts or model routing.
 
 ### Full Demo
 
-Set a valid `GROQ_API_KEY` in `.env` and leave `LOCAL_ONLY_MODE=false`. This permits the
-configured `public_fast` profile for `PUBLIC`, `INTERNAL`, and `CONFIDENTIAL` runs;
-`RESTRICTED` runs remain local by deterministic egress policy.
+Set a valid `NVIDIA_API_KEY` in `.env` and leave `LOCAL_ONLY_MODE=false`. This permits
+the configured `nvidia_quality` profile for `PUBLIC`, `INTERNAL`, and `CONFIDENTIAL`
+runs; `RESTRICTED` runs remain local by deterministic egress policy. The configured
+Groq and Mistral profiles are explicit benchmark profiles and are not automatically routed.
 
 ### Local-only Demo
 
-Set `LOCAL_ONLY_MODE=true` and leave `GROQ_API_KEY` unset. The composition root excludes
+Set `LOCAL_ONLY_MODE=true` and leave `NVIDIA_API_KEY` unset. The composition root excludes
 all public-cloud model profiles before routing, so the local profiles handle every
-classification. An invalid or placeholder Groq key is not a Local-only configuration.
+classification. An invalid or placeholder NVIDIA key is not a Local-only configuration.
 
 ```powershell
 Copy-Item .env.example .env

@@ -30,7 +30,7 @@ supports_reasoning_effort = true
 max_output_tokens = 192
 api_cost_usd = 0
 
-[profiles.public_fast]
+[profiles.groq_benchmark]
 provider = "groq"
 model = "openai/gpt-oss-20b"
 base_url = "https://api.groq.com/openai/v1"
@@ -42,6 +42,7 @@ max_data_classification = "CONFIDENTIAL"
 capabilities = ["TEXT", "TOOL_CALLING"]
 quality_class = "HIGH"
 cost_class = "LOW"
+automatic_routing = false
 
 [profiles.nvidia_quality]
 provider = "nvidia"

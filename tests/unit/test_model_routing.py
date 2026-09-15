@@ -112,7 +112,7 @@ def test_confidential_task_sees_public_profile_with_sufficient_maximum() -> None
 @pytest.mark.parametrize(
     "classification", (DataClassification.PUBLIC, DataClassification.CONFIDENTIAL)
 )
-def test_full_demo_routes_eligible_public_classifications_to_public_fast(
+def test_full_demo_routes_eligible_public_classifications_to_nvidia_quality(
     classification: DataClassification,
 ) -> None:
     configuration = load_llm_configuration(
@@ -124,7 +124,18 @@ def test_full_demo_routes_eligible_public_classifications_to_public_fast(
         configuration.get_routing_profiles(),
     )
 
-    assert selected == ModelProfile("public_fast")
+    assert selected == ModelProfile("nvidia_quality")
+
+
+def test_explicit_cloud_profiles_are_not_automatic_routing_candidates() -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.toml"
+    )
+
+    assert "groq_benchmark" not in profile_names(configuration.get_routing_profiles())
+    assert "mistral_fast" not in profile_names(configuration.get_routing_profiles())
+    assert configuration.get_profile("groq_benchmark").provider == "groq"
+    assert configuration.get_profile("mistral_fast").provider == "mistral"
 
 
 def test_s04_position_reference_recovery_requires_nvidia_quality() -> None:

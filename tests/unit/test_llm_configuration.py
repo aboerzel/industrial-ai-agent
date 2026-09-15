@@ -68,8 +68,8 @@ def test_loads_local_fast_profile() -> None:
     assert profile.api_key_env is None
 
 
-def test_loads_public_fast_profile() -> None:
-    profile = load_project_configuration().get_profile("public_fast")
+def test_loads_explicit_groq_benchmark_profile() -> None:
+    profile = load_project_configuration().get_profile("groq_benchmark")
 
     assert profile.provider == "groq"
     assert profile.model == "openai/gpt-oss-20b"
@@ -83,6 +83,7 @@ def test_loads_public_fast_profile() -> None:
     assert profile.quality_class is QualityClass.HIGH
     assert profile.cost_class is CostClass.LOW
     assert profile.api_key_env == "GROQ_API_KEY"
+    assert profile.automatic_routing is False
 
 
 @pytest.mark.parametrize(
@@ -138,6 +139,21 @@ def test_docker_configuration_includes_nvidia_quality_profile() -> None:
     assert profile.max_output_tokens == 256
 
 
+def test_docker_configuration_excludes_groq_from_automatic_routing() -> None:
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_profiles.docker.toml"
+    )
+
+    assert {
+        profile.profile.name for profile in configuration.get_routing_profiles()
+    } == {
+        "local_fast",
+        "local_quality",
+        "nvidia_quality",
+    }
+    assert configuration.get_profile("groq_benchmark").automatic_routing is False
+
+
 def test_nvidia_profile_has_a_bounded_agent_output_budget() -> None:
     configuration = load_project_configuration()
 
@@ -150,11 +166,15 @@ def test_nvidia_profile_has_a_bounded_agent_output_budget() -> None:
         ({}, {"local_fast", "local_quality"}),
         (
             {"MISTRAL_API_KEY": "mistral-key"},
-            {"local_fast", "local_quality", "mistral_fast"},
+            {"local_fast", "local_quality"},
         ),
         (
             {"NVIDIA_API_KEY": "nvidia-key"},
             {"local_fast", "local_quality", "nvidia_quality"},
+        ),
+        (
+            {"GROQ_API_KEY": "groq-key"},
+            {"local_fast", "local_quality"},
         ),
     ),
 )
@@ -166,6 +186,14 @@ def test_only_configured_authenticated_profiles_are_routing_candidates(
     profiles = configuration.get_available_routing_profiles(environment=environment)
 
     assert {profile.profile.name for profile in profiles} == expected_profiles
+
+
+def test_explicit_groq_benchmark_profile_remains_available_with_its_key() -> None:
+    configuration = load_project_configuration()
+
+    assert configuration.is_profile_available(
+        "groq_benchmark", environment={"GROQ_API_KEY": "groq-key"}
+    )
 
 
 def test_local_profiles_use_different_models() -> None:

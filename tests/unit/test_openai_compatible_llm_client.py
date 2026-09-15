@@ -30,7 +30,7 @@ from industrial_ai_agent.infrastructure.llm.openai_compatible import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_QUALITY_PROFILE = ModelProfile("local_quality")
-PUBLIC_FAST_PROFILE = ModelProfile("public_fast")
+GROQ_BENCHMARK_PROFILE = ModelProfile("groq_benchmark")
 MISTRAL_FAST_PROFILE = ModelProfile("mistral_fast")
 NVIDIA_QUALITY_PROFILE = ModelProfile("nvidia_quality")
 
@@ -614,7 +614,7 @@ def test_requires_api_key_from_configured_environment_variable() -> None:
         client.chat(LOCAL_QUALITY_PROFILE, request)
 
 
-def test_public_fast_rejects_missing_groq_api_key_without_network_call() -> None:
+def test_explicit_groq_benchmark_rejects_missing_api_key_without_network_call() -> None:
     configuration = load_llm_configuration(
         PROJECT_ROOT / "config" / "model_profiles.toml"
     )
@@ -631,7 +631,7 @@ def test_public_fast_rejects_missing_groq_api_key_without_network_call() -> None
         ValueError,
         match="Missing API key environment variable: GROQ_API_KEY",
     ):
-        client.chat(PUBLIC_FAST_PROFILE, request)
+        client.chat(GROQ_BENCHMARK_PROFILE, request)
 
 
 def test_reads_authenticated_profile_api_key_from_environment_variable() -> None:
