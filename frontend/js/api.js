@@ -1,11 +1,12 @@
 const API_BASE_URL = "http://localhost:8000";
 
 export class ApiClientError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, investigationId = null) {
     super(message);
     this.name = "ApiClientError";
     this.status = status;
     this.code = code;
+    this.investigationId = investigationId;
   }
 }
 
@@ -130,6 +131,7 @@ async function request(path, options = {}, validator = isRunResponse) {
       response.status,
       publicError?.code ?? "request_failed",
       errorMessageFor(response.status, publicError?.code, publicError?.message),
+      publicError?.investigation_id ?? null,
     );
   }
   if (!validator(payload)) {
@@ -211,9 +213,10 @@ function isInvestigationTurn(value) {
 function isApiErrorResponse(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["code", "message"]) &&
+    hasOnlyKeys(value, ["code", "message", "investigation_id"]) &&
     isBoundedString(value.code, 80, true) &&
-    isBoundedString(value.message, 500, true)
+    isBoundedString(value.message, 500, true) &&
+    (value.investigation_id === undefined || isUuid(value.investigation_id))
   );
 }
 

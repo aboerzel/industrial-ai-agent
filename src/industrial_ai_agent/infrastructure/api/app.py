@@ -99,10 +99,18 @@ _SAFE_PROVIDER_ERROR_TYPES = frozenset(
 
 
 class _ApiRunError(Exception):
-    def __init__(self, *, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+        investigation_id: UUID | None = None,
+    ) -> None:
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.investigation_id = investigation_id
 
 
 def create_app(
@@ -368,13 +376,14 @@ def create_app(
             )
         service = _run_service(request)
         if not _persistent_hitl_enabled(service) or not claimed.model_profile:
-            await store.fail(run_id, "internal_error")
+            failed_record = await store.fail(run_id, "internal_error")
             _raise_api_run_error(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="internal_error",
                 message=user_facing_error_message(
                     "internal_error", claimed.response_language
                 ),
+                investigation_id=failed_record.investigation_id,
             )
         try:
             execution = await asyncio.wait_for(
@@ -426,13 +435,14 @@ def create_app(
             _record_internal_failure(
                 run_id=run_id, error=error, telemetry=_telemetry(request)
             )
-            await store.fail(run_id, "internal_error")
+            failed_record = await store.fail(run_id, "internal_error")
             _raise_api_run_error(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="internal_error",
                 message=user_facing_error_message(
                     "internal_error", claimed.response_language
                 ),
+                investigation_id=failed_record.investigation_id,
             )
 
     if telemetry is not None:
@@ -453,7 +463,11 @@ async def _api_run_error_handler(
         raise TypeError("Unexpected API exception handler input")
     return JSONResponse(
         status_code=error.status_code,
-        content=ApiErrorResponse(code=error.code, message=error.message).model_dump(),
+        content=ApiErrorResponse(
+            code=error.code,
+            message=error.message,
+            investigation_id=error.investigation_id,
+        ).model_dump(mode="json", exclude_none=True),
     )
 
 
@@ -646,11 +660,12 @@ async def _start_run(
         _record_internal_failure(
             run_id=run_id, error=error, telemetry=_telemetry(request)
         )
-        await store.fail(run_id, "internal_error")
+        failed_record = await store.fail(run_id, "internal_error")
         _raise_api_run_error(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code="internal_error",
             message=user_facing_error_message("internal_error", response_language),
+            investigation_id=failed_record.investigation_id,
         )
     if result.model_profile_name is not None:
         await store.bind_execution_context(
@@ -1001,5 +1016,11 @@ def _raise_api_run_error(
     status_code: int,
     code: str,
     message: str,
+    investigation_id: UUID | None = None,
 ) -> NoReturn:
-    raise _ApiRunError(status_code=status_code, code=code, message=message)
+    raise _ApiRunError(
+        status_code=status_code,
+        code=code,
+        message=message,
+        investigation_id=investigation_id,
+    )

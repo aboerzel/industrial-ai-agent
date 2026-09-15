@@ -92,6 +92,9 @@ _HARDWARE_TOOL_PERMISSIONS = {
     "prepare_reference_calibration": McpPermission.PREPARE_HARDWARE_RECOVERY,
     "execute_reference_calibration": McpPermission.EXECUTE_HARDWARE_RECOVERY,
 }
+HARDWARE_MCP_ALLOWED_CLIENT_IDS = frozenset(
+    {"industrial-agent", "industrial-agent-restricted"}
+)
 
 
 class _McpModel(BaseModel):
@@ -359,7 +362,7 @@ def create_secure_hardware_mcp_server(
     access_control = create_demo_mcp_access_control(
         tools=listed_tools,
         required_permission=_required_hardware_permission,
-        allowed_client_ids=frozenset({"industrial-agent"}),
+        allowed_client_ids=HARDWARE_MCP_ALLOWED_CLIENT_IDS,
     )
     server = create_hardware_mcp_server(
         recovery_preparation=preparation,

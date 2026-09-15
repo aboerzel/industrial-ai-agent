@@ -50,6 +50,10 @@ class ApiErrorResponse(BaseModel):
 
     code: Annotated[str, StringConstraints(min_length=1, max_length=80)]
     message: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+    investigation_id: UUID | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class HealthResponse(BaseModel):

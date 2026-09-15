@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ApiClientError, createRun, getRun } from "../../frontend/js/api.js";
+import {
+  ApiClientError,
+  createRun,
+  downloadInvestigationPdf,
+  getRun,
+} from "../../frontend/js/api.js";
 
 const RUN_ID = "0ca96c57-66f6-4e12-b151-6f7f6ef9c9f8";
 
@@ -191,6 +196,7 @@ test("renders neutral access unavailability separately from a missing run", asyn
     (error) =>
       error instanceof ApiClientError &&
       error.code === "requested_data_unavailable" &&
+      error.investigationId === null &&
       error.message === "The requested data is not available with the selected access level.",
   );
   await assert.rejects(
@@ -203,6 +209,43 @@ test("renders neutral access unavailability separately from a missing run", asyn
       error instanceof ApiClientError &&
       error.code === "run_not_found" &&
       error.message === "The requested run was not found.",
+  );
+});
+
+test("retains a persisted investigation identity from a sanitized HTTP 500", async () => {
+  await assert.rejects(
+    requestError(
+      "/api/v1/runs",
+      {
+        code: "internal_error",
+        message: "The agent run could not be completed.",
+        investigation_id: RUN_ID,
+      },
+      createRun,
+      500,
+    ),
+    (error) =>
+      error instanceof ApiClientError &&
+      error.status === 500 &&
+      error.code === "internal_error" &&
+      error.investigationId === RUN_ID &&
+      error.message === "The agent run could not be completed. Try again later.",
+  );
+});
+
+test("uses the existing server PDF route for persisted investigations", () => {
+  const originalWindow = globalThis.window;
+  let assignedUrl = null;
+  globalThis.window = { location: { assign: (url) => { assignedUrl = url; } } };
+  try {
+    downloadInvestigationPdf(RUN_ID, "CONFIDENTIAL");
+  } finally {
+    globalThis.window = originalWindow;
+  }
+
+  assert.equal(
+    assignedUrl,
+    `http://localhost:8000/api/v1/investigations/${RUN_ID}/pdf?user_clearance=CONFIDENTIAL`,
   );
 });
 
@@ -227,12 +270,12 @@ async function requestRun(payload) {
   }
 }
 
-async function requestError(path, payload, request) {
+async function requestError(path, payload, request, status = 404) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     assert.equal(url, `http://localhost:8000${path}`);
     return new Response(JSON.stringify(payload), {
-      status: 404,
+      status,
       headers: { "Content-Type": "application/json" },
     });
   };

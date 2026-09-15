@@ -33,14 +33,22 @@ from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_FRONTEND_ORIGIN = "http://localhost:8080"
+DEFAULT_LOCAL_FRONTEND_ORIGINS = (
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+)
 DEFAULT_DOCUMENT_ROOT = Path("/app/data/document-content")
 
 
 def create_default_app():
     """Compose the local/demo FastAPI application without embedding deployment details."""
     load_local_environment(PROJECT_ROOT / ".env")
-    frontend_origin = os.getenv("AGENT_FRONTEND_ORIGIN", DEFAULT_FRONTEND_ORIGIN)
+    configured_frontend_origin = os.getenv("AGENT_FRONTEND_ORIGIN")
+    frontend_origins = (
+        (configured_frontend_origin,)
+        if configured_frontend_origin
+        else DEFAULT_LOCAL_FRONTEND_ORIGINS
+    )
     database_url = os.getenv("AGENT_RUNTIME_DATABASE_URL") or os.getenv(
         "FACTORY_DATABASE_URL"
     )
@@ -76,7 +84,7 @@ def create_default_app():
             ),
             telemetry,
         ),
-        allowed_origins=(frontend_origin,),
+        allowed_origins=frontend_origins,
         telemetry=telemetry,
         document_content_reader=PostgreSqlDocumentContentRepository(
             PostgreSqlSessionFactory(database_url),

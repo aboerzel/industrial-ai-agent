@@ -92,6 +92,7 @@ def test_unknown_free_text_is_conservatively_restricted(message: str) -> None:
     (
         ("Investigate P4711 at S04.", AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING),
         ("Investigate P9001 at S07.", AgentRunProfile.RESTRICTED_TROUBLESHOOTING),
+        ("S07", AgentRunProfile.RESTRICTED_TROUBLESHOOTING),
     ),
 )
 def test_named_demo_cases_keep_their_deterministic_classification(

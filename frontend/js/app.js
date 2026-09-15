@@ -8,6 +8,7 @@ import {
   resumeRun,
 } from "./api.js";
 import { renderAgentAnswer } from "./markdown.js";
+import { downloadTranscriptPdf } from "./transcript-pdf.js";
 
 const composerForm = document.querySelector("#composer-form");
 const composerMessage = document.querySelector("#composer-message");
@@ -26,6 +27,8 @@ let currentInvestigationId = null;
 let hasExportableConversation = false;
 let isSubmitting = false;
 let pendingAgentTurn = null;
+let pendingTranscriptTurn = null;
+let visibleTranscript = [];
 
 composerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -59,6 +62,8 @@ newInvestigationButton.addEventListener("click", () => {
 exportPdfButton.addEventListener("click", () => {
   if (currentInvestigationId) {
     downloadInvestigationPdf(currentInvestigationId, userClearance.value);
+  } else if (hasExportableConversation) {
+    downloadTranscriptPdf(visibleTranscript);
   }
 });
 
@@ -109,6 +114,10 @@ async function submitRequest(message = composerMessage.value.trim()) {
     composerMessage.value = "";
     await reloadInvestigation();
   } catch (error) {
+    if (error?.investigationId) {
+      currentInvestigationId = error.investigationId;
+      persistActiveInvestigation(currentInvestigationId);
+    }
     renderPendingFailure(error, responseLanguage.value);
   } finally {
     isSubmitting = false;
@@ -127,6 +136,8 @@ function renderEmptyInvestigation() {
   currentInvestigationId = null;
   hasExportableConversation = false;
   pendingAgentTurn = null;
+  pendingTranscriptTurn = null;
+  visibleTranscript = [];
   clearActiveInvestigation();
   resultTitle.textContent = "Investigation";
   hideStatus();
@@ -140,7 +151,8 @@ function renderInvestigation(investigation) {
   hideError();
   pendingAgentTurn = null;
   currentInvestigationId = investigation.investigation_id;
-  hasExportableConversation = investigation.turns.some(hasExportableTurn);
+  visibleTranscript = investigation.turns.map(transcriptTurn);
+  syncExportableConversation();
   persistActiveInvestigation(currentInvestigationId);
   resultTitle.textContent = "Investigation";
   setStatus(investigation.status);
@@ -200,9 +212,13 @@ function renderPendingConversation(message, { replace }) {
   resultTitle.textContent = "Investigation";
   if (replace) {
     history.replaceChildren();
+    visibleTranscript = [];
   }
   history.classList.remove("empty-state");
   const turn = { request: message, status: "running" };
+  pendingTranscriptTurn = { request: message, answer: null, error: null };
+  visibleTranscript.push(pendingTranscriptTurn);
+  syncExportableConversation();
   pendingAgentTurn = renderAgentTurn(turn);
   history.append(renderUserTurn(turn), pendingAgentTurn);
   setStatus("running");
@@ -212,6 +228,9 @@ function renderPendingConversation(message, { replace }) {
 function renderPendingFailure(error, selectedLanguage) {
   const providerLimited = isProviderLimitError(error?.code);
   const message = publicError(error, "The agent run could not be completed.");
+  if (pendingTranscriptTurn) {
+    pendingTranscriptTurn.error = transcriptError(error?.code, message);
+  }
   if (pendingAgentTurn) {
     pendingAgentTurn.classList.remove("is-pending");
     pendingAgentTurn.classList.add(providerLimited ? "is-limit" : "is-error");
@@ -223,6 +242,8 @@ function renderPendingFailure(error, selectedLanguage) {
     showError(message);
   }
   pendingAgentTurn = null;
+  pendingTranscriptTurn = null;
+  syncExportableConversation();
   setStatus(providerLimited ? "limit_reached" : "failed", selectedLanguage);
   scrollHistoryToLatest();
 }
@@ -668,10 +689,29 @@ function syncControls() {
   composerButton.setAttribute("aria-label", "Send message");
   composerButton.title = "Send message";
   newInvestigationButton.disabled = isSubmitting;
-  exportPdfButton.disabled = !(currentInvestigationId && hasExportableConversation);
+  exportPdfButton.disabled = !hasExportableConversation;
   for (const action of history.querySelectorAll(".next-step-action, .reference-action")) {
     action.disabled = isSubmitting;
   }
+}
+
+function syncExportableConversation() {
+  hasExportableConversation = visibleTranscript.some(hasExportableTurn);
+}
+
+function transcriptTurn(turn) {
+  return {
+    request: turn.request ?? "",
+    answer: turn.answer ?? null,
+    error: turn.error ? transcriptError(turn.error.code, turn.error.message) : null,
+  };
+}
+
+function transcriptError(code, message) {
+  return {
+    code: typeof code === "string" ? code : "request_failed",
+    message: typeof message === "string" ? message : "The request could not be completed.",
+  };
 }
 
 function hasExportableTurn(turn) {

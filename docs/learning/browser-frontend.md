@@ -40,6 +40,7 @@ frontend/
     css/app.css
     js/api.js
     js/app.js
+    js/transcript-pdf.js
     js/markdown.js
     js/vendor/
     package.json
@@ -79,10 +80,11 @@ python -m industrial_ai_agent.infrastructure.agent_api
 python -m http.server 8080 --directory frontend
 ```
 
-Open `http://localhost:8080`. The default FastAPI entry point permits exactly this
-development origin through CORS. Set `AGENT_FRONTEND_ORIGIN` when changing the local
-frontend origin. Do not use a CORS wildcard; deployment-specific production origins need
-an explicit security design.
+Open `http://localhost:8080` or `http://127.0.0.1:8080`. The default FastAPI entry
+point permits exactly these two loopback development origins through CORS. Set
+`AGENT_FRONTEND_ORIGIN` when changing the local frontend origin; that explicit setting
+replaces the local-demo defaults. Do not use a CORS wildcard; deployment-specific
+production origins need an explicit security design.
 
 ## Run Lifecycle and Security
 
@@ -96,6 +98,13 @@ The browser cannot choose a model, provider, execution zone, data classification
 server, tool allowlist, or egress policy. The API continues to assign `CONFIDENTIAL`
 server-side, and ADR-009 controls model egress independently from MCP network traffic.
 The UI contains no secrets and must be treated as publicly visible client code.
+
+The PDF button is enabled exactly when visible exportable conversation content exists.
+Persisted investigations continue to use the authorized server PDF route. When a request
+fails before an investigation exists, the browser creates a transcript-only PDF locally.
+That report contains only the visible user request and public agent or error text, and
+explicitly states that no persisted Investigation ID exists. It does not infer or include
+classification, tool calls, findings, recovery data, or other server-side metadata.
 
 Agent answers are untrusted. The renderer enables GFM features such as tables, permits only
 an attribute-free `<br>` raw-HTML token so compact table cells can use line breaks, escapes

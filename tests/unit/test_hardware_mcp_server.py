@@ -16,6 +16,7 @@ from industrial_ai_agent.domain.product_history import StationId
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.hardware_mcp_server import (
     _HARDWARE_TOOL_PERMISSIONS,
+    HARDWARE_MCP_ALLOWED_CLIENT_IDS,
     HARDWARE_MCP_SERVER_NAME,
     create_hardware_mcp_server,
 )
@@ -64,6 +65,12 @@ def test_hardware_mcp_exposes_only_strict_bounded_hardware_recovery_tools() -> N
         "run_id",
         "action_id",
     }
+
+
+def test_secure_hardware_scope_includes_the_restricted_agent_identity() -> None:
+    assert HARDWARE_MCP_ALLOWED_CLIENT_IDS == frozenset(
+        {"industrial-agent", "industrial-agent-restricted"}
+    )
 
 
 def test_status_returns_bounded_s04_state_without_mutation() -> None:

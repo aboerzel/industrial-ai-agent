@@ -104,16 +104,19 @@ FastAPI preserves deterministic inner policy decisions:
 * `NoEligibleModelError` returns `503`;
 * `ModelEgressDeniedError` returns `403` and does not authorize a fallback;
 * unavailable MCP services return `503`;
-* unexpected failures return a generic `500`.
+* unexpected failures return a generic `500`; when the failed run was already
+  persisted, the sanitized error also carries only its existing `investigation_id`.
 
-Public errors contain a stable code and safe message only. They do not expose stack
-traces, secrets, prompts, or raw tool results.
+Public errors contain a stable code, safe message, and, only for an already persisted
+run, its opaque investigation identity. They do not expose stack traces, secrets,
+prompts, raw tool results, or internal failure diagnostics.
 
 MCP's local network transport is independent from model egress. Factory and Knowledge
 MCP may run in Docker, while ADR-009 still requires the final local-only egress check for
 a confidential troubleshooting run. The API uses no CORS wildcard. Its local entry point
-permits only `http://localhost:8080` by default; `AGENT_FRONTEND_ORIGIN` can provide one
-explicit replacement origin for a changed local deployment. Production origin policy
+permits only `http://localhost:8080` and `http://127.0.0.1:8080` by default;
+`AGENT_FRONTEND_ORIGIN` can provide one explicit replacement origin for a changed local
+deployment. Production origin policy
 must be configured with the real browser client and its authentication, authorization,
 TLS, and rate-limiting controls. The API remains local/demo only and has no
 authentication, authorization, TLS, rate limiting, remote deployment, or agent container

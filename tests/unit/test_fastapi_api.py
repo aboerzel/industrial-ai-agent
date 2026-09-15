@@ -247,24 +247,25 @@ def test_provider_failure_is_terminal_and_following_request_remains_usable(
     assert failed_run.error_code == "llm_rate_limit"
 
 
-def test_cors_allows_only_configured_development_origin() -> None:
+@pytest.mark.parametrize("origin", ("http://localhost:8080", "http://127.0.0.1:8080"))
+def test_cors_allows_both_explicit_local_demo_origins(origin: str) -> None:
     client = TestClient(
         create_app(
             FakeRunService(result=_success_result()),
-            allowed_origins=("http://localhost:8080",),
+            allowed_origins=("http://localhost:8080", "http://127.0.0.1:8080"),
         )
     )
 
     response = client.options(
         "/api/v1/runs",
         headers={
-            "Origin": "http://localhost:8080",
+            "Origin": origin,
             "Access-Control-Request-Method": "POST",
         },
     )
 
     assert response.status_code == 200
-    assert response.headers["access-control-allow-origin"] == "http://localhost:8080"
+    assert response.headers["access-control-allow-origin"] == origin
     assert response.headers["access-control-allow-methods"] == "GET, POST"
 
 
@@ -272,7 +273,7 @@ def test_cors_rejects_unconfigured_origin() -> None:
     client = TestClient(
         create_app(
             FakeRunService(result=_success_result()),
-            allowed_origins=("http://localhost:8080",),
+            allowed_origins=("http://localhost:8080", "http://127.0.0.1:8080"),
         )
     )
 
@@ -1305,10 +1306,13 @@ def test_unexpected_failure_does_not_expose_internal_details(error: Exception) -
     response = client.post("/api/v1/runs", json=_confidential_request())
 
     assert response.status_code == 500
-    assert response.json() == {
+    body = response.json()
+    assert body == {
         "code": "internal_error",
         "message": "The agent run could not be completed.",
+        "investigation_id": body["investigation_id"],
     }
+    assert UUID(body["investigation_id"])
     assert "secret" not in response.text
 
 
@@ -1350,6 +1354,7 @@ def test_exception_group_logs_sanitized_inner_diagnostic_and_persists_failure(
     assert response.json() == {
         "code": "internal_error",
         "message": "The agent run could not be completed.",
+        "investigation_id": str(run_id),
     }
     stored = asyncio.run(store.get(run_id))
     assert stored is not None

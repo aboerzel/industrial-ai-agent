@@ -393,7 +393,90 @@ test("renders a single-composer investigation workspace", async (t) => {
       assert.equal(document.querySelector(".agent-turn.is-error"), null);
       assert.match(document.querySelector(".agent-turn")?.textContent ?? "", /LLM limit reached/);
       assert.equal(document.querySelector("#run-status")?.dataset.status, "limit_reached");
+      assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
     } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("exports a transcript-only PDF for a visible pre-run authorization error", async () => {
+    const downloads = [];
+    const { document, window, restoreFetch } = await loadApp(() => jsonResponse({
+      code: "requested_data_unavailable",
+      message: "The requested data is unavailable.",
+    }, 404));
+    const captureDownload = (event) => {
+      if (event.target instanceof window.HTMLAnchorElement) {
+        downloads.push({ download: event.target.download, href: event.target.href });
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("click", captureDownload);
+    try {
+      document.querySelector("#user-clearance").value = "PUBLIC";
+      document.querySelector("#composer-message").value = "S07";
+      submit(document, window);
+      await settle();
+
+      assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
+      assert.match(document.querySelector(".agent-turn.is-error")?.textContent ?? "", /selected access level/);
+      document.querySelector("#export-pdf-button").click();
+      assert.equal(downloads.length, 1);
+      assert.equal(downloads[0]?.download, "investigation-transcript.pdf");
+      assert.match(downloads[0]?.href ?? "", /^blob:/);
+    } finally {
+      document.removeEventListener("click", captureDownload);
+      restoreFetch();
+    }
+  });
+
+  await t.test("retains a persisted investigation identity from an internal HTTP failure", async () => {
+    const { document, window, restoreFetch } = await loadApp(() => jsonResponse({
+      code: "internal_error",
+      message: "The agent run could not be completed.",
+      investigation_id: INVESTIGATION_ID,
+    }, 500));
+    try {
+      submit(document, window);
+      await settle();
+
+      assert.match(document.querySelector(".agent-turn.is-error")?.textContent ?? "", /could not be completed/);
+      assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
+      assert.deepEqual(
+        JSON.parse(window.sessionStorage.getItem("industrial-ai-agent.active-investigation")),
+        {
+          investigationId: INVESTIGATION_ID,
+          userClearance: "RESTRICTED",
+          responseLanguage: "EN",
+        },
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("exports a transcript-only PDF for a transport failure", async () => {
+    const downloads = [];
+    const { document, window, restoreFetch } = await loadApp(async () => {
+      throw new TypeError("Network request failed");
+    });
+    const captureDownload = (event) => {
+      if (event.target instanceof window.HTMLAnchorElement) {
+        downloads.push(event.target.download);
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("click", captureDownload);
+    try {
+      submit(document, window);
+      await settle();
+
+      assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
+      assert.match(document.querySelector(".agent-turn.is-error")?.textContent ?? "", /local agent API is not reachable/);
+      document.querySelector("#export-pdf-button").click();
+      assert.deepEqual(downloads, ["investigation-transcript.pdf"]);
+    } finally {
+      document.removeEventListener("click", captureDownload);
       restoreFetch();
     }
   });
