@@ -16,8 +16,15 @@ from mcp.server.mcpserver.context import Context
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from industrial_ai_agent.agent.model_egress import EgressCheckedLLMClient
-from industrial_ai_agent.agent.model_routing import DeterministicModelRouter
+from industrial_ai_agent.agent.model_egress import (
+    EgressCheckedLLMClient,
+    ModelExecutionAuthorizer,
+)
+from industrial_ai_agent.agent.model_selection import (
+    RCA_REASONING_CONSUMER,
+    RCA_REASONING_REQUIREMENTS,
+    ModelResolutionService,
+)
 from industrial_ai_agent.application.mcp_access import McpPermission
 from industrial_ai_agent.application.rca import (
     RcaAnalysisReport,
@@ -54,14 +61,17 @@ from industrial_ai_agent.application.rca_reasoning import (
     RcaReasoningResult,
     RcaReasoningStatus,
 )
-from industrial_ai_agent.domain.security import DataClassification, SecurityContext
+from industrial_ai_agent.domain.security import (
+    DEMO_RUNTIME_SECURITY_CONTEXT,
+    DataClassification,
+    SecurityContext,
+)
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
-    LLMConfiguration,
-    load_llm_configuration,
-    local_only_mode_enabled,
+    ModelCatalogConfiguration,
+    load_model_catalog,
 )
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
@@ -74,6 +84,9 @@ from industrial_ai_agent.infrastructure.mcp_access_control import (
 from industrial_ai_agent.infrastructure.mcp_schema_validation import (
     require_strict_mcp_tool_arguments,
 )
+from industrial_ai_agent.infrastructure.model_decision_observer import (
+    TelemetryModelDecisionObserver,
+)
 from industrial_ai_agent.infrastructure.observability_backends import (
     BackendConfiguration,
     LokiAdapter,
@@ -82,6 +95,9 @@ from industrial_ai_agent.infrastructure.observability_backends import (
     TempoAdapter,
 )
 from industrial_ai_agent.infrastructure.observed_llm_client import ObservedLLMClient
+from industrial_ai_agent.infrastructure.persistence.model_assignments import (
+    PostgreSqlModelAssignmentRepository,
+)
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlSessionFactory,
 )
@@ -102,10 +118,10 @@ RCA_MCP_SERVER_NAME = "rca_mcp"
 RCA_MCP_SERVER_VERSION = "0.1.0"
 RCA_MCP_HTTP_PATH = "/mcp"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MODEL_CONFIGURATION_PATH = Path(
+DEFAULT_MODEL_CATALOG_PATH = Path(
     os.getenv(
-        "MODEL_CONFIGURATION_PATH",
-        str(PROJECT_ROOT / "config" / "model_profiles.toml"),
+        "MODEL_CATALOG_PATH",
+        str(PROJECT_ROOT / "config" / "model_catalog.toml"),
     )
 )
 
@@ -323,7 +339,7 @@ def create_secure_rca_mcp_server(*, telemetry: Telemetry | None = None) -> MCPSe
         llm=_create_langfuse_evidence_adapter(),
     )
     analysis_service = RcaAnalysisService(collector, DefaultDeterministicRcaAnalyzer())
-    reasoner = _create_rca_reasoner(telemetry)
+    reasoner = _create_rca_reasoner(telemetry, session_factory)
     server: MCPServer
 
     async def listed_tools() -> list[Any]:
@@ -377,19 +393,30 @@ def _create_langfuse_evidence_adapter() -> LangfuseRcaEvidenceAdapter | None:
         return None
 
 
-def _create_rca_reasoner(telemetry: Telemetry | None) -> RcaReasoner | None:
+def _create_rca_reasoner(
+    telemetry: Telemetry | None,
+    session_factory: PostgreSqlSessionFactory,
+) -> RcaReasoner | None:
     """Compose the optional reasoner through the established routing/egress boundary."""
     try:
-        configuration = load_llm_configuration(DEFAULT_MODEL_CONFIGURATION_PATH)
+        configuration = load_model_catalog(DEFAULT_MODEL_CATALOG_PATH)
     except (OSError, ValueError):
         return None
     adapter = OpenAICompatibleLLMClient(configuration)
-    return LlmRcaReasoner(
-        router=DeterministicModelRouter(),
-        profiles=configuration.get_available_routing_profiles(
-            environment=os.environ,
-            local_only=local_only_mode_enabled(),
+    authorizer = ModelExecutionAuthorizer()
+    resolver = ModelResolutionService(
+        catalog=configuration,
+        assignments=PostgreSqlModelAssignmentRepository(
+            session_factory, DEMO_RUNTIME_SECURITY_CONTEXT
         ),
+        authorizer=authorizer,
+        consumer_requirements={RCA_REASONING_CONSUMER: RCA_REASONING_REQUIREMENTS},
+        observer=(
+            TelemetryModelDecisionObserver(telemetry) if telemetry is not None else None
+        ),
+    )
+    return LlmRcaReasoner(
+        model_resolver=resolver,
         timeout_seconds=float(os.getenv("RCA_REASONING_TIMEOUT_SECONDS", "90")),
         client_factory=lambda classification, focus: _reasoning_llm_client(
             adapter,
@@ -404,21 +431,28 @@ def _create_rca_reasoner(telemetry: Telemetry | None) -> RcaReasoner | None:
 def _reasoning_llm_client(
     adapter: OpenAICompatibleLLMClient,
     *,
-    configuration: LLMConfiguration,
+    configuration: ModelCatalogConfiguration,
     classification: DataClassification,
     focus: RcaFocus,
     telemetry: Telemetry | None,
 ):
-    checked = EgressCheckedLLMClient(adapter, configuration, classification)
+    checked = EgressCheckedLLMClient(
+        adapter,
+        configuration,
+        classification,
+        authorizer=ModelExecutionAuthorizer(),
+    )
     if telemetry is None:
         return checked
     return ObservedLLMClient(
         checked,
-        configuration=configuration,
+        catalog=configuration,
         data_classification=classification,
         telemetry=telemetry,
         operation_type="rca.reasoning",
         rca_focus=focus.value,
+        consumer_id=RCA_REASONING_CONSUMER,
+        required_capabilities=RCA_REASONING_REQUIREMENTS,
     )
 
 

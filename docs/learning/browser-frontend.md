@@ -27,7 +27,7 @@ Browser frontend
 ```
 
 The frontend has no Python imports and no dependency on LangGraph, LangChain, MCP,
-capabilities, repositories, model profiles, providers, Ollama, retrieval, or Docker.
+capabilities, repositories, model assignments, providers, Ollama, retrieval, or Docker.
 FastAPI likewise does not render templates, host frontend assets, or contain UI logic.
 This allows a later React, Vue, or other browser client to replace `frontend/` without
 changing the agent backend.
@@ -94,10 +94,21 @@ structured investigation summary, structured follow-up prompts, and normalized t
 It does not poll or create a new request per
 tool call.
 
-The browser cannot choose a model, provider, execution zone, data classification, MCP
-server, tool allowlist, or egress policy. The API continues to assign `CONFIDENTIAL`
-server-side, and ADR-009 controls model egress independently from MCP network traffic.
-The UI contains no secrets and must be treated as publicly visible client code.
+The browser cannot choose a runtime model, provider, execution zone, data classification,
+MCP server, tool allowlist, or egress policy. The Model Configuration dialog is a separate
+administrative configuration surface: it loads the catalog, supported consumers, and
+persisted assignments from the API. It displays catalog `display_name` values, while its
+mutation payload uses only stable `model_id` values. Agent and currently supported
+specialized consumers each show all four classifications. Security-ineligible models stay
+visible but disabled; capability mismatches are warnings and never cause a fallback.
+
+Saving creates an explicit persistent assignment only. The server remains authoritative and
+rejects assignments forbidden by egress policy. In particular, `agent / RESTRICTED` is
+unconfigured until an operator explicitly selects an allowed local catalog model. Missing
+catalog references remain visibly unconfigured rather than being replaced. The API
+continues to establish run classification server-side, and ADR-009 controls model egress
+independently from MCP network traffic. The UI contains no secrets and must be treated as
+publicly visible client code.
 
 The PDF button is enabled exactly when visible exportable conversation content exists.
 Persisted investigations continue to use the authorized server PDF route. When a request

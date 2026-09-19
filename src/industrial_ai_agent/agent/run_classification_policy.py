@@ -4,14 +4,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 
-from industrial_ai_agent.agent.llm import ModelProfile
-from industrial_ai_agent.agent.model_routing import (
-    CostPreference,
-    LLMCapability,
-    QualityClass,
-    TaskRequirements,
-    TaskRole,
-)
+from industrial_ai_agent.agent.model_selection import AGENT_CONSUMER, ModelConsumerId
 from industrial_ai_agent.domain.maintenance_ticket import is_maintenance_ticket_id
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 
@@ -125,15 +118,15 @@ class ResolvedRunPolicy:
     run_profile: AgentRunProfile
     data_classification: DataClassification
     mcp_clearance_ceiling: DataClassification
-    task_requirements: TaskRequirements
+    model_consumer_id: ModelConsumerId
     allowed_tool_names: frozenset[str]
     mcp_client_identity: str
 
     def __post_init__(self) -> None:
         if self.mcp_clearance_ceiling < self.data_classification:
             raise ValueError("RLS clearance cannot be lower than run classification")
-        if self.task_requirements.data_classification is not self.data_classification:
-            raise ValueError("Task requirements must match the resolved classification")
+        if self.model_consumer_id != AGENT_CONSUMER:
+            raise ValueError("Run policy must use the agent model consumer")
         if not self.allowed_tool_names:
             raise ValueError("Resolved run policy must authorize at least one tool")
         if not self.mcp_client_identity.strip():
@@ -161,7 +154,7 @@ class AgentRunClassificationPolicy:
                 run_profile=profile,
                 data_classification=classification,
                 mcp_clearance_ceiling=rls_clearance,
-                task_requirements=_requirements(classification),
+                model_consumer_id=AGENT_CONSUMER,
                 allowed_tool_names=PUBLIC_INFORMATION_TOOLS,
                 mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
@@ -170,7 +163,7 @@ class AgentRunClassificationPolicy:
                 run_profile=profile,
                 data_classification=classification,
                 mcp_clearance_ceiling=rls_clearance,
-                task_requirements=_requirements(classification),
+                model_consumer_id=AGENT_CONSUMER,
                 allowed_tool_names=INTERNAL_DIAGNOSTIC_TOOLS,
                 mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
@@ -179,7 +172,7 @@ class AgentRunClassificationPolicy:
                 run_profile=profile,
                 data_classification=classification,
                 mcp_clearance_ceiling=rls_clearance,
-                task_requirements=_requirements(classification),
+                model_consumer_id=AGENT_CONSUMER,
                 allowed_tool_names=CONFIDENTIAL_TROUBLESHOOTING_TOOLS,
                 mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
@@ -188,7 +181,7 @@ class AgentRunClassificationPolicy:
                 run_profile=profile,
                 data_classification=classification,
                 mcp_clearance_ceiling=rls_clearance,
-                task_requirements=_recovery_requirements(classification),
+                model_consumer_id=AGENT_CONSUMER,
                 allowed_tool_names=CONFIDENTIAL_RECOVERY_TOOLS,
                 mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
@@ -197,7 +190,7 @@ class AgentRunClassificationPolicy:
                 run_profile=profile,
                 data_classification=classification,
                 mcp_clearance_ceiling=rls_clearance,
-                task_requirements=_requirements(classification),
+                model_consumer_id=AGENT_CONSUMER,
                 allowed_tool_names=CONFIDENTIAL_TROUBLESHOOTING_TOOLS,
                 mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
@@ -206,7 +199,7 @@ class AgentRunClassificationPolicy:
                 run_profile=profile,
                 data_classification=classification,
                 mcp_clearance_ceiling=rls_clearance,
-                task_requirements=_information_requirements(classification),
+                model_consumer_id=AGENT_CONSUMER,
                 allowed_tool_names=RESTRICTED_INFORMATION_TOOLS,
                 mcp_client_identity=_mcp_identity_for(rls_clearance),
             )
@@ -222,44 +215,6 @@ class AgentRunClassificationPolicy:
         if resolved.data_classification is not data_classification:
             raise ValueError("Persisted run classification does not match its profile")
         return resolved
-
-
-def _requirements(classification: DataClassification) -> TaskRequirements:
-    return TaskRequirements(
-        task_role=TaskRole.TROUBLESHOOTING,
-        required_capabilities=frozenset(
-            {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-        ),
-        minimum_quality=QualityClass.HIGH,
-        cost_preference=CostPreference.PREFER_QUALITY,
-        data_classification=classification,
-    )
-
-
-def _information_requirements(classification: DataClassification) -> TaskRequirements:
-    """Route bounded read-only orientation through an eligible local fast profile."""
-    return TaskRequirements(
-        task_role=TaskRole.TROUBLESHOOTING,
-        required_capabilities=frozenset(
-            {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-        ),
-        minimum_quality=QualityClass.STANDARD,
-        cost_preference=CostPreference.MINIMIZE_COST,
-        data_classification=classification,
-    )
-
-
-def _recovery_requirements(classification: DataClassification) -> TaskRequirements:
-    return TaskRequirements(
-        task_role=TaskRole.TROUBLESHOOTING,
-        required_capabilities=frozenset(
-            {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-        ),
-        minimum_quality=QualityClass.HIGH,
-        cost_preference=CostPreference.PREFER_QUALITY,
-        data_classification=classification,
-        required_model_profile=ModelProfile("nvidia_quality"),
-    )
 
 
 def _profile_classification(profile: AgentRunProfile) -> DataClassification:

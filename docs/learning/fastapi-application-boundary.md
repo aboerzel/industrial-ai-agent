@@ -38,8 +38,9 @@ POST /api/v1/runs
     -> FastAPI validates CreateRunRequest
     -> UUID + PostgreSqlAgentRunStore record in agent_runtime
     -> TroubleshootingRunService
-    -> CONFIDENTIAL TaskRequirements
-    -> DeterministicModelRouter
+    -> trusted DataClassification + model consumer
+    -> persistent model assignment
+    -> capability validation + egress authorization
     -> LangGraphTroubleshootingAgent
     -> MCP Tool Provider
     -> Factory MCP + Knowledge MCP
@@ -62,6 +63,9 @@ The initial routes are:
 | `GET /health` | Process-local API liveness. |
 | `POST /api/v1/runs` | Start one confidential troubleshooting run. |
 | `GET /api/v1/runs/{run_id}` | Read a persistent lifecycle record. |
+| `GET /api/v1/models` | Read catalog metadata, including presentation names. |
+| `GET /api/v1/model-assignments` | Read current persistent assignments. |
+| `PUT /api/v1/model-assignments` | Assign a stable model ID after structural and egress-policy validation. |
 
 `CreateRunRequest` accepts exactly one required non-empty `message`. It deliberately
 does not accept model, provider, semantic profile, execution zone, or data
@@ -77,7 +81,7 @@ SDK values, provider SDK values, prompts, and raw tool-result payloads.
 `PostgreSqlAgentRunStore` keeps `running`, `waiting_for_approval`, `success`,
 `limit_reached`, or `failed` records in `agent_runtime.agent_runs`. It is a narrow
 SQLAlchemy 2.x adapter and not a generic repository platform. The row persists the
-run/thread UUID, effective classification, selected model profile, normalized tool-call
+run/thread UUID, effective classification, selected stable model ID, normalized tool-call
 summary, sanitized errors, and lifecycle timestamps. PostgreSQL RLS remains the database
 boundary; the ORM is mapping/query composition, not authorization enforcement.
 
@@ -101,7 +105,7 @@ FastAPI preserves deterministic inner policy decisions:
 
 * invalid request schemas use FastAPI/Pydantic `422`;
 * unknown runs return a sanitized `404`;
-* `NoEligibleModelError` returns `503`;
+* missing assignments and capability mismatches return normalized `503` failures;
 * `ModelEgressDeniedError` returns `403` and does not authorize a fallback;
 * unavailable MCP services return `503`;
 * unexpected failures return a generic `500`; when the failed run was already

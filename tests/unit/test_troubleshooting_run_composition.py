@@ -48,7 +48,7 @@ def test_public_run_connects_only_to_its_authorized_read_only_servers(
 
 def test_restricted_ollama_agent_disables_thinking_without_changing_profile() -> None:
     configuration = load_llm_configuration(
-        PROJECT_ROOT / "config" / "model_profiles.toml"
+        PROJECT_ROOT / "config" / "model_catalog.toml"
     )
     policy = AgentRunClassificationPolicy().resolve(
         AgentRunProfile.RESTRICTED_TROUBLESHOOTING
@@ -56,7 +56,7 @@ def test_restricted_ollama_agent_disables_thinking_without_changing_profile() ->
 
     effort = _restricted_ollama_reasoning_effort(
         configuration=configuration,
-        profile=ModelProfile("local_quality"),
+        model_id=ModelProfile("local_quality"),
         run_policy=policy,
     )
 
@@ -65,7 +65,7 @@ def test_restricted_ollama_agent_disables_thinking_without_changing_profile() ->
 
 def test_confidential_run_does_not_override_its_profile_reasoning_policy() -> None:
     configuration = load_llm_configuration(
-        PROJECT_ROOT / "config" / "model_profiles.toml"
+        PROJECT_ROOT / "config" / "model_catalog.toml"
     )
     policy = AgentRunClassificationPolicy().resolve(
         AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
@@ -73,7 +73,7 @@ def test_confidential_run_does_not_override_its_profile_reasoning_policy() -> No
 
     effort = _restricted_ollama_reasoning_effort(
         configuration=configuration,
-        profile=ModelProfile("local_quality"),
+        model_id=ModelProfile("local_quality"),
         run_policy=policy,
     )
 
@@ -196,7 +196,7 @@ def test_lower_classification_profiles_do_not_authorize_hardware_recovery_tools(
 
 def test_restricted_information_uses_a_bounded_local_generation_budget() -> None:
     configuration = load_llm_configuration(
-        PROJECT_ROOT / "config" / "model_profiles.toml"
+        PROJECT_ROOT / "config" / "model_catalog.toml"
     )
 
     assert configuration.get_profile("local_fast").max_output_tokens == 192

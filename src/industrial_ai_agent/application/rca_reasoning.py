@@ -20,18 +20,13 @@ from industrial_ai_agent.agent.llm import (
     LLMRequest,
     LLMResponseFormat,
     MessageRole,
-    ModelProfile,
+    ModelId,
 )
 from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
-from industrial_ai_agent.agent.model_routing import (
-    CostPreference,
-    DeterministicModelRouter,
-    LLMCapability,
-    ModelProfileMetadata,
-    NoEligibleModelError,
-    QualityClass,
-    TaskRequirements,
-    TaskRole,
+from industrial_ai_agent.agent.model_selection import (
+    RCA_REASONING_CONSUMER,
+    ModelResolutionError,
+    ModelResolutionService,
 )
 from industrial_ai_agent.application.rca import (
     BoundedText,
@@ -204,15 +199,13 @@ class LlmRcaReasoner:
     def __init__(
         self,
         *,
-        router: DeterministicModelRouter,
-        profiles: tuple[ModelProfileMetadata, ...],
+        model_resolver: ModelResolutionService,
         client_factory: Callable[[DataClassification, RcaFocus], LLMClient],
         timeout_seconds: float = 30,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("RCA reasoning timeout must be positive")
-        self._router = router
-        self._profiles = profiles
+        self._model_resolver = model_resolver
         self._client_factory = client_factory
         self._timeout_seconds = timeout_seconds
 
@@ -228,17 +221,21 @@ class LlmRcaReasoner:
                 RcaReasoningStatus.NOT_ALLOWED, report
             )
 
-        projection = project_safe_rca_reasoning(report, focus=focus)
-        requirements = reasoning_task_requirements(classification)
         try:
-            profile = self._router.route(requirements, self._profiles)
+            decision = self._model_resolver.resolve_model(
+                RCA_REASONING_CONSUMER, classification, run_id=report.run_id
+            )
+            if decision.model is None:
+                raise RuntimeError("Model resolution returned no model")
+            # Build protected model input only after capability and egress authorization.
+            projection = project_safe_rca_reasoning(report, focus=focus)
             response = _chat_with_timeout(
                 self._client_factory(classification, focus),
-                profile,
+                decision.model.model_id,
                 _reasoning_request(projection, report),
                 timeout_seconds=self._timeout_seconds,
             )
-        except (NoEligibleModelError, ModelEgressDeniedError):
+        except (ModelResolutionError, ModelEgressDeniedError):
             return RcaReasoningResult.unavailable(
                 RcaReasoningStatus.NOT_ALLOWED, report
             )
@@ -261,14 +258,14 @@ class LlmRcaReasoner:
 
 def _chat_with_timeout(
     client: LLMClient,
-    profile: ModelProfile,
+    model_id: ModelId,
     request: LLMRequest,
     *,
     timeout_seconds: float,
 ):
     """Bound optional provider waiting without delaying deterministic RCA output."""
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rca-reasoning")
-    future = executor.submit(client.chat, profile, request)
+    future = executor.submit(client.chat, model_id, request)
     try:
         return future.result(timeout=timeout_seconds)
     except FutureTimeoutError as error:
@@ -285,19 +282,6 @@ class _RcaReasoningProviderOutput(_RcaReasoningModel):
     assessment: RcaReasoningAssessment
     hypotheses: tuple[RcaReasoningHypothesis, ...] = Field(default=(), max_length=5)
     recommended_next_checks: tuple[BoundedText, ...] = Field(default=(), max_length=5)
-
-
-def reasoning_task_requirements(
-    classification: DataClassification,
-) -> TaskRequirements:
-    """Server-owned requirements for concise, text-only RCA explanation."""
-    return TaskRequirements(
-        task_role=TaskRole.GENERAL_REASONING,
-        required_capabilities=frozenset({LLMCapability.TEXT}),
-        minimum_quality=QualityClass.STANDARD,
-        cost_preference=CostPreference.MINIMIZE_COST,
-        data_classification=classification,
-    )
 
 
 def project_safe_rca_reasoning(

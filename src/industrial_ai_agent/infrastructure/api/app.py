@@ -6,17 +6,21 @@ from datetime import UTC, datetime
 from typing import NoReturn
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult, DocumentReference
-from industrial_ai_agent.agent.llm import LLMProviderError
+from industrial_ai_agent.agent.llm import LLMProviderError, ModelId
 from industrial_ai_agent.agent.model_egress import (
     DataClassificationBoundaryError,
     ModelEgressDeniedError,
 )
-from industrial_ai_agent.agent.model_routing import NoEligibleModelError
+from industrial_ai_agent.agent.model_selection import (
+    ModelAssignment,
+    ModelConsumerId,
+    ModelResolutionError,
+)
 from industrial_ai_agent.agent.response_language import (
     ResponseLanguage,
     detect_response_language,
@@ -41,7 +45,11 @@ from industrial_ai_agent.application.document_content import (
     AuthorizedDocumentContent,
     AuthorizedDocumentContentReader,
 )
-from industrial_ai_agent.domain.security import SecurityContext
+from industrial_ai_agent.application.model_configuration import (
+    ModelAssignmentPolicyError,
+    ModelConfigurationService,
+)
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.demo_security import (
     DemoSecurityContextResolver,
 )
@@ -60,6 +68,7 @@ from industrial_ai_agent.infrastructure.api.run_store import (
 from industrial_ai_agent.infrastructure.api.schemas import (
     ApiErrorResponse,
     ApprovalRequestResponse,
+    AssignModelRequest,
     CreateRunRequest,
     DataClassificationLabel,
     DemoUserClearance,
@@ -68,6 +77,9 @@ from industrial_ai_agent.infrastructure.api.schemas import (
     InvestigationResponse,
     InvestigationStepResponse,
     InvestigationTurnResponse,
+    ModelAssignmentResponse,
+    ModelCatalogResponse,
+    ModelConsumerResponse,
     PublicToolName,
     ResumeRunRequest,
     RunResponse,
@@ -86,7 +98,8 @@ _PERSISTED_RUN_ERROR_CODES = frozenset(
         "llm_rate_limit",
         "mcp_service_unavailable",
         "model_egress_denied",
-        "no_eligible_model",
+        "model_not_configured",
+        "model_capability_mismatch",
         "agent_execution_timeout",
         "recovery_incomplete",
         "recovery_blocked",
@@ -120,6 +133,7 @@ def create_app(
     allowed_origins: tuple[str, ...] = (),
     telemetry: Telemetry | None = None,
     document_content_reader: AuthorizedDocumentContentReader | None = None,
+    model_configuration_service: ModelConfigurationService | None = None,
     execution_timeout_seconds: float = 60.0,
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
@@ -139,6 +153,7 @@ def create_app(
     app.state.classification_policy = AgentRunClassificationPolicy()
     app.state.demo_security_context_resolver = DemoSecurityContextResolver()
     app.state.document_content_reader = document_content_reader
+    app.state.model_configuration_service = model_configuration_service
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
     if allowed_origins:
         # noinspection PyTypeChecker
@@ -146,7 +161,7 @@ def create_app(
             CORSMiddleware,
             allow_origins=list(allowed_origins),
             allow_credentials=False,
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "PUT"],
             allow_headers=["Content-Type"],
         )
 
@@ -157,6 +172,99 @@ def create_app(
     )
     async def health() -> HealthResponse:
         return HealthResponse()
+
+    @app.get(
+        f"{API_PREFIX}/models",
+        response_model=tuple[ModelCatalogResponse, ...],
+        summary="List configured model catalog entries",
+    )
+    async def list_models(request: Request) -> tuple[ModelCatalogResponse, ...]:
+        service = _model_configuration_service(request)
+        return tuple(
+            ModelCatalogResponse(
+                model_id=model.model_id.value,
+                display_name=model.display_name,
+                provider=model.provider,
+                provider_model=model.provider_model,
+                execution_zone=model.execution_zone,
+                max_data_classification=DataClassificationLabel[
+                    model.max_data_classification.name
+                ],
+                capabilities=model.capabilities,
+                quality_class=model.quality_class,
+                cost_class=model.cost_class,
+            )
+            for model in service.list_models()
+        )
+
+    @app.get(
+        f"{API_PREFIX}/model-assignments",
+        response_model=tuple[ModelAssignmentResponse, ...],
+        summary="List persistent model assignments",
+    )
+    async def list_model_assignments(
+        request: Request,
+    ) -> tuple[ModelAssignmentResponse, ...]:
+        return tuple(
+            _model_assignment_response(assignment)
+            for assignment in _model_configuration_service(request).list_assignments()
+        )
+
+    @app.get(
+        f"{API_PREFIX}/model-consumers",
+        response_model=tuple[ModelConsumerResponse, ...],
+        summary="List supported model consumers for configuration",
+    )
+    async def list_model_consumers(
+        request: Request,
+    ) -> tuple[ModelConsumerResponse, ...]:
+        return tuple(
+            ModelConsumerResponse(
+                consumer_id=consumer.consumer_id.value,
+                display_name=consumer.display_name,
+                required_capabilities=consumer.required_capabilities,
+            )
+            for consumer in _model_configuration_service(request).list_consumers()
+        )
+
+    @app.put(
+        f"{API_PREFIX}/model-assignments",
+        response_model=ModelAssignmentResponse,
+        responses={
+            status.HTTP_400_BAD_REQUEST: {"model": ApiErrorResponse},
+            status.HTTP_403_FORBIDDEN: {"model": ApiErrorResponse},
+        },
+        summary="Persist one model assignment by stable model ID",
+    )
+    async def assign_model(
+        payload: AssignModelRequest, request: Request
+    ) -> ModelAssignmentResponse:
+        try:
+            assignment = _model_configuration_service(request).assign(
+                consumer_id=ModelConsumerId(payload.consumer_id),
+                data_classification=DataClassification[
+                    payload.data_classification.value
+                ],
+                model_id=ModelId(payload.model_id),
+                updated_by="api",
+            )
+        except ModelAssignmentPolicyError as error:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": error.code,
+                    "message": "The model is not authorized for this classification.",
+                },
+            ) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "invalid_model_assignment",
+                    "message": "The model assignment is invalid.",
+                },
+            ) from error
+        return _model_assignment_response(assignment)
 
     runs = app
 
@@ -389,7 +497,7 @@ def create_app(
             execution = await asyncio.wait_for(
                 service.resume(
                     run_id=run_id,
-                    model_profile=claimed.model_profile,
+                    model_id=claimed.model_profile,
                     data_classification=claimed.data_classification,
                     run_profile=claimed.run_profile,
                     decision=payload.decision.value,
@@ -405,6 +513,17 @@ def create_app(
                 message=user_facing_error_message(
                     "agent_execution_timeout", claimed.response_language
                 ),
+            )
+        except ModelResolutionError as error:
+            await store.fail(run_id, error.code)
+            _raise_api_run_error(
+                status_code=(
+                    status.HTTP_403_FORBIDDEN
+                    if error.code == "model_egress_denied"
+                    else status.HTTP_503_SERVICE_UNAVAILABLE
+                ),
+                code=error.code,
+                message="The configured model cannot execute this run.",
             )
         except (ModelEgressDeniedError, DataClassificationBoundaryError):
             await store.fail(run_id, "model_egress_denied")
@@ -477,6 +596,37 @@ def _run_service(request: Request) -> AgentRunService:
 
 def _run_store(request: Request) -> AgentRunStore:
     return request.app.state.run_store
+
+
+def _model_configuration_service(request: Request) -> ModelConfigurationService:
+    service = request.app.state.model_configuration_service
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "model_configuration_unavailable",
+                "message": "Model configuration is unavailable.",
+            },
+        )
+    return service
+
+
+def _model_assignment_response(
+    assignment: ModelAssignment,
+) -> ModelAssignmentResponse:
+    return ModelAssignmentResponse(
+        consumer_id=assignment.consumer_id.value,
+        data_classification=DataClassificationLabel[
+            assignment.data_classification.name
+        ],
+        model_id=assignment.model_id.value,
+        updated_at=(
+            assignment.updated_at.isoformat()
+            if assignment.updated_at is not None
+            else None
+        ),
+        updated_by=assignment.updated_by,
+    )
 
 
 def _telemetry(request: Request) -> Telemetry | None:
@@ -636,8 +786,8 @@ async def _start_run(
             )
     except TimeoutError:
         return _to_run_response(await store.fail(run_id, "agent_execution_timeout"))
-    except NoEligibleModelError:
-        return _to_run_response(await store.fail(run_id, "no_eligible_model"))
+    except ModelResolutionError as error:
+        return _to_run_response(await store.fail(run_id, error.code))
     except (ModelEgressDeniedError, DataClassificationBoundaryError):
         await store.fail(run_id, "model_egress_denied")
         _raise_api_run_error(
@@ -902,7 +1052,7 @@ async def _persist_execution(
         "summary": approval.summary,
         "arguments": approval.arguments,
         "classification": record.data_classification.name,
-        "model_profile": record.model_profile,
+        "model_id": record.model_profile,
         "status": RunStatus.WAITING_FOR_APPROVAL.value,
         "created_at": datetime.now(UTC).isoformat(),
     }

@@ -9,13 +9,15 @@ from industrial_ai_agent.agent.agent_run import (
     AgentRunStatus,
     InvalidToolArgumentsError,
 )
-from industrial_ai_agent.agent.llm import ModelProfile
+from industrial_ai_agent.agent.llm import ModelId
 from industrial_ai_agent.agent.model_egress import DataClassification, ExecutionZone
-from industrial_ai_agent.agent.model_routing import (
+from industrial_ai_agent.agent.model_selection import (
+    AGENT_REQUIREMENTS,
     CostClass,
-    DeterministicModelRouter,
-    LLMCapability,
-    ModelProfileMetadata,
+    ModelCapability,
+    ModelDecision,
+    ModelDecisionOutcome,
+    ModelDefinition,
     QualityClass,
 )
 from industrial_ai_agent.agent.response_language import ResponseLanguage
@@ -44,26 +46,26 @@ class FakeAgent:
 
 class CapturingFactory(RoutedTroubleshootingAgentFactory):
     def __init__(self) -> None:
-        self.profile: ModelProfile | None = None
+        self.model_id: ModelId | None = None
         self.classification: DataClassification | None = None
         self.run_policy: ResolvedRunPolicy | None = None
 
     def open_agent(
         self,
         *,
-        profile: ModelProfile,
+        model_id: ModelId,
         run_policy: ResolvedRunPolicy,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]:
-        return self._open_agent(profile=profile, run_policy=run_policy)
+        return self._open_agent(model_id=model_id, run_policy=run_policy)
 
     @contextmanager
     def _open_agent(
         self,
         *,
-        profile: ModelProfile,
+        model_id: ModelId,
         run_policy: ResolvedRunPolicy,
     ) -> Iterator[McpBackedTroubleshootingAgent]:
-        self.profile = profile
+        self.model_id = model_id
         self.classification = run_policy.data_classification
         self.run_policy = run_policy
         yield FakeAgent()
@@ -96,58 +98,70 @@ class FailingFactory(CapturingFactory):
     def _open_agent(
         self,
         *,
-        profile: ModelProfile,
+        model_id: ModelId,
         run_policy: ResolvedRunPolicy,
     ) -> Iterator[McpBackedTroubleshootingAgent]:
-        self.profile = profile
+        self.model_id = model_id
         self.classification = run_policy.data_classification
         self.run_policy = run_policy
         yield FailingAgent()
 
 
+class FixedResolver:
+    def __init__(self, model: ModelDefinition) -> None:
+        self.model = model
+
+    def resolve_model(self, consumer_id, data_classification, *, run_id=None):
+        return ModelDecision(
+            consumer_id=consumer_id,
+            effective_data_classification=data_classification,
+            required_capabilities=AGENT_REQUIREMENTS,
+            outcome=ModelDecisionOutcome.EXECUTION_ALLOWED,
+            model=self.model,
+            capability_allowed=True,
+            egress_allowed=True,
+            run_id=run_id,
+        )
+
+
+def _selected_model() -> ModelDefinition:
+    return ModelDefinition(
+        model_id=ModelId("local_quality"),
+        display_name="Local Quality",
+        provider="ollama",
+        provider_model="qwen3.5:9b",
+        execution_zone=ExecutionZone.LOCAL,
+        max_data_classification=DataClassification.RESTRICTED,
+        capabilities=frozenset(
+            {
+                ModelCapability.TEXT,
+                ModelCapability.TOOL_CALLING,
+                ModelCapability.STRUCTURED_OUTPUT,
+            }
+        ),
+        quality_class=QualityClass.HIGH,
+        cost_class=CostClass.LOW,
+    )
+
+
 def test_troubleshooting_run_service_routes_confidential_requests_server_side() -> None:
-    selected_profile = ModelProfile("local_quality")
+    selected_model = _selected_model()
     factory = CapturingFactory()
     service = TroubleshootingRunService(
-        router=DeterministicModelRouter(),
-        profiles=(
-            ModelProfileMetadata(
-                profile=selected_profile,
-                capabilities=frozenset(
-                    {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-                ),
-                quality_class=QualityClass.HIGH,
-                cost_class=CostClass.HIGH,
-                execution_zone=ExecutionZone.LOCAL,
-                max_data_classification=DataClassification.RESTRICTED,
-            ),
-        ),
+        model_resolver=FixedResolver(selected_model),
         agent_factory=factory,
     )
 
     result = asyncio.run(service.run("Investigate P4711."))
 
     assert result.status is AgentRunStatus.SUCCESS
-    assert factory.profile == selected_profile
+    assert factory.model_id == selected_model.model_id
     assert factory.classification is DataClassification.CONFIDENTIAL
 
 
 def test_single_cause_exception_group_preserves_invalid_tool_arguments_error() -> None:
-    selected_profile = ModelProfile("local_quality")
     service = TroubleshootingRunService(
-        router=DeterministicModelRouter(),
-        profiles=(
-            ModelProfileMetadata(
-                profile=selected_profile,
-                capabilities=frozenset(
-                    {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-                ),
-                quality_class=QualityClass.HIGH,
-                cost_class=CostClass.HIGH,
-                execution_zone=ExecutionZone.LOCAL,
-                max_data_classification=DataClassification.RESTRICTED,
-            ),
-        ),
+        model_resolver=FixedResolver(_selected_model()),
         agent_factory=FailingFactory(),
     )
 

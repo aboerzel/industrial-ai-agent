@@ -4,7 +4,7 @@
 
 Industrial AI Agent is a production-oriented demonstrator and reference architecture for investigating product failures, machine status, and technical documentation in a controlled industrial environment. It demonstrates how generative AI can support engineering and maintenance without becoming an uncontrolled path to production data or operational actions.
 
-This is not a chatbot demo. The model is a replaceable component inside deterministic boundaries for access control, data classification, model routing, tool use, human approval, testing, and operational traceability. The repository uses only synthetic factory data.
+This is not a chatbot demo. The model is a replaceable component inside deterministic boundaries for access control, data classification, model selection, tool use, human approval, testing, and operational traceability. The repository uses only synthetic factory data.
 
 ![Industrial AI Agent browser demo showing a classified troubleshooting investigation](docs/assets/Troubleshooting-1.png)
 
@@ -16,7 +16,7 @@ This is not a chatbot demo. The model is a replaceable component inside determin
 |---|---|
 | **Reliability** | Deterministic code owns validation, authorization, tool limits, and protected actions; versioned evaluations test defined model behavior. |
 | **Data and IP protection** | Data is classified as `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, or `RESTRICTED`; model egress is checked before every provider call. |
-| **Cost and efficiency** | Explicit task requirements select eligible model profiles by capability, quality, protection level, and cost preference. The router is deterministic, not self-learning. |
+| **Cost and efficiency** | A pure catalog describes models while persistent assignments select exactly one stable model ID per consumer and classification. There is no automatic fallback. |
 | **Access control** | Server-derived identity and permissions, MCP authorization, and PostgreSQL Row-Level Security (RLS) prevent the AI path from bypassing source-data access rules. |
 | **Operability and traceability** | Metadata-only telemetry, dashboards, and bounded root-cause analysis make runs, failures, and model/tool activity inspectable without exposing sensitive content. |
 
@@ -24,7 +24,7 @@ For the full industrial-value and scope statement, see [Capabilities and Industr
 
 ## Highlights
 
-- **Classification-aware model routing:** Semantic model profiles are selected deterministically from task requirements; `RESTRICTED` data is eligible only for approved local execution.
+- **Classification-aware model selection:** Persistent assignments are resolved by consumer and trusted classification, then checked for required capabilities and egress authorization; `RESTRICTED` data remains local-only.
 - **Final egress enforcement:** An independent, deny-by-default check runs immediately before every model-provider call; model selection alone cannot authorize data transfer.
 - **Bounded industrial tools:** Factory, Knowledge, Hardware, Runtime, Observability, and RCA capabilities are exposed through six authenticated MCP (Model Context Protocol) services with strict schemas and bounded operations.
 - **MHS-ready physical integration:** The implemented S04 reference-calibration demonstrator uses an internal `PhysicalDevicePort`, a simulated position-encoder adapter, Hardware MCP, and closed-loop verification. A future `MHSDeviceAdapter` remains replaceable below that port; MHS conformance is not claimed.
@@ -199,7 +199,7 @@ Example request:
 
 > Investigate why product P4711 failed at station S04. Use the available documentation if needed.
 
-This synthetic `CONFIDENTIAL` scenario demonstrates server-side access decisions, Factory and Knowledge MCP tools, constrained tool selection, source-aware documentation retrieval, traceable execution, and final model-egress enforcement. A public model can receive `CONFIDENTIAL` data only when both the configured model profile and the deterministic policy permit it; the standard troubleshooting route is configured independently. Raw database or observability backends are never exposed as unrestricted AI tools.
+This synthetic `CONFIDENTIAL` scenario demonstrates server-side access decisions, Factory and Knowledge MCP tools, constrained tool selection, source-aware documentation retrieval, traceable execution, and final model-egress enforcement. A public model can receive `CONFIDENTIAL` data only when its persistent assignment, per-model security limit, and deterministic egress policy all permit it. Raw database or observability backends are never exposed as unrestricted AI tools.
 
 For a `RESTRICTED` example, investigate `P9001` at `S07`: the classification policy permits only approved local models. More reproducible acceptance scenarios are in [Use Cases and Scenarios](docs/demo/use-cases-and-scenarios.md).
 
@@ -210,17 +210,17 @@ Agent behavior should be inspectable rather than opaque. OpenTelemetry is the co
 The local Grafana instance provisions four focused dashboards:
 
 - **Industrial AI Agent - System Overview:** scrape availability, run outcomes, latency, bounded activity, and metadata-only failure events.
-- **Industrial AI Agent - LLM Usage Analytics:** provider-reported input, output, and total-token counters, admitted tool decisions, and token attribution by semantic model profile.
-- **Industrial AI Agent - Usage Analytics:** shows bounded usage trends by classification, model profile, MCP tool, service, and retrieval strategy.
+- **Industrial AI Agent - LLM Usage Analytics:** provider-reported input, output, and total-token counters, admitted tool decisions, and bounded model attribution.
+- **Industrial AI Agent - Usage Analytics:** shows bounded usage trends by classification, model, MCP tool, service, and retrieval strategy.
 - **Industrial AI Agent - Failure Analytics:** separates failed runs from recorded LLM, MCP, and retrieval failure boundaries to avoid double-counting.
 
-Token usage is captured at the LLM/model boundary. Tool-attributed tokens are the tokens from the LLM response that selected the admitted tool; because the sequential loop admits one tool per decision, that response usage is attributed once. Tool execution itself consumes no LLM tokens. Direct answers and later finalization or other non-tool calls remain only in model-level totals and are not retrospectively assigned to a prior tool. Prometheus uses bounded labels such as `model_profile`, `mcp_tool`, `data_classification`, `execution_zone`, and `operation_status`, never arbitrary IDs, user text, prompts, documents, or tool arguments. Prometheus records token counters but not pricing or cost estimates; Langfuse retains allowed detailed model metadata without becoming a Grafana datasource.
+Token usage is captured at the LLM/model boundary. Tool-attributed tokens are the tokens from the LLM response that selected the admitted tool; because the sequential loop admits one tool per decision, that response usage is attributed once. Tool execution itself consumes no LLM tokens. Direct answers and later finalization or other non-tool calls remain only in model-level totals and are not retrospectively assigned to a prior tool. Prometheus uses bounded labels such as stable `model_id`, `mcp_tool`, `data_classification`, `execution_zone`, and `operation_status`, never arbitrary run IDs, user text, prompts, documents, or tool arguments. Prometheus records token counters but not pricing or cost estimates; Langfuse retains allowed detailed model metadata without becoming a Grafana datasource. Phase 3 will map `model_id` to the catalog `display_name` for presentation without using that mutable name as identity.
 
 Observability does not prove answer correctness. Its role is to make execution, failures, and model/tool behavior measurable and reviewable. See [Observability](docs/architecture/observability.md) for data allowlists, dashboards, retention bounds, and investigation workflow.
 
 ![Industrial AI Agent Usage Analytics dashboard](docs/assets/Usage-Analytics.png)
 
-*Usage Analytics makes agent runs, data-classification distribution, model-profile activity, MCP-tool use, and retrieval activity inspectable. The current dashboard set also includes LLM Usage Analytics for Prometheus token totals and tool-attributed tokens.*
+*Usage Analytics makes agent runs, data-classification distribution, model activity, MCP-tool use, and retrieval activity inspectable. The current dashboard set also includes LLM Usage Analytics for Prometheus token totals and tool-attributed tokens.*
 
 ![Industrial AI Agent LLM Usage Analytics dashboard](docs/assets/LLM-Usage-Analytics.png)
 
@@ -278,16 +278,19 @@ Windows NVIDIA driver before tuning Agent timeouts or model routing.
 
 ### Full Demo
 
-Set a valid `NVIDIA_API_KEY` in `.env` and leave `LOCAL_ONLY_MODE=false`. This permits
-the configured `nvidia_quality` profile for `PUBLIC`, `INTERNAL`, and `CONFIDENTIAL`
-runs; `RESTRICTED` runs remain local by deterministic egress policy. The configured
-Groq and Mistral profiles are explicit benchmark profiles and are not automatically routed.
+Set a valid `NVIDIA_API_KEY` in `.env` and apply the database migrations. The initial
+assignments select `nvidia_quality` for the `agent` consumer at `PUBLIC`, `INTERNAL`, and
+`CONFIDENTIAL`. `RESTRICTED` remains deliberately unassigned because the previous
+information and troubleshooting paths selected different local models. Configure it
+explicitly through `PUT /api/v1/model-assignments`; egress policy permits only a local
+model for that classification.
 
 ### Local-only Demo
 
-Set `LOCAL_ONLY_MODE=true` and leave `NVIDIA_API_KEY` unset. The composition root excludes
-all public-cloud model profiles before routing, so the local profiles handle every
-classification. An invalid or placeholder NVIDIA key is not a Local-only configuration.
+Leave provider API keys unset and explicitly assign a local catalog model to each required
+`agent` classification through `PUT /api/v1/model-assignments`. Provider availability no
+longer changes selection and no automatic fallback exists. A missing assignment fails
+closed with `model_not_configured`.
 
 ```powershell
 Copy-Item .env.example .env

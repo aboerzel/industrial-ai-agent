@@ -109,8 +109,7 @@ def test_s04_position_reference_recovery_uses_the_dedicated_recovery_scope() -> 
 
     assert profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
     assert policy.data_classification is DataClassification.CONFIDENTIAL
-    assert policy.task_requirements.required_model_profile is not None
-    assert policy.task_requirements.required_model_profile.name == "nvidia_quality"
+    assert policy.model_consumer_id.value == "agent"
     assert policy.allowed_tool_names == CONFIDENTIAL_RECOVERY_TOOLS
     assert policy.allowed_tool_names == frozenset(
         {
@@ -194,7 +193,9 @@ def test_known_internal_discovery_request_stays_internal() -> None:
     )
 
 
-def test_restricted_station_status_uses_local_information_requirements() -> None:
+def test_restricted_station_status_uses_agent_consumer_without_selecting_a_model() -> (
+    None
+):
     context = SecurityContext(
         subject_id="restricted-station-status",
         roles=("demo-engineer",),
@@ -212,11 +213,10 @@ def test_restricted_station_status_uses_local_information_requirements() -> None
     assert policy.mcp_clearance_ceiling is DataClassification.RESTRICTED
     assert policy.allowed_tool_names == RESTRICTED_INFORMATION_TOOLS
     assert "search_documentation" not in policy.allowed_tool_names
-    assert policy.task_requirements.minimum_quality.name == "STANDARD"
-    assert policy.task_requirements.cost_preference.name == "MINIMIZE_COST"
+    assert policy.model_consumer_id.value == "agent"
 
 
-def test_restricted_cross_source_product_request_keeps_quality_requirements() -> None:
+def test_restricted_cross_source_product_request_uses_same_agent_consumer() -> None:
     context = SecurityContext(
         subject_id="restricted-cross-source",
         roles=("demo-engineer",),
@@ -231,7 +231,7 @@ def test_restricted_cross_source_product_request_keeps_quality_requirements() ->
     policy = AgentRunClassificationPolicy().resolve(profile, security_context=context)
 
     assert profile is AgentRunProfile.RESTRICTED_TROUBLESHOOTING
-    assert policy.task_requirements.minimum_quality.name == "HIGH"
+    assert policy.model_consumer_id.value == "agent"
 
 
 @pytest.mark.parametrize(

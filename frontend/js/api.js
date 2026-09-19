@@ -10,6 +10,29 @@ export class ApiClientError extends Error {
   }
 }
 
+export async function getModelCatalog() {
+  return request("/api/v1/models", {}, isModelCatalog);
+}
+
+export async function getModelConsumers() {
+  return request("/api/v1/model-consumers", {}, isModelConsumers);
+}
+
+export async function getModelAssignments() {
+  return request("/api/v1/model-assignments", {}, isModelAssignments);
+}
+
+export async function saveModelAssignment(consumerId, dataClassification, modelId) {
+  return request("/api/v1/model-assignments", {
+    method: "PUT",
+    body: JSON.stringify({
+      consumer_id: consumerId,
+      data_classification: dataClassification,
+      model_id: modelId,
+    }),
+  }, isModelAssignment);
+}
+
 export async function createRun(
   message,
   userClearance,
@@ -177,6 +200,38 @@ function isRunResponse(value) {
   );
 }
 
+function isModelCatalog(value) {
+  return Array.isArray(value) && value.every((model) =>
+    isRecord(model) && hasOnlyKeys(model, ["model_id", "display_name", "provider", "provider_model", "execution_zone", "max_data_classification", "capabilities", "quality_class", "cost_class"]) &&
+    isBoundedString(model.model_id, 80, true) && isBoundedString(model.display_name, 200, true) &&
+    ["LOCAL", "PUBLIC_CLOUD"].includes(model.execution_zone) &&
+    isClassification(model.max_data_classification) && Array.isArray(model.capabilities) &&
+    model.capabilities.every((capability) => isBoundedString(capability, 80, true))
+  );
+}
+
+function isModelConsumers(value) {
+  return Array.isArray(value) && value.every((consumer) =>
+    isRecord(consumer) && hasOnlyKeys(consumer, ["consumer_id", "display_name", "required_capabilities"]) &&
+    isBoundedString(consumer.consumer_id, 100, true) && isBoundedString(consumer.display_name, 200, true) &&
+    Array.isArray(consumer.required_capabilities)
+  );
+}
+
+function isModelAssignments(value) {
+  return Array.isArray(value) && value.every(isModelAssignment);
+}
+
+function isModelAssignment(value) {
+  return isRecord(value) && hasOnlyKeys(value, ["consumer_id", "data_classification", "model_id", "updated_at", "updated_by"]) &&
+    isBoundedString(value.consumer_id, 100, true) && isClassification(value.data_classification) &&
+    isBoundedString(value.model_id, 80, true);
+}
+
+function isClassification(value) {
+  return ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value);
+}
+
 function isInvestigationResponse(value) {
   return (
     isRecord(value) &&
@@ -278,7 +333,7 @@ function isApprovalRequest(value) {
       "summary",
       "arguments",
       "classification",
-      "model_profile",
+      "model_id",
       "status",
       "created_at",
     ]) &&
@@ -286,7 +341,7 @@ function isApprovalRequest(value) {
     isBoundedString(value.summary, 500, true) &&
     isRecord(value.arguments) &&
     isBoundedString(value.classification, 32, true) &&
-    isBoundedString(value.model_profile, 128, true) &&
+    isBoundedString(value.model_id, 128, true) &&
     ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
     typeof value.created_at === "string"
   );

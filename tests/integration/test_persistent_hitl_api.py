@@ -26,14 +26,20 @@ from industrial_ai_agent.agent.llm import (
     LLMRequest,
     LLMResponse,
     LLMToolCall,
-    ModelProfile,
+    ModelId,
 )
-from industrial_ai_agent.agent.model_egress import DataClassification, ExecutionZone
-from industrial_ai_agent.agent.model_routing import (
+from industrial_ai_agent.agent.model_egress import (
+    DataClassification,
+    ExecutionZone,
+    ModelExecutionAuthorizer,
+)
+from industrial_ai_agent.agent.model_selection import (
+    AGENT_CONSUMER,
+    AGENT_REQUIREMENTS,
     CostClass,
-    DeterministicModelRouter,
-    LLMCapability,
-    ModelProfileMetadata,
+    ModelAssignment,
+    ModelDefinition,
+    ModelResolutionService,
     QualityClass,
 )
 from industrial_ai_agent.agent.troubleshooting_run_service import (
@@ -64,7 +70,7 @@ from industrial_ai_agent.infrastructure.persistence.postgres import (
 )
 
 DATABASE_URL = os.getenv("FACTORY_DATABASE_URL")
-PROFILE = ModelProfile("local_quality")
+MODEL_ID = ModelId("local_quality")
 pytestmark = pytest.mark.skipif(
     not DATABASE_URL,
     reason="requires FACTORY_DATABASE_URL for the local PostgreSQL integration service",
@@ -101,8 +107,8 @@ class FakeLLMClient:
     responses: list[LLMResponse]
     requests: list[LLMRequest]
 
-    def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
-        assert profile == PROFILE
+    def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
+        assert model_id == MODEL_ID
         self.requests.append(request)
         return self.responses.pop(0)
 
@@ -141,7 +147,7 @@ class SequentialAgentFactory(RoutedTroubleshootingAgentFactory):
     def open_agent(
         self,
         *,
-        profile: ModelProfile,
+        model_id: ModelId,
         run_policy,
         checkpointer: object | None = None,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]:
@@ -156,18 +162,18 @@ class SequentialAgentFactory(RoutedTroubleshootingAgentFactory):
             responses = _start_responses(request_id)
         client = FakeLLMClient(responses, [])
         self.clients.append(client)
-        return self._open(profile, client, checkpointer)
+        return self._open(model_id, client, checkpointer)
 
     @contextmanager
     def _open(
         self,
-        profile: ModelProfile,
+        model_id: ModelId,
         client: FakeLLMClient,
         checkpointer: object | None,
     ) -> Iterator[McpBackedTroubleshootingAgent]:
         assert checkpointer is not None
         yield LangGraphTroubleshootingAgent(
-            LLMClientChatModel(client, profile),
+            LLMClientChatModel(client, model_id),
             mcp_tool_provider=self._provider,
             checkpointer=checkpointer,
             run_classification=DataClassification.CONFIDENTIAL,
@@ -177,22 +183,46 @@ class SequentialAgentFactory(RoutedTroubleshootingAgentFactory):
 def _service(factory: SequentialAgentFactory) -> TroubleshootingRunService:
     assert DATABASE_URL is not None
     return TroubleshootingRunService(
-        router=DeterministicModelRouter(),
-        profiles=(
-            ModelProfileMetadata(
-                profile=PROFILE,
-                capabilities=frozenset(
-                    {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-                ),
-                quality_class=QualityClass.HIGH,
-                cost_class=CostClass.LOW,
-                execution_zone=ExecutionZone.LOCAL,
-                max_data_classification=DataClassification.RESTRICTED,
-            ),
+        model_resolver=ModelResolutionService(
+            catalog=_Catalog(),
+            assignments=_Assignments(),
+            authorizer=ModelExecutionAuthorizer(),
+            consumer_requirements={AGENT_CONSUMER: AGENT_REQUIREMENTS},
         ),
         agent_factory=factory,
         checkpointer_factory=PostgreSqlCheckpointerFactory(DATABASE_URL),
     )
+
+
+class _Catalog:
+    def get_model(self, model_id: str) -> ModelDefinition:
+        if model_id != MODEL_ID.value:
+            raise ValueError("Unknown model ID")
+        return ModelDefinition(
+            model_id=MODEL_ID,
+            display_name="Local Quality",
+            provider="test",
+            provider_model="test/local-quality",
+            execution_zone=ExecutionZone.LOCAL,
+            max_data_classification=DataClassification.RESTRICTED,
+            capabilities=AGENT_REQUIREMENTS,
+            quality_class=QualityClass.HIGH,
+            cost_class=CostClass.LOW,
+        )
+
+    def list_models(self) -> tuple[ModelDefinition, ...]:
+        return (self.get_model(MODEL_ID.value),)
+
+
+class _Assignments:
+    def get(self, consumer_id, data_classification):
+        return ModelAssignment(consumer_id, data_classification, MODEL_ID)
+
+    def list(self):
+        return ()
+
+    def upsert(self, assignment):
+        return assignment
 
 
 def _application(
@@ -241,7 +271,7 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
     assert waiting["status"] == "waiting_for_approval"
     assert waiting["approval_request"]["action"] == CREATE_MAINTENANCE_TICKET_TOOL_NAME
     assert waiting["approval_request"]["classification"] == "CONFIDENTIAL"
-    assert waiting["approval_request"]["model_profile"] == "local_quality"
+    assert waiting["approval_request"]["model_id"] == "local_quality"
     run_id = UUID(waiting["run_id"])
     request_id = factory.ticket_request_ids[0]
     assert _ticket_count(request_id) == 0
@@ -370,7 +400,7 @@ def test_fastapi_resume_contract_rejects_unknown_invalid_and_client_context() ->
         )
         manipulated = client.post(
             f"/api/v1/runs/{uuid4()}/resume",
-            json={"decision": "approve", "model_profile": "public_fast"},
+            json={"decision": "approve", "model_id": "public_fast"},
         )
     finally:
         client.close()

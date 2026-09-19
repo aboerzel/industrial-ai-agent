@@ -66,23 +66,28 @@ def create_configuration(
 ) -> LLMConfiguration:
     return LLMConfiguration.model_validate(
         {
-            "profiles": {
-                "local_quality": {
+            "models": [
+                {
+                    "id": "local_quality",
+                    "display_name": "Local Quality",
                     "provider": provider,
-                    "model": "qwen3.5:9b",
+                    "provider_model": "qwen3.5:9b",
                     "base_url": "http://localhost:11434/v1",
                     "temperature": 0,
                     "authentication": "none",
                     "execution_zone": "LOCAL",
                     "max_data_classification": "RESTRICTED",
-                    "capabilities": ["TEXT", "TOOL_CALLING"],
+                    "capabilities": [
+                        "text",
+                        "tool_calling",
+                        *(["structured_output"] if supports_structured_output else []),
+                    ],
                     "quality_class": "HIGH",
                     "cost_class": "LOW",
-                    "supports_structured_output": supports_structured_output,
                     "supports_reasoning_effort": supports_reasoning_effort,
                     "max_output_tokens": max_output_tokens,
                 }
-            }
+            ]
         }
     )
 
@@ -289,21 +294,23 @@ def test_rejects_reasoning_effort_for_unsupported_profile() -> None:
 def create_authenticated_configuration() -> LLMConfiguration:
     return LLMConfiguration.model_validate(
         {
-            "profiles": {
-                "local_quality": {
+            "models": [
+                {
+                    "id": "local_quality",
+                    "display_name": "Cloud Model",
                     "provider": "cloud-provider",
-                    "model": "cloud-model",
+                    "provider_model": "cloud-model",
                     "base_url": "https://llm.example.com/v1",
                     "temperature": 0,
                     "authentication": "api_key",
                     "api_key_env": "CLOUD_LLM_API_KEY",
                     "execution_zone": "PUBLIC_CLOUD",
                     "max_data_classification": "CONFIDENTIAL",
-                    "capabilities": ["TEXT"],
+                    "capabilities": ["text"],
                     "quality_class": "HIGH",
                     "cost_class": "LOW",
                 }
-            }
+            ]
         }
     )
 
@@ -460,7 +467,7 @@ def test_external_profiles_reuse_openai_compatible_tool_and_usage_contract(
         f"{api_key_env.removesuffix('_API_KEY')}_BASE_URL": base_url_override,
     }
     client = OpenAICompatibleLLMClient(
-        load_llm_configuration(PROJECT_ROOT / "config" / "model_profiles.toml"),
+        load_llm_configuration(PROJECT_ROOT / "config" / "model_catalog.toml"),
         environment=environment,
         client_factory=lambda **kwargs: client_arguments.update(kwargs) or fake_client,
     )
@@ -511,7 +518,7 @@ def test_nvidia_profile_uses_the_existing_structured_output_contract() -> None:
     )
     fake_client = FakeOpenAIClient(completion)
     client = OpenAICompatibleLLMClient(
-        load_llm_configuration(PROJECT_ROOT / "config" / "model_profiles.toml"),
+        load_llm_configuration(PROJECT_ROOT / "config" / "model_catalog.toml"),
         environment={"NVIDIA_API_KEY": "nvidia-test-key"},
         client_factory=lambda **_: fake_client,
     )
@@ -616,7 +623,7 @@ def test_requires_api_key_from_configured_environment_variable() -> None:
 
 def test_explicit_groq_benchmark_rejects_missing_api_key_without_network_call() -> None:
     configuration = load_llm_configuration(
-        PROJECT_ROOT / "config" / "model_profiles.toml"
+        PROJECT_ROOT / "config" / "model_catalog.toml"
     )
     client = OpenAICompatibleLLMClient(
         configuration,

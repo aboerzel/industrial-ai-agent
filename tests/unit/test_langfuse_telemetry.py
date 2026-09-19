@@ -300,7 +300,7 @@ def test_observed_llm_client_records_provider_usage_as_token_metrics() -> None:
     )
 
     expected_labels = {
-        "model.profile": "local_quality",
+        "model.id": "local_quality",
         "data.classification": "RESTRICTED",
         "execution.zone": "LOCAL",
         "operation.status": "success",
@@ -343,7 +343,7 @@ def test_tool_decision_usage_is_attributed_once_to_its_bound_tool() -> None:
     client.chat(ModelProfile("local_quality"), _tool_request())
 
     expected_labels = {
-        "model.profile": "local_quality",
+        "model.id": "local_quality",
         "data.classification": "CONFIDENTIAL",
         "execution.zone": "LOCAL",
         "operation.status": "success",
@@ -430,7 +430,7 @@ def test_multiple_tool_calls_attribute_usage_once_to_first_admitted_tool() -> No
     )
 
     labels = {
-        "model.profile": "local_quality",
+        "model.id": "local_quality",
         "data.classification": "CONFIDENTIAL",
         "execution.zone": "LOCAL",
         "operation.status": "success",
@@ -551,20 +551,22 @@ def _tool_request(*tool_names: str) -> LLMRequest:
 def _configuration(*, api_cost_usd: int | None) -> LLMConfiguration:
     return LLMConfiguration.model_validate(
         {
-            "profiles": {
-                "local_quality": {
+            "models": [
+                {
+                    "id": "local_quality",
+                    "display_name": "Local Quality",
                     "provider": "ollama",
-                    "model": "qwen3.5:9b",
+                    "provider_model": "qwen3.5:9b",
                     "base_url": "http://localhost:11434/v1",
                     "temperature": 0,
                     "authentication": "none",
                     "execution_zone": "LOCAL",
                     "max_data_classification": "RESTRICTED",
-                    "capabilities": ["TEXT"],
+                    "capabilities": ["text"],
                     "quality_class": "HIGH",
                     "cost_class": "LOW",
                     "api_cost_usd": api_cost_usd,
                 }
-            }
+            ]
         }
     )

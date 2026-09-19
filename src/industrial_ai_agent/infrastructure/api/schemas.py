@@ -13,6 +13,12 @@ from pydantic import (
     field_validator,
 )
 
+from industrial_ai_agent.agent.model_egress import ExecutionZone
+from industrial_ai_agent.agent.model_selection import (
+    CostClass,
+    ModelCapability,
+    QualityClass,
+)
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
 
@@ -60,6 +66,52 @@ class HealthResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: str = "ok"
+
+
+class ModelCatalogResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")]
+    display_name: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    provider: Annotated[str, StringConstraints(min_length=1, max_length=80)]
+    provider_model: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    execution_zone: ExecutionZone
+    max_data_classification: DataClassificationLabel
+    capabilities: frozenset[ModelCapability]
+    quality_class: QualityClass
+    cost_class: CostClass
+
+
+class ModelAssignmentResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    consumer_id: Annotated[
+        str, StringConstraints(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
+    ]
+    data_classification: DataClassificationLabel
+    model_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")]
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+class ModelConsumerResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    consumer_id: Annotated[
+        str, StringConstraints(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
+    ]
+    display_name: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    required_capabilities: frozenset[ModelCapability]
+
+
+class AssignModelRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    consumer_id: Annotated[
+        str, StringConstraints(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
+    ]
+    data_classification: DataClassificationLabel
+    model_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")]
 
 
 class CreateRunRequest(BaseModel):
@@ -163,7 +215,7 @@ class ApprovalRequestResponse(BaseModel):
     summary: Annotated[str, StringConstraints(min_length=1, max_length=500)]
     arguments: dict[str, JsonValue]
     classification: Annotated[str, StringConstraints(min_length=1, max_length=32)]
-    model_profile: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    model_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
     status: RunStatus
     created_at: str
 

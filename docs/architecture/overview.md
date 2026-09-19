@@ -121,7 +121,7 @@ first LLM tool decision and complete bounded trajectories through the LangGraph 
 Local BM25, semantic, hybrid, and reranked knowledge-retrieval strategies are
 implemented behind one inner port and are exposed to LangGraph only through
 `knowledge_mcp`. A deterministic, deny-by-default model-egress decorator checks explicit
-request classification against each Model Profile's validated Execution Zone before
+request classification against the assigned model's validated Execution Zone before
 invoking the provider adapter. LangGraph and LangChain Core are used narrowly for
 orchestration. The runtime uses LangGraph's official PostgreSQL async checkpointer for
 durable HITL checkpoints; `InMemorySaver` remains a focused unit-test fake. There is no
@@ -322,13 +322,12 @@ authorizes public-cloud model processing.
 
 Compose publishes host-facing demo and diagnostic ports only on `127.0.0.1`; services
 communicating only within Compose, including the OTel Collector, have no host port.
-Grafana anonymous local access is restricted to Viewer. `LOCAL_ONLY_MODE=true` removes
-public-cloud profiles from routing. The bounded S04 position-reference recovery scenario
-uses the server-owned `CONFIDENTIAL_RECOVERY` scope and requires `nvidia_quality`; it does
-not fall back to another provider when NVIDIA is unavailable. That scope exposes only the
-three bounded position-reference recovery capabilities, while other Confidential
-troubleshooting uses the configured `nvidia_quality` profile. All routes retain the same
-final public-cloud egress check.
+Grafana anonymous local access is restricted to Viewer. Persistent assignments select one
+catalog model explicitly and provider availability never changes that selection. The
+bounded S04 position-reference recovery scenario uses the server-owned
+`CONFIDENTIAL_RECOVERY` scope and the configured `agent/CONFIDENTIAL` assignment; it does
+not fall back when that model is unavailable. That scope exposes only the three bounded
+position-reference recovery capabilities. All routes retain the same final egress check.
 
 `POST /api/v1/diagnostics` is the only INTERNAL run entry point. It accepts only
 bounded product and station identifiers, verifies the required projections through an
@@ -348,7 +347,7 @@ sequenceDiagram
     participant Policy as Classification and tool policy
     participant MCP as Authorized Factory / Knowledge MCP
     participant Data as RLS-protected data
-    participant Router as Model router
+    participant Resolver as Model assignment resolver
     participant Egress as Final egress check
     participant LLM as Approved model
     participant Telemetry as OpenTelemetry
@@ -357,15 +356,15 @@ sequenceDiagram
     UI->>API: POST /api/v1/runs
     API->>Run: Create durable run and server-owned context
     Run->>Policy: Resolve classification and run policy
-    Policy->>Router: Create TaskRequirements
-    Router-->>Run: Selected Model Profile
-    API->>Agent: Invoke bounded workflow with selected profile
+    Policy->>Resolver: consumer_id + trusted classification
+    Resolver-->>Run: Authorized model_id or normalized denial
+    API->>Agent: Invoke bounded workflow with selected model ID
     Agent->>Policy: Discover and admit allowed tool
     Policy->>MCP: One authorized tool call
     MCP->>Data: Server-side authorization and RLS
     Data-->>MCP: Classified structured observation
     MCP-->>Agent: Bounded tool result
-    Agent->>Egress: Selected profile and request classification
+    Agent->>Egress: Selected model ID and trusted classification
     Egress->>LLM: Allowed request only
     LLM-->>Agent: Decision or structured result
     Agent->>Run: Persist outcome or approval state
@@ -551,22 +550,23 @@ The same unchanged dataset compares the four current strategies. Historical simp
 IDF results remain documentation only. Agent query formulation and
 final-answer grounding are outside this slice.
 
-The implemented LLM boundary includes deterministic task-level profile selection and a
-separate final egress check:
+The implemented LLM boundary resolves persistent assignments and applies capability and
+security checks before a separate final provider guard:
 
 ```mermaid
 flowchart LR
-    A["Composition Root / Use Case"] -->|"explicit TaskRequirements"| R["DeterministicModelRouter"]
-    M["Validated profile metadata"] --> R
-    S["ModelEgressPolicy<br/>security eligibility first"] --> R
-    R -->|"selected ModelProfile"| A
-    A -->|"ModelProfile + LLMRequest"| G["EgressCheckedLLMClient"]
+    A["Composition Root / Use Case"] --> R["ModelResolutionService"]
+    DB["PostgreSQL assignments"] --> R
+    M["Validated model catalog"] --> R
+    S["ModelExecutionAuthorizer"] --> R
+    R -->|"authorized model_id"| A
+    A -->|"model_id + LLMRequest"| G["EgressCheckedLLMClient"]
     P["LLMClient port"]
     G -.->|"implements"| P
     C["OpenAICompatibleLLMClient"] -.->|"implements"| P
     CL["Explicit DataClassification"] --> G
     S --> G
-    TOML["config/model_profiles.toml<br/>model settings + routing metadata"] --> M
+    TOML["config/model_catalog.toml<br/>model metadata + provider settings"] --> M
     TOML --> G
     TOML --> C
     ENV["Environment variables<br/>API keys for authenticated profiles only"] -.-> C
@@ -598,28 +598,22 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
     class A,P,G,CL,R,S,F core
-    class C,TOML,M,ENV adapter
+    class C,TOML,M,DB,ENV adapter
     class E external
 ```
 
-`config/model_profiles.toml` assigns every profile explicit, validated capabilities,
-quality and relative cost classes, an Execution Zone independent from its provider, and
-whether it participates in automatic routing. `local_fast` and `local_quality` use
-`LOCAL`; `nvidia_quality` is the automatic `PUBLIC_CLOUD` profile. A caller creates
-`TaskRequirements`; the router applies the existing
-egress policy before capability, minimum-quality, and cost/quality ordering. Callers
-also supply the request classification to the controlled client for the independent
-final check. The current policy allows all four classifications locally and allows
-`PUBLIC`, `INTERNAL`, and `CONFIDENTIAL` data in `PUBLIC_CLOUD` only when the
-selected profile permits that classification. `RESTRICTED` data remains local.
-Missing or unknown classifications, zones, or routing metadata fail closed without an
-adapter call.
+`config/model_catalog.toml` describes models and never assigns one to a classification.
+The persistent assignment chooses one stable `model_id`; consumer requirements validate
+capabilities; ADR-009 then authorizes the execution zone. The current policy still allows
+all classifications locally, allows `PUBLIC`, `INTERNAL`, and `CONFIDENTIAL` in
+`PUBLIC_CLOUD`, and keeps `RESTRICTED` local. Missing assignments and unknown models,
+classifications, zones, or capabilities fail closed without an adapter call.
 
 The implemented tool-calling flow is:
 
 ```mermaid
 flowchart TD
-    Start["User request + discovered MCP tool definitions"] --> Decide["LLM decision<br/>routed Model Profile"]
+    Start["User request + discovered MCP tool definitions"] --> Decide["LLM decision<br/>assigned model_id"]
     Decide --> Shape{"Response shape"}
     Shape -->|"final text"| Success["AgentRunResult<br/>SUCCESS + final answer"]
     Shape -->|"multiple or malformed calls"| Invalid["Deterministic error"]
@@ -659,8 +653,8 @@ The LangGraph MCP path preserves that behavior in an explicit graph:
 
 ```mermaid
 flowchart LR
-    CR["Composition Root"] -->|"TaskRequirements"| Router["DeterministicModelRouter"]
-    Router -->|"selected ModelProfile"| Security["EgressCheckedLLMClient"]
+    CR["Composition Root"] --> Resolver["ModelResolutionService"]
+    Resolver -->|"authorized model_id"| Security["EgressCheckedLLMClient"]
     Security --> Adapter["LLMClientChatModel<br/>LangChain message adapter"]
     Adapter --> Model["model node"]
     Model --> Route{"conditional route"}
@@ -727,7 +721,7 @@ flowchart LR
 
 The repository-local eval measures only the first decision exposed by the LangGraph MCP
 path. Each versioned JSONL case starts with a
-fresh message context. The runner uses a configurable semantic Model Profile and passes
+fresh message context. The runner uses an explicit stable model ID and passes
 the provider-independent `LLMResponse` to deterministic exact-match scoring.
 
 ```mermaid
@@ -735,7 +729,7 @@ flowchart LR
     D["Versioned JSONL dataset<br/>12 independent cases"]
     R["Tool-selection eval runner"]
     A["LangGraph MCP<br/>request_tool_selection_via_mcp()"]
-    L["LLMClient<br/>configurable Model Profile"]
+    L["LLMClient<br/>explicit stable model ID"]
     S["Deterministic exact-match scoring"]
     O["Structured JSON report<br/>per-case results + aggregate metrics"]
     X["Excluded<br/>tool execution and final answer"]
@@ -777,7 +771,7 @@ flowchart LR
     D["Versioned trajectory dataset<br/>10 independent cases"]
     R["Trajectory eval runner"]
     A["LangGraph MCP<br/>complete bounded run"]
-    L["LLMClient<br/>configurable Model Profile"]
+    L["LLMClient<br/>explicit stable model ID"]
     AR["AgentRunResult<br/>status + executed calls + final answer"]
     S["Deterministic scoring<br/>trajectory + termination"]
     O["Structured JSON report<br/>case details + four metrics"]
@@ -905,18 +899,19 @@ executes it only after explicit approval.
 
 Contains provider-independent LLM contracts and agent orchestration logic.
 
-The current implementation defines `LLMClient`, semantic `ModelProfile` selection,
+The current implementation defines `LLMClient`, stable `ModelId` values,
 small request and response models, `LangGraphTroubleshootingAgent`, and project-owned
-run-result contracts. It also provides explicit
-`TaskRequirements`, validated routing metadata, and `DeterministicModelRouter`. The
-router reuses `ModelEgressPolicy`, filters by required capabilities and minimum quality,
-and then applies a stable cost/quality ordering. The agent preserves the bounded
+run-result contracts. It also provides model definitions, extensible consumer IDs,
+capability requirements, assignment ports, and `ModelResolutionService`. The resolver
+loads exactly one assignment, validates capabilities, and invokes the authoritative
+model-execution authorizer without ranking or fallback. The agent preserves the bounded
 sequential loop over discovered MCP tools. `AgentRunResult` distinguishes `SUCCESS`
 from `LIMIT_REACHED` and reports both the executed-tool count and the normalized executed
 trajectory. The agent does not construct the router, import the OpenAI SDK, or name a
-concrete provider or model. Its optional HITL composition persists an already selected
-profile and explicit run classification in checkpointed graph state; resume rejects a
-mismatched profile or classification rather than rerouting.
+concrete provider or provider model. Its optional HITL composition persists an already
+selected stable model ID and explicit run classification in checkpointed graph state;
+resume rejects a mismatched assignment or classification rather than selecting another
+model.
 
 Possible later responsibilities include:
 
@@ -990,62 +985,69 @@ directory unless deliberately curated.
 
 The architecture should evolve only when required by implemented capabilities.
 
-### Task-Level Model Routing and Model Egress
+### Model Catalog, Assignments, and Model Egress
 
-Task-level routing and final data-egress enforcement are implemented as separate inner
-responsibilities. Explicit `TaskRequirements` carry task role, required capabilities,
-minimum quality, cost preference, and data classification. The router first applies the
-ADR-009 policy as a security eligibility filter, then capability and quality filters,
-and only then its deterministic cost/quality preference and profile-ID tie-breaker. The
-independent `EgressCheckedLLMClient` repeats the ADR-009 check immediately before the
-provider adapter. Application-state classification propagation remains planned.
+Model configuration follows ADR-019. `config/model_catalog.toml` defines stable model
+IDs, presentation-only display names, provider settings, execution zones, capability
+metadata, and the preserved per-model maximum-classification security constraint.
+PostgreSQL stores one explicit assignment per model consumer and
+`DataClassification`. Assignment is configuration, not authorization, and availability,
+cost, latency, or provider errors never trigger fallback.
 
 ```mermaid
 flowchart TD
-    Requirements["Task requirements<br/>capability, minimum quality, preference"] --> Class["Effective data classification"]
-    Profiles["Validated model profiles<br/>capabilities, quality, cost, zone,<br/>maximum classification"] --> Eligible["Security eligibility filter"]
-    Class --> Eligible
-    Eligible -->|"allowed profiles only"| Rank["Deterministic ranking"]
-    Rank --> Selected["Selected Model Profile"]
-    Selected --> Egress["Independent final egress check"]
-    Class --> Egress
-    Egress -->|"LOCAL: all classifications"| Local["Approved local model"]
-    Egress -->|"PUBLIC_CLOUD: up to profile maximum"| Public["Approved public model"]
-    Egress -->|"unknown, incomplete, or disallowed"| Deny["Deny: no adapter call"]
-    Restricted["RESTRICTED"] -.->|"never public"| Public
+    Catalog["Model Catalog<br/>stable model_id + metadata"] --> Lookup["Catalog lookup"]
+    Assignment["Persistent Assignment<br/>consumer_id + classification -> model_id"] --> Lookup
+    Requirements["Consumer Requirements<br/>required capabilities"] --> Capability["Capability validation"]
+    Lookup --> Capability
+    Capability -->|"pass"| Security["ADR-009 security authorization"]
+    Capability -->|"fail"| Mismatch["CAPABILITY_MISMATCH"]
+    RunClass["Trusted effective DataClassification"] --> Assignment
+    RunClass --> Security
+    Security -->|"allow"| Guard["Provider-boundary final guard"]
+    Security -->|"deny"| EgressDenied["EGRESS_DENIED"]
+    Guard -->|"allow"| Executed["EXECUTED"]
+    Assignment -->|"missing"| Missing["MODEL_NOT_CONFIGURED"]
 
-    classDef input fill:#1e3a5f,stroke:#0f172a,color:#ffffff
-    classDef security fill:#b91c1c,stroke:#7f1d1d,color:#ffffff
-    classDef routing fill:#0f766e,stroke:#134e4a,color:#ffffff
-    classDef execution fill:#334155,stroke:#0f172a,color:#ffffff
-    class Requirements,Class,Profiles input
-    class Eligible,Egress,Deny security
-    class Rank,Selected routing
-    class Local,Public,Restricted execution
+    classDef config fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef security fill:#fee2e2,stroke:#b91c1c,color:#450a0a
+    classDef execution fill:#ecfdf5,stroke:#059669,color:#022c22
+    class Catalog,Assignment,Requirements,Lookup config
+    class RunClass,Capability,Security,Guard,Mismatch,EgressDenied,Missing security
+    class Executed execution
 ```
 
-`MINIMIZE_COST` orders by lower relative cost and then the smallest sufficient quality;
-`BALANCED` orders by lower cost and then higher quality; `PREFER_QUALITY` orders by
-higher quality and then lower cost. Every tie ends with the lexical profile ID, so input
-order cannot affect selection. No fallback or adaptive selection is implemented. If no
-allowed and suitable profile is available, the router raises `NoEligibleModelError`.
-Cost and quality preferences cannot override the security filter. See
-[ADR-008](../decisions/ADR-008-task-level-model-routing.md) and
-[ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.md).
+The implemented consumers are `agent` and the existing specialized
+`rca.reasoning` slot. The agent requires `text`, `tool_calling`, and
+`structured_output`; RCA reasoning requires `text` and `structured_output`. Consumer IDs
+are validated extensible strings, so future slots do not require a closed enum. The API
+exposes metadata reads and assignment upsert by `model_id`; it rejects assignments that
+ADR-009 can never authorize while allowing capability-mismatched experimental
+configuration to fail deterministically at execution.
 
-Mistral and NVIDIA NIM are external OpenAI-compatible providers behind the same
-`LLMClient` adapter as Groq. `nvidia_quality` is the sole automatic external profile;
-`groq_benchmark` and `mistral_fast` remain configured for explicit benchmark use and are
-excluded from automatic routing. `mistral_fast` defaults to
-`https://api.mistral.ai/v1` and `mistral-small-latest` and uses `MISTRAL_API_KEY`;
-`nvidia_quality` defaults to `https://integrate.api.nvidia.com/v1` and
-`nvidia/nemotron-3.5-lightning-30b-a3b` and uses `NVIDIA_API_KEY`. Their model and base
-URL have optional environment overrides. Automatic profiles are candidates only when
-their API key is configured, remain subject to the normal public-cloud egress policy, and have
-provider-controlled availability and rate limits. No provider fallback is implemented.
-NVIDIA's configured profile supports the existing JSON-schema structured-output path;
-Mistral structured output remains disabled: its initial live verification was blocked by
-a provider-side rate limit and must be repeated successfully before enabling the profile.
+The same `ModelExecutionAuthorizer` is used in resolution and immediately before the
+provider adapter serializes or sends a request. The latter is defense in depth, not a
+second policy. Decision telemetry records metadata-only `model.decision` spans and keeps
+`EXECUTED`, `EGRESS_DENIED`, `CAPABILITY_MISMATCH`, and `MODEL_NOT_CONFIGURED`
+analytically distinct. Provider availability and rate-limit failures remain observable
+without selecting another model. See [ADR-019](../decisions/ADR-019-model-catalog-assignments-and-execution-policy.md)
+and [ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.md).
+
+```mermaid
+flowchart LR
+    Trusted["Trusted Run Security Context<br/>immutable effective classification"] --> DB["PostgreSQL / RLS"]
+    Trusted --> Docs["Documents / Retrieval"]
+    Trusted --> Tools["Tools / MCP"]
+    Trusted --> Models["Agent + specialized models"]
+    Tools --> Derived["Derived observations"]
+    Derived -->|"classification retained or raised"| Models
+    Untrusted["Prompt / tool / MCP arguments"] -.->|"cannot lower or replace"| Trusted
+
+    classDef trusted fill:#fee2e2,stroke:#b91c1c,color:#450a0a
+    classDef boundary fill:#e8f1ff,stroke:#2563eb,color:#172554
+    class Trusted,Untrusted trusted
+    class DB,Docs,Tools,Models,Derived boundary
+```
 
 ### Retrieval Evolution
 
@@ -1151,12 +1153,11 @@ preparation, and execution only after a trusted, run-bound HITL approval. Execut
 owned by `ClosedLoopRecoveryService`, including fresh precondition evaluation and
 post-action verification.
 
-Model profiles such as `vision`, `planning`, or `evaluation` can be added through
-configuration when their capabilities are implemented. A non-OpenAI-compatible
+Specialized consumers such as `vision.vlm` or `knowledge.embedding` can receive
+persistent assignments when their workflows are implemented. A non-OpenAI-compatible
 provider will require another infrastructure adapter behind the same `LLMClient` port;
-provider choice remains an outcome of semantic profile metadata and deterministic task
-routing rather than provider-specific agent logic. See
-[ADR-002](../decisions/ADR-002-provider-and-model-independent-llm-architecture.md) for
+provider details remain catalog metadata rather than agent logic. See
+[ADR-019](../decisions/ADR-019-model-catalog-assignments-and-execution-policy.md) for
 the decision and its tradeoffs.
 
 ## Persistent HITL Run

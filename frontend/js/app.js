@@ -7,6 +7,7 @@ import {
   openDocument,
   resumeRun,
 } from "./api.js";
+import { mountModelConfiguration } from "./model-configuration.js";
 import { renderAgentAnswer } from "./markdown.js";
 import { downloadTranscriptPdf } from "./transcript-pdf.js";
 
@@ -21,6 +22,8 @@ const runStatus = document.querySelector("#run-status");
 const resultTitle = document.querySelector("#result-title");
 const exportPdfButton = document.querySelector("#export-pdf-button");
 const errorMessage = document.querySelector("#error-message");
+const modelConfigurationButton = document.querySelector("#model-configuration-button");
+const modelConfigurationDialog = document.querySelector("#model-configuration-dialog");
 const ACTIVE_INVESTIGATION_STORAGE_KEY = "industrial-ai-agent.active-investigation";
 
 let currentInvestigationId = null;
@@ -29,6 +32,10 @@ let isSubmitting = false;
 let pendingAgentTurn = null;
 let pendingTranscriptTurn = null;
 let visibleTranscript = [];
+
+if (modelConfigurationButton && modelConfigurationDialog) {
+  mountModelConfiguration({ button: modelConfigurationButton, dialog: modelConfigurationDialog });
+}
 
 composerForm.addEventListener("submit", async (event) => {
   event.preventDefault();

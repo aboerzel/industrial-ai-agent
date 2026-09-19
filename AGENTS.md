@@ -157,7 +157,7 @@ For the bounded loop:
 * execute at most one tool call per iteration and do not add parallel execution,
   Planner/Executor, multi-agent orchestration, or an agent framework without a new or
   superseding architecture decision
-* preserve the provider-independent `LLMClient`, semantic Model Profiles, and the
+* preserve the provider-independent `LLMClient`, stable model IDs, and the
   existing first-decision eval baseline
 * for LangGraph human approval, keep non-idempotent side effects strictly after an
   approved `interrupt()` resume; an action requiring approval must never execute before it
@@ -167,8 +167,8 @@ See `docs/decisions/ADR-004-agent-orchestration-strategy.md`.
 The LangGraph migration is governed by ADR-010. `LangGraphTroubleshootingAgent` is the
 sole troubleshooting agent loop; do not introduce a second handwritten reference loop.
 LangGraph/LangChain may own orchestration, message, and tool integration mechanics, but
-framework defaults must not bypass the bounded sequential loop, injected Model Profile,
-deterministic routing, or final egress enforcement.
+framework defaults must not bypass the bounded sequential loop, resolved model ID,
+capability validation, or final egress enforcement.
 LangChain tool adapters must delegate to existing capabilities rather than own Domain or
 Infrastructure logic.
 
@@ -179,15 +179,16 @@ See `docs/decisions/ADR-010-langgraph-and-langchain-orchestration-migration.md` 
 
 ## LLM Provider and Model Independence
 
-Agents and use cases must depend on the provider-independent `LLMClient` port and
-select models through semantic Model Profiles such as `troubleshooting`.
+Agents and use cases must depend on the provider-independent `LLMClient` port. Models
+are identified internally by stable model IDs and selected only through persistent
+assignments for a stable model consumer and trusted `DataClassification`.
 
 Do not place concrete provider names, model identifiers, endpoints, API keys, or
 provider SDK types in agent or use-case code.
 
-The mapping from Model Profiles to providers, models, and endpoints belongs in normal
-configuration. API-key values must come exclusively from environment variables.
-Unauthenticated local profiles must not require user-configured API keys; an
+The model catalog maps stable IDs to providers, provider models, endpoints, capabilities,
+and presentation-only display names. API-key values must come exclusively from
+environment variables. Unauthenticated local models must not require user-configured API keys; an
 Infrastructure adapter may encapsulate a non-secret SDK placeholder when technically
 necessary.
 
@@ -199,24 +200,28 @@ generic `AIModelClient`; introduce a focused inner embedding port only when an
 implemented semantic-retrieval capability needs it, with concrete adapters in
 `infrastructure`. See `docs/decisions/ADR-007-embedding-model-abstraction.md`.
 
-See `docs/decisions/ADR-002-provider-and-model-independent-llm-architecture.md`.
+See `docs/decisions/ADR-002-provider-and-model-independent-llm-architecture.md` and
+`docs/decisions/ADR-019-model-catalog-assignments-and-execution-policy.md`.
 
 ---
 
-## Model Routing and Egress
+## Model Selection and Egress
 
-Task-level model routing must select semantic Model Profiles deterministically
-from explicit task requirements; agent and use-case code must not select concrete
-providers or model names.
+Model Catalog, persistent assignments, consumer capability requirements, and security
+authorization are separate concerns. Assignment is configuration and never grants
+authorization. Resolution selects exactly the assigned stable model ID; do not rank or
+automatically fall back because of availability, capability, cost, latency, rate limits,
+or provider failures. Display names are presentation-only and never identity.
 
 Data classification and model egress are deterministic Application policy boundaries,
-never LLM judgments. Apply security eligibility before routing and a final egress check
+never LLM judgments. Apply security eligibility after assignment/capability resolution and a final egress check
 before every provider-adapter call. Sensitive data must not reach a disallowed public
 model, and failure or fallback must never downgrade the permitted execution zone. Fail
 closed when classification, zone, or eligibility is unknown.
 
-See `docs/decisions/ADR-008-task-level-model-routing.md` and
-`docs/decisions/ADR-009-data-classification-and-model-egress-policy.md`.
+See `docs/decisions/ADR-008-task-level-model-routing.md`,
+`docs/decisions/ADR-009-data-classification-and-model-egress-policy.md`, and
+`docs/decisions/ADR-019-model-catalog-assignments-and-execution-policy.md`.
 
 ---
 
@@ -371,7 +376,7 @@ Keep deterministic tests and AI / Agent evaluations as separate quality mechanis
   LLM-as-a-Judge when an objective deterministic check is possible.
 * Keep live integration and smoke tests explicitly identifiable and outside the normal
   unit-test gate.
-* Before material changes to prompts, models, Model Profiles, tool schemas,
+* Before material changes to prompts, models, catalog metadata, assignments, tool schemas,
   orchestration, retrieval, reranking, or context building, rerun the relevant existing
   evals and compare them with the baseline.
 * Keep generated eval reports unversioned by default and record enough provenance to
@@ -752,6 +757,7 @@ ADR-015  MCP client identity, clearance, and tool authorization
 ADR-016  Observability, tracing, metrics, and telemetry security
 ADR-017  Automated root-cause analysis evidence and reasoning boundaries
 ADR-018  Physical device integration and Closed-Loop Recovery
+ADR-019  Model Catalog, assignments, and execution policy
 ```
 
 Future ADRs should be introduced only when the corresponding architectural decision

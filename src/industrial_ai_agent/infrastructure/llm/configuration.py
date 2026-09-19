@@ -1,4 +1,5 @@
-import os
+"""Validated infrastructure loader for the pure model catalog."""
+
 import tomllib
 from collections.abc import Mapping
 from decimal import Decimal
@@ -15,12 +16,12 @@ from pydantic import (
     model_validator,
 )
 
-from industrial_ai_agent.agent.llm import ModelProfile
+from industrial_ai_agent.agent.llm import ModelId
 from industrial_ai_agent.agent.model_egress import ExecutionZone
-from industrial_ai_agent.agent.model_routing import (
+from industrial_ai_agent.agent.model_selection import (
     CostClass,
-    LLMCapability,
-    ModelProfileMetadata,
+    ModelCapability,
+    ModelDefinition,
     QualityClass,
 )
 from industrial_ai_agent.domain.security import DataClassification
@@ -31,42 +32,37 @@ class AuthenticationMode(StrEnum):
     API_KEY = "api_key"
 
 
-LOCAL_ONLY_MODE_ENV = "LOCAL_ONLY_MODE"
-
-
-class ModelProfileConfig(BaseModel):
+class ModelConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    display_name: str = Field(min_length=1)
     provider: str = Field(min_length=1)
-    model: str = Field(min_length=1)
+    provider_model: str = Field(min_length=1)
     base_url: AnyHttpUrl
     temperature: float = Field(ge=0, le=2)
     authentication: AuthenticationMode
     execution_zone: ExecutionZone
     max_data_classification: DataClassification
-    capabilities: frozenset[LLMCapability] = Field(min_length=1)
+    capabilities: frozenset[ModelCapability] = Field(min_length=1)
     quality_class: QualityClass
     cost_class: CostClass
-    automatic_routing: bool = True
-    supports_structured_output: bool = False
     supports_reasoning_effort: bool = False
     max_output_tokens: int | None = Field(default=None, ge=1, le=4096)
     api_cost_usd: Decimal | None = Field(default=None, ge=0)
     api_key_env: str | None = Field(default=None, min_length=1)
-    model_env: str | None = Field(default=None, min_length=1)
+    provider_model_env: str | None = Field(default=None, min_length=1)
     base_url_env: str | None = Field(default=None, min_length=1)
 
     @field_validator("max_data_classification", mode="before")
     @classmethod
-    def parse_max_data_classification(cls, value: object) -> DataClassification:
-        if isinstance(value, DataClassification):
-            return value
+    def parse_max_data_classification(cls, value: object) -> object:
         if isinstance(value, str):
             try:
                 return DataClassification[value]
             except KeyError as error:
-                raise ValueError("Unknown maximum data classification") from error
-        raise ValueError("Unknown maximum data classification")
+                raise ValueError("Invalid maximum data classification") from error
+        return value
 
     @model_validator(mode="after")
     def validate_authentication(self) -> Self:
@@ -78,73 +74,83 @@ class ModelProfileConfig(BaseModel):
             )
         return self
 
+    def definition(self) -> ModelDefinition:
+        return ModelDefinition(
+            model_id=ModelId(self.id),
+            display_name=self.display_name,
+            provider=self.provider,
+            provider_model=self.provider_model,
+            execution_zone=self.execution_zone,
+            max_data_classification=self.max_data_classification,
+            capabilities=self.capabilities,
+            quality_class=self.quality_class,
+            cost_class=self.cost_class,
+        )
 
-class LLMConfiguration(BaseModel):
+    @property
+    def model(self) -> str:
+        """Compatibility name for provider adapter callers during the migration."""
+        return self.provider_model
+
+    @property
+    def model_env(self) -> str | None:
+        return self.provider_model_env
+
+    @property
+    def supports_structured_output(self) -> bool:
+        return ModelCapability.STRUCTURED_OUTPUT in self.capabilities
+
+
+class ModelCatalogConfiguration(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    profiles: dict[str, ModelProfileConfig]
+    models: tuple[ModelConfig, ...] = Field(min_length=1)
 
-    def get_profile(self, profile: str) -> ModelProfileConfig:
-        try:
-            return self.profiles[profile]
-        except KeyError as error:
-            raise ValueError(f"Unknown model profile: {profile}") from error
+    @model_validator(mode="after")
+    def validate_unique_ids(self) -> Self:
+        model_ids = [model.id for model in self.models]
+        if len(model_ids) != len(set(model_ids)):
+            raise ValueError("Model IDs must be unique")
+        return self
 
-    def get_execution_zone(self, profile_name: str) -> ExecutionZone:
-        return self.get_profile(profile_name).execution_zone
+    def get_model_config(self, model_id: str) -> ModelConfig:
+        for model in self.models:
+            if model.id == model_id:
+                return model
+        raise ValueError(f"Unknown model ID: {model_id}")
 
-    def get_max_data_classification(self, profile_name: str) -> DataClassification:
-        return self.get_profile(profile_name).max_data_classification
+    def get_profile(self, model_id: str) -> ModelConfig:
+        """Compatibility accessor; the key is always a stable model ID."""
+        return self.get_model_config(model_id)
 
-    def get_routing_profiles(
-        self, *, local_only: bool = False
-    ) -> tuple[ModelProfileMetadata, ...]:
-        return tuple(
-            ModelProfileMetadata(
-                profile=ModelProfile(profile_name),
-                capabilities=profile.capabilities,
-                quality_class=profile.quality_class,
-                cost_class=profile.cost_class,
-                execution_zone=profile.execution_zone,
-                max_data_classification=profile.max_data_classification,
-            )
-            for profile_name, profile in sorted(self.profiles.items())
-            if profile.automatic_routing
-            and (not local_only or profile.execution_zone is ExecutionZone.LOCAL)
-        )
+    def get_model(self, model_id: str) -> ModelDefinition:
+        return self.get_model_config(model_id).definition()
 
-    def get_available_routing_profiles(
-        self,
-        *,
-        environment: Mapping[str, str],
-        local_only: bool = False,
-    ) -> tuple[ModelProfileMetadata, ...]:
-        """Return routing candidates whose required credentials are configured."""
-        return tuple(
-            metadata
-            for metadata in self.get_routing_profiles(local_only=local_only)
-            if self.is_profile_available(metadata.profile.name, environment=environment)
-        )
+    def list_models(self) -> tuple[ModelDefinition, ...]:
+        return tuple(model.definition() for model in self.models)
 
-    def is_profile_available(
-        self, profile_name: str, *, environment: Mapping[str, str]
+    def get_execution_zone(self, model_id: str) -> ExecutionZone:
+        return self.get_model_config(model_id).execution_zone
+
+    def get_max_data_classification(self, model_id: str) -> DataClassification:
+        return self.get_model_config(model_id).max_data_classification
+
+    def is_model_available(
+        self, model_id: str, *, environment: Mapping[str, str]
     ) -> bool:
-        profile = self.get_profile(profile_name)
-        return profile.authentication is AuthenticationMode.NONE or bool(
-            profile.api_key_env and environment.get(profile.api_key_env, "").strip()
+        model = self.get_model_config(model_id)
+        return model.authentication is AuthenticationMode.NONE or bool(
+            model.api_key_env and environment.get(model.api_key_env, "").strip()
         )
 
 
-def load_llm_configuration(path: Path) -> LLMConfiguration:
+def load_model_catalog(path: Path) -> ModelCatalogConfiguration:
     with path.open("rb") as config_file:
         raw_configuration = tomllib.load(config_file)
-    return LLMConfiguration.model_validate(raw_configuration)
+    return ModelCatalogConfiguration.model_validate(raw_configuration)
 
 
-def local_only_mode_enabled() -> bool:
-    value = os.getenv(LOCAL_ONLY_MODE_ENV, "false").strip().lower()
-    if value in {"0", "false"}:
-        return False
-    if value in {"1", "true"}:
-        return True
-    raise ValueError(f"{LOCAL_ONLY_MODE_ENV} must be either 'true' or 'false'")
+# Import compatibility for scripts while their call sites move to catalog terminology.
+LLMConfiguration = ModelCatalogConfiguration
+ModelProfileConfig = ModelConfig
+load_llm_configuration = load_model_catalog

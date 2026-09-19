@@ -76,7 +76,7 @@ def test_security_context_validates_identity_shape(kwargs: dict[str, object]) ->
         )
 
 
-def test_observed_confidential_data_monotonically_blocks_public_cloud() -> None:
+def test_observed_restricted_data_monotonically_blocks_public_cloud() -> None:
     adapter = _RecordingLLMClient()
     checked_client = EgressCheckedLLMClient(
         adapter,
@@ -85,7 +85,7 @@ def test_observed_confidential_data_monotonically_blocks_public_cloud() -> None:
     )
 
     checked_client.chat(ModelProfile("public"), _request())
-    checked_client.raise_request_classification(DataClassification.CONFIDENTIAL)
+    checked_client.raise_request_classification(DataClassification.RESTRICTED)
 
     with pytest.raises(ModelEgressDeniedError, match="Model egress denied by policy"):
         checked_client.chat(ModelProfile("public"), _request())

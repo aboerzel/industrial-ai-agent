@@ -13,9 +13,20 @@ from industrial_ai_agent.agent.agent_run import (
     ExecutedToolCall,
     InvestigationStep,
 )
-from industrial_ai_agent.agent.llm import LLMProviderError, LLMProviderErrorCode
+from industrial_ai_agent.agent.llm import (
+    LLMProviderError,
+    LLMProviderErrorCode,
+    ModelId,
+)
 from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
-from industrial_ai_agent.agent.model_routing import NoEligibleModelError
+from industrial_ai_agent.agent.model_selection import (
+    AGENT_CONSUMER,
+    AGENT_REQUIREMENTS,
+    ModelAssignment,
+    ModelDecision,
+    ModelDecisionOutcome,
+    ModelResolutionError,
+)
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
@@ -26,7 +37,6 @@ from industrial_ai_agent.agent.run_classification_policy import (
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     InternalDiagnosticTargetUnavailableError,
     McpServiceUnavailableError,
-    confidential_troubleshooting_requirements,
 )
 from industrial_ai_agent.application.document_content import AuthorizedDocumentContent
 from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
@@ -266,7 +276,7 @@ def test_cors_allows_both_explicit_local_demo_origins(origin: str) -> None:
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == origin
-    assert response.headers["access-control-allow-methods"] == "GET, POST"
+    assert response.headers["access-control-allow-methods"] == "GET, POST, PUT"
 
 
 def test_cors_rejects_unconfigured_origin() -> None:
@@ -1055,11 +1065,19 @@ def test_get_unknown_run_returns_sanitized_not_found_error() -> None:
     }
 
 
-def test_no_eligible_model_returns_a_persisted_failed_run() -> None:
+def test_model_not_configured_returns_a_persisted_failed_run() -> None:
     client = TestClient(
         create_app(
             FakeRunService(
-                error=NoEligibleModelError(confidential_troubleshooting_requirements())
+                error=ModelResolutionError(
+                    ModelDecision(
+                        consumer_id=AGENT_CONSUMER,
+                        effective_data_classification=DataClassification.CONFIDENTIAL,
+                        required_capabilities=AGENT_REQUIREMENTS,
+                        outcome=ModelDecisionOutcome.MODEL_NOT_CONFIGURED,
+                        error_code="model_not_configured",
+                    )
+                )
             )
         )
     )
@@ -1068,7 +1086,7 @@ def test_no_eligible_model_returns_a_persisted_failed_run() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "failed"
-    assert response.json()["error"]["code"] == "no_eligible_model"
+    assert response.json()["error"]["code"] == "model_not_configured"
 
 
 def test_model_egress_denial_fails_closed() -> None:
@@ -1277,9 +1295,27 @@ def test_streamable_http_connection_failure_maps_to_service_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MCP_INDUSTRIAL_AGENT_TOKEN", "unit-test-token")
+
+    class AssignmentRepository:
+        assignment = ModelAssignment(
+            consumer_id=AGENT_CONSUMER,
+            data_classification=DataClassification.CONFIDENTIAL,
+            model_id=ModelId("nvidia_quality"),
+        )
+
+        def get(self, consumer_id, data_classification):
+            return self.assignment
+
+        def list(self):
+            return (self.assignment,)
+
+        def upsert(self, assignment):
+            return assignment
+
     service = create_default_troubleshooting_run_service(
         factory_mcp_url="http://127.0.0.1:1/mcp",
         knowledge_mcp_url="http://127.0.0.1:1/mcp",
+        model_assignment_repository=AssignmentRepository(),
     )
     client = TestClient(create_app(service))
 

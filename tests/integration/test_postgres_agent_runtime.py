@@ -16,7 +16,9 @@ from industrial_ai_agent.agent.agent_run import (
     AgentRunStatus,
     InvestigationStep,
 )
+from industrial_ai_agent.agent.llm import ModelId
 from industrial_ai_agent.agent.model_egress import DataClassification
+from industrial_ai_agent.agent.model_selection import ModelAssignment, ModelConsumerId
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
     AgentRunProfile,
@@ -33,9 +35,62 @@ from industrial_ai_agent.infrastructure.api.schemas import RunStatus
 from industrial_ai_agent.infrastructure.internal_diagnostic_scope import (
     PostgreSqlInternalDiagnosticScopeValidator,
 )
+from industrial_ai_agent.infrastructure.persistence.model_assignments import (
+    PostgreSqlModelAssignmentRepository,
+)
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlSessionFactory,
 )
+
+
+def test_model_assignment_repository_round_trips_stable_model_id() -> None:
+    factory = PostgreSqlSessionFactory(DATABASE_URL or "")
+    repository = PostgreSqlModelAssignmentRepository(
+        factory,
+        _context(DataClassification.RESTRICTED),
+    )
+    assignment = ModelAssignment(
+        consumer_id=ModelConsumerId("rca.reasoning"),
+        data_classification=DataClassification.RESTRICTED,
+        model_id=ModelId("local_quality"),
+        updated_by="integration-test",
+    )
+    original = repository.get(assignment.consumer_id, assignment.data_classification)
+    assert original is not None
+
+    try:
+        persisted = repository.upsert(assignment)
+        loaded = repository.get(assignment.consumer_id, assignment.data_classification)
+
+        assert persisted.model_id == ModelId("local_quality")
+        assert persisted.updated_at is not None
+        assert loaded == persisted
+    finally:
+        repository.upsert(original)
+        factory.dispose()
+
+
+def test_model_assignment_migration_preserves_unambiguous_seeds_only() -> None:
+    factory = PostgreSqlSessionFactory(DATABASE_URL or "")
+    repository = PostgreSqlModelAssignmentRepository(
+        factory,
+        _context(DataClassification.RESTRICTED),
+    )
+
+    try:
+        assignments = {
+            (item.consumer_id.value, item.data_classification): item.model_id.value
+            for item in repository.list()
+        }
+    finally:
+        factory.dispose()
+
+    assert assignments[("agent", DataClassification.PUBLIC)] == "nvidia_quality"
+    assert assignments[("agent", DataClassification.INTERNAL)] == "nvidia_quality"
+    assert assignments[("agent", DataClassification.CONFIDENTIAL)] == "nvidia_quality"
+    assert ("agent", DataClassification.RESTRICTED) not in assignments
+    assert assignments[("rca.reasoning", DataClassification.RESTRICTED)] == "local_fast"
+
 
 DATABASE_URL = os.getenv("FACTORY_DATABASE_URL")
 pytestmark = pytest.mark.skipif(

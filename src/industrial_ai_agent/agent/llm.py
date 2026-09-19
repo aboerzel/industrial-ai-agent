@@ -6,14 +6,24 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 @dataclass(frozen=True, slots=True)
-class ModelProfile:
-    name: str
+class ModelId:
+    value: str
 
     def __post_init__(self) -> None:
-        normalized_name = self.name.strip()
+        normalized_name = self.value.strip()
         if not normalized_name:
-            raise ValueError("Model profile name must not be empty")
-        object.__setattr__(self, "name", normalized_name)
+            raise ValueError("Model ID must not be empty")
+        object.__setattr__(self, "value", normalized_name)
+
+    @property
+    def name(self) -> str:
+        """Compatibility accessor for framework state migrated in a later schema step."""
+        return self.value
+
+
+# Transitional source compatibility for persisted LangGraph/run contracts. New model
+# selection code uses ModelId and never treats this alias as a routing profile.
+ModelProfile = ModelId
 
 
 class MessageRole(StrEnum):
@@ -161,4 +171,4 @@ class LLMResponse(BaseModel):
 
 
 class LLMClient(Protocol):
-    def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse: ...
+    def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse: ...

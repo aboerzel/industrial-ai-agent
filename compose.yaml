@@ -140,8 +140,7 @@ services:
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
       NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
       NVIDIA_MODEL: ${NVIDIA_MODEL:-nvidia/nemotron-3.5-lightning-30b-a3b}
-      LOCAL_ONLY_MODE: ${LOCAL_ONLY_MODE:-false}
-      MODEL_CONFIGURATION_PATH: /app/config/model_profiles.docker.toml
+      MODEL_CATALOG_PATH: /app/config/model_catalog.docker.toml
       OTEL_ENABLED: "true"
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       OTEL_SERVICE_NAME: industrial-ai-agent
@@ -248,9 +247,8 @@ services:
     restart: unless-stopped
     environment:
       AGENT_RUNTIME_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
-      MODEL_CONFIGURATION_PATH: /app/config/model_profiles.docker.toml
+      MODEL_CATALOG_PATH: /app/config/model_catalog.docker.toml
       RCA_REASONING_TIMEOUT_SECONDS: "90"
-      LOCAL_ONLY_MODE: ${LOCAL_ONLY_MODE:-false}
       TEMPO_URL: http://tempo:3200
       LOKI_URL: http://loki:3100
       PROMETHEUS_URL: http://prometheus:9090

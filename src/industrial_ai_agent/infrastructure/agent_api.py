@@ -7,6 +7,15 @@ from pathlib import Path
 
 import uvicorn
 
+from industrial_ai_agent.agent.model_egress import ModelExecutionAuthorizer
+from industrial_ai_agent.agent.model_selection import (
+    CURRENT_CONSUMER_REQUIREMENTS,
+    CURRENT_MODEL_CONSUMERS,
+    ModelResolutionService,
+)
+from industrial_ai_agent.application.model_configuration import (
+    ModelConfigurationService,
+)
 from industrial_ai_agent.domain.security import DEMO_RUNTIME_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.observed_run_store import (
@@ -18,8 +27,12 @@ from industrial_ai_agent.infrastructure.api.postgres_run_store import (
 from industrial_ai_agent.infrastructure.internal_diagnostic_scope import (
     PostgreSqlInternalDiagnosticScopeValidator,
 )
+from industrial_ai_agent.infrastructure.llm.configuration import load_model_catalog
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
 from industrial_ai_agent.infrastructure.observed_run_service import observed_run_service
+from industrial_ai_agent.infrastructure.persistence.model_assignments import (
+    PostgreSqlModelAssignmentRepository,
+)
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlDocumentContentRepository,
     PostgreSqlSessionFactory,
@@ -29,6 +42,7 @@ from industrial_ai_agent.infrastructure.telemetry import (
     configure_telemetry,
 )
 from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
+    DEFAULT_MODEL_CATALOG_PATH,
     create_default_troubleshooting_run_service,
 )
 
@@ -76,6 +90,17 @@ def create_default_app():
             PostgreSqlSessionFactory(database_url)
         ),
     )
+    model_catalog = load_model_catalog(DEFAULT_MODEL_CATALOG_PATH)
+    assignment_repository = PostgreSqlModelAssignmentRepository(
+        PostgreSqlSessionFactory(database_url), DEMO_RUNTIME_SECURITY_CONTEXT
+    )
+    authorizer = ModelExecutionAuthorizer()
+    model_resolver = ModelResolutionService(
+        catalog=model_catalog,
+        assignments=assignment_repository,
+        authorizer=authorizer,
+        consumer_requirements=CURRENT_CONSUMER_REQUIREMENTS,
+    )
     return create_app(
         observed_run_service(run_service, telemetry),
         run_store=ObservedAgentRunStore(
@@ -89,6 +114,13 @@ def create_default_app():
         document_content_reader=PostgreSqlDocumentContentRepository(
             PostgreSqlSessionFactory(database_url),
             Path(os.getenv("DOCUMENT_ROOT", str(DEFAULT_DOCUMENT_ROOT))),
+        ),
+        model_configuration_service=ModelConfigurationService(
+            catalog=model_catalog,
+            assignments=assignment_repository,
+            supported_consumers=model_resolver.supported_consumers,
+            consumer_definitions=CURRENT_MODEL_CONSUMERS,
+            authorizer=authorizer,
         ),
     )
 

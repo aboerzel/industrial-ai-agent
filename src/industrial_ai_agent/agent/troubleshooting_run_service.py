@@ -11,13 +11,9 @@ from industrial_ai_agent.agent.agent_run import (
     AgentRunResult,
     InvalidToolArgumentsError,
 )
-from industrial_ai_agent.agent.llm import ModelProfile
+from industrial_ai_agent.agent.llm import ModelId
 from industrial_ai_agent.agent.model_egress import DataClassification
-from industrial_ai_agent.agent.model_routing import (
-    DeterministicModelRouter,
-    ModelProfileMetadata,
-    TaskRequirements,
-)
+from industrial_ai_agent.agent.model_selection import ModelResolutionService
 from industrial_ai_agent.agent.response_language import (
     ResponseLanguage,
     detect_response_language,
@@ -120,7 +116,7 @@ class RoutedTroubleshootingAgentFactory(Protocol):
     def open_agent(
         self,
         *,
-        profile: ModelProfile,
+        model_id: ModelId,
         run_policy: ResolvedRunPolicy,
         checkpointer: object | None = None,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]: ...
@@ -136,16 +132,14 @@ class TroubleshootingRunService:
     def __init__(
         self,
         *,
-        router: DeterministicModelRouter,
-        profiles: tuple[ModelProfileMetadata, ...],
+        model_resolver: ModelResolutionService,
         agent_factory: RoutedTroubleshootingAgentFactory,
         checkpointer_factory: RuntimeCheckpointerFactory | None = None,
         classification_policy: AgentRunClassificationPolicy | None = None,
         internal_diagnostic_scope_validator: InternalDiagnosticScopeValidator
         | None = None,
     ) -> None:
-        self._router = router
-        self._profiles = profiles
+        self._model_resolver = model_resolver
         self._agent_factory = agent_factory
         self._checkpointer_factory = checkpointer_factory
         self._classification_policy = (
@@ -174,13 +168,18 @@ class TroubleshootingRunService:
         response_language: ResponseLanguage | None = None,
         conversation_context: tuple[ConversationTurn, ...] = (),
     ) -> AgentRunResult:
-        profile = self._router.route(run_policy.task_requirements, self._profiles)
+        decision = self._model_resolver.resolve_model(
+            run_policy.model_consumer_id, run_policy.data_classification
+        )
+        if decision.model is None:
+            raise RuntimeError("Model resolution returned no model")
+        model_id = decision.model.model_id
         resolved_response_language = response_language or detect_response_language(
             message
         )
         try:
             with self._agent_factory.open_agent(
-                profile=profile,
+                model_id=model_id,
                 run_policy=run_policy,
             ) as agent:
                 if not conversation_context:
@@ -220,19 +219,26 @@ class TroubleshootingRunService:
         run_policy: ResolvedRunPolicy | None = None,
         response_language: ResponseLanguage | None = None,
         conversation_context: tuple[ConversationTurn, ...] = (),
-    ) -> tuple[ModelProfile, RunExecution]:
+    ) -> tuple[ModelId, RunExecution]:
         if self._checkpointer_factory is None:
             raise RuntimeError("Persistent HITL runs require a PostgreSQL checkpointer")
         resolved = run_policy or self._classification_policy.resolve(
             AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
         )
-        profile = self._router.route(resolved.task_requirements, self._profiles)
+        decision = self._model_resolver.resolve_model(
+            resolved.model_consumer_id,
+            resolved.data_classification,
+            run_id=run_id,
+        )
+        if decision.model is None:
+            raise RuntimeError("Model resolution returned no model")
+        model_id = decision.model.model_id
         resolved_response_language = response_language or detect_response_language(
             message
         )
         async with self._checkpointer_factory.open() as saver:
             with self._agent_factory.open_agent(
-                profile=profile, run_policy=resolved, checkpointer=saver
+                model_id=model_id, run_policy=resolved, checkpointer=saver
             ) as agent:
                 state, payload = await agent.astart_via_mcp(
                     message,
@@ -240,13 +246,13 @@ class TroubleshootingRunService:
                     response_language=resolved_response_language,
                     conversation_context=conversation_context,
                 )
-        return profile, _execution_from_state(state, payload)
+        return model_id, _execution_from_state(state, payload)
 
     async def resume(
         self,
         *,
         run_id: UUID,
-        model_profile: str,
+        model_id: str,
         data_classification: DataClassification,
         run_profile: AgentRunProfile,
         decision: str,
@@ -256,26 +262,26 @@ class TroubleshootingRunService:
         resolved = self._classification_policy.resolve_persisted(
             profile=run_profile, data_classification=data_classification
         )
-        profile = ModelProfile(model_profile)
-        if profile not in {metadata.profile for metadata in self._profiles}:
-            raise RuntimeError("Persisted run model profile is not configured")
+        model_decision = self._model_resolver.resolve_model(
+            resolved.model_consumer_id,
+            resolved.data_classification,
+            run_id=run_id,
+        )
+        if (
+            model_decision.model is None
+            or model_decision.model.model_id.value != model_id
+        ):
+            raise RuntimeError("Persisted run model ID is no longer assigned")
         async with self._checkpointer_factory.open() as saver:
             with self._agent_factory.open_agent(
-                profile=profile, run_policy=resolved, checkpointer=saver
+                model_id=model_decision.model.model_id,
+                run_policy=resolved,
+                checkpointer=saver,
             ) as agent:
                 state = await agent.aresume_via_mcp(
                     thread_id=str(run_id), approval=decision
                 )
         return _execution_from_state(state, None)
-
-
-def confidential_troubleshooting_requirements() -> TaskRequirements:
-    """Build the conservative, server-controlled requirements for this API use case."""
-    return (
-        AgentRunClassificationPolicy()
-        .resolve(AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING)
-        .task_requirements
-    )
 
 
 def internal_diagnostic_message(target: InternalDiagnosticTarget) -> str:

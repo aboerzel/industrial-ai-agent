@@ -6,6 +6,7 @@ import {
   createRun,
   downloadInvestigationPdf,
   getRun,
+  saveModelAssignment,
 } from "../../frontend/js/api.js";
 
 const RUN_ID = "0ca96c57-66f6-4e12-b151-6f7f6ef9c9f8";
@@ -54,7 +55,7 @@ test("renders every public terminal and approval lifecycle state", async (t) => 
         summary: "Inspect S04.",
         arguments: { station_id: "S04" },
         classification: "CONFIDENTIAL",
-        model_profile: "local_quality",
+        model_id: "local_quality",
         status: "waiting_for_approval",
         created_at: "2026-09-05T10:14:59.834855+00:00",
       },
@@ -84,7 +85,7 @@ test("accepts the bounded S04 recovery approval response contract", async () => 
         operation_type: "reference_calibration",
       },
       classification: "CONFIDENTIAL",
-      model_profile: "nvidia_quality",
+      model_id: "nvidia_quality",
       status: "waiting_for_approval",
       created_at: "2026-09-11T11:53:47+00:00",
     },
@@ -247,6 +248,28 @@ test("uses the existing server PDF route for persisted investigations", () => {
     assignedUrl,
     `http://localhost:8000/api/v1/investigations/${RUN_ID}/pdf?user_clearance=CONFIDENTIAL`,
   );
+});
+
+test("persists model configuration with stable model_id values", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, "http://localhost:8000/api/v1/model-assignments");
+    assert.equal(options.method, "PUT");
+    assert.deepEqual(JSON.parse(options.body), {
+      consumer_id: "agent",
+      data_classification: "RESTRICTED",
+      model_id: "local_quality",
+    });
+    return new Response(JSON.stringify({
+      consumer_id: "agent", data_classification: "RESTRICTED", model_id: "local_quality",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    const saved = await saveModelAssignment("agent", "RESTRICTED", "local_quality");
+    assert.equal(saved.model_id, "local_quality");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 async function requestRun(payload) {

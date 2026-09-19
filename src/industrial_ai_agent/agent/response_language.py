@@ -99,6 +99,10 @@ def user_facing_error_message(
         "run_not_found": "The requested run does not exist.",
         "run_not_waiting_for_approval": "The run is not waiting for approval.",
         "no_eligible_model": "No eligible model is available for this request.",
+        "model_not_configured": "No model is configured for this request.",
+        "model_capability_mismatch": (
+            "The configured model does not support this request."
+        ),
         "model_egress_denied": "Model execution is not permitted for this request.",
         "mcp_service_unavailable": "A required MCP service is unavailable.",
         "llm_rate_limit": (
@@ -125,6 +129,10 @@ def user_facing_error_message(
         "run_not_found": "Der angeforderte Run existiert nicht.",
         "run_not_waiting_for_approval": "Der Run wartet nicht auf eine Freigabe.",
         "no_eligible_model": "Für diese Anfrage ist kein geeignetes Modell verfügbar.",
+        "model_not_configured": "Für diese Anfrage ist kein Modell konfiguriert.",
+        "model_capability_mismatch": (
+            "Das konfigurierte Modell unterstützt diese Anfrage nicht."
+        ),
         "model_egress_denied": "Die Modellausführung ist für diese Anfrage nicht zulässig.",
         "mcp_service_unavailable": "Ein erforderlicher MCP-Service ist nicht verfügbar.",
         "llm_rate_limit": (

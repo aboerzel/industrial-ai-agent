@@ -14,8 +14,8 @@ Grafana is available at `http://localhost:3000`, Prometheus at
 `http://localhost:3200`. The OpenTelemetry Collector accepts OTLP/gRPC on `4317` and
 OTLP/HTTP on `4318`. Langfuse v4 is available at `http://localhost:3001`.
 
-The Compose API service uses `config/model_profiles.docker.toml`. Its local Ollama
-profiles deliberately address `host.docker.internal`, which resolves the developer's
+The Compose API service uses `config/model_catalog.docker.toml`. Its local Ollama
+models deliberately address `host.docker.internal`, which resolves the developer's
 host from Docker Desktop; it is not a telemetry endpoint and contains no credentials.
 
 ```mermaid
@@ -76,8 +76,8 @@ and percentages in their legend where Grafana supports it.
   every application service or backend is healthy. Current active runs are deliberately
   not inferred because no active-run gauge exists.
 * `Industrial AI Agent - LLM Usage Analytics` compares provider-reported input, output,
-  and total-token usage, LLM calls, and admitted tool decisions by semantic model profile.
-  Its model filter, tool-decision table, and per-tool averages use bounded model-profile
+  and total-token usage, LLM calls, and admitted tool decisions by stable model ID.
+  Its model filter, tool-decision table, and per-tool averages use bounded model
   and MCP-tool labels. Tool-attributed tokens are the usage of the same LLM response that
   selected the admitted tool; direct-answer and finalization calls remain model-only.
   It does not calculate monetary cost. Prometheus does not carry provider or concrete
@@ -85,7 +85,7 @@ and percentages in their legend where Grafana supports it.
   USD 0 remains `CONFIGURED/MODEL_CONFIGURATION`, not observed run cost or total-compute
   cost.
 * `Industrial AI Agent - Usage Analytics` shows bounded Prometheus usage by run
-  classification, model profile, MCP tool, agent-side MCP service, and retrieval strategy,
+  classification, model ID, MCP tool, agent-side MCP service, and retrieval strategy,
   plus their trends. Its adjacent tool panels use the selected dashboard range for both
   tool-call counts and the weighted average tool duration from the MCP histogram sum and
   count; tools without calls in that range are omitted from the duration panel.
@@ -220,9 +220,18 @@ tool/operation/status/classification dimensions. Checkpoint load/save remain
 uninstrumented: the current LangGraph saver exposes no stable public operation boundary
 without framework intrusion.
 
+Model selection emits metadata-only `model.decision` spans. They correlate the stable
+`model.id`, consumer, effective classification, execution zone, required capabilities,
+capability result, egress result, provider, sanitized error code, and final outcome.
+`EXECUTED`, `EGRESS_DENIED`, `CAPABILITY_MISMATCH`, and `MODEL_NOT_CONFIGURED` remain
+analytically distinct. Prompt, response, document, image, and tool-result contents are
+never attached. The catalog API retains the `model.id` to `display_name` mapping needed
+for a later dashboard presentation update; existing dashboards are not redesigned in
+this phase.
+
 ## Telemetry Security
 
-Only safe metadata is emitted: run/status/classification, model profile and name,
+Only safe metadata is emitted: run/status/classification, stable model ID and provider model name,
 execution zone, MCP server/tool/read-write operation, bounded retrieval counts, duration,
 provider-supplied token counts, and sanitized error codes. `RESTRICTED` runs remain
 metadata-only.

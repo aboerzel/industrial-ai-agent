@@ -12,13 +12,16 @@ from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
     LangGraphTroubleshootingAgent,
 )
-from industrial_ai_agent.agent.llm import LLMReasoningEffort, ModelProfile
+from industrial_ai_agent.agent.llm import LLMReasoningEffort, ModelId
 from industrial_ai_agent.agent.model_egress import (
     EgressCheckedLLMClient,
-    ModelEgressPolicy,
+    ModelExecutionAuthorizer,
 )
-from industrial_ai_agent.agent.model_routing import (
-    DeterministicModelRouter,
+from industrial_ai_agent.agent.model_selection import (
+    AGENT_CONSUMER,
+    AGENT_REQUIREMENTS,
+    ModelCapability,
+    ModelResolutionService,
 )
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunProfile,
@@ -29,14 +32,14 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     RoutedTroubleshootingAgentFactory,
     TroubleshootingRunService,
 )
+from industrial_ai_agent.domain.security import DEMO_RUNTIME_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     McpTransport,
     StreamableHttpServerParameters,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
-    LLMConfiguration,
-    load_llm_configuration,
-    local_only_mode_enabled,
+    ModelCatalogConfiguration,
+    load_model_catalog,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
@@ -49,17 +52,26 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpLangChainToolProvider,
     McpServerConfiguration,
 )
+from industrial_ai_agent.infrastructure.model_decision_observer import (
+    TelemetryModelDecisionObserver,
+)
 from industrial_ai_agent.infrastructure.observed_llm_client import ObservedLLMClient
 from industrial_ai_agent.infrastructure.persistence.langgraph_checkpointer import (
     PostgreSqlCheckpointerFactory,
 )
+from industrial_ai_agent.infrastructure.persistence.model_assignments import (
+    PostgreSqlModelAssignmentRepository,
+)
+from industrial_ai_agent.infrastructure.persistence.postgres import (
+    PostgreSqlSessionFactory,
+)
 from industrial_ai_agent.infrastructure.telemetry import Telemetry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MODEL_CONFIGURATION_PATH = Path(
+DEFAULT_MODEL_CATALOG_PATH = Path(
     os.getenv(
-        "MODEL_CONFIGURATION_PATH",
-        str(PROJECT_ROOT / "config" / "model_profiles.toml"),
+        "MODEL_CATALOG_PATH",
+        str(PROJECT_ROOT / "config" / "model_catalog.toml"),
     )
 )
 DEFAULT_FACTORY_MCP_URL = "http://127.0.0.1:8001/mcp"
@@ -74,32 +86,32 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
     def __init__(
         self,
         *,
-        configuration: LLMConfiguration,
+        configuration: ModelCatalogConfiguration,
         mcp_tool_provider_factory,
-        egress_policy: ModelEgressPolicy,
+        authorizer: ModelExecutionAuthorizer,
         telemetry: Telemetry | None = None,
     ) -> None:
         self._configuration = configuration
         self._mcp_tool_provider_factory = mcp_tool_provider_factory
-        self._egress_policy = egress_policy
+        self._authorizer = authorizer
         self._telemetry = telemetry
 
     def open_agent(
         self,
         *,
-        profile: ModelProfile,
+        model_id: ModelId,
         run_policy: ResolvedRunPolicy,
         checkpointer: object | None = None,
     ) -> AbstractContextManager[McpBackedTroubleshootingAgent]:
         return self._open_agent(
-            profile=profile, run_policy=run_policy, checkpointer=checkpointer
+            model_id=model_id, run_policy=run_policy, checkpointer=checkpointer
         )
 
     @contextmanager
     def _open_agent(
         self,
         *,
-        profile: ModelProfile,
+        model_id: ModelId,
         run_policy: ResolvedRunPolicy,
         checkpointer: object | None,
     ) -> Iterator[McpBackedTroubleshootingAgent]:
@@ -108,14 +120,16 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                 adapter,
                 self._configuration,
                 run_policy.data_classification,
-                policy=self._egress_policy,
+                authorizer=self._authorizer,
             )
             llm_client = (
                 ObservedLLMClient(
                     checked_client,
-                    configuration=self._configuration,
+                    catalog=self._configuration,
                     data_classification=run_policy.data_classification,
                     telemetry=self._telemetry,
+                    consumer_id=run_policy.model_consumer_id,
+                    required_capabilities=AGENT_REQUIREMENTS,
                 )
                 if self._telemetry is not None
                 else checked_client
@@ -123,13 +137,14 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
             yield LangGraphTroubleshootingAgent(
                 LLMClientChatModel(
                     llm_client,
-                    profile,
-                    supports_structured_output=self._configuration.get_profile(
-                        profile.name
-                    ).supports_structured_output,
+                    model_id,
+                    supports_structured_output=(
+                        ModelCapability.STRUCTURED_OUTPUT
+                        in self._configuration.get_model(model_id.value).capabilities
+                    ),
                     reasoning_effort=_restricted_ollama_reasoning_effort(
                         configuration=self._configuration,
-                        profile=profile,
+                        model_id=model_id,
                         run_policy=run_policy,
                     ),
                 ),
@@ -148,7 +163,7 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
 
 def create_default_troubleshooting_run_service(
     *,
-    model_configuration_path: Path = DEFAULT_MODEL_CONFIGURATION_PATH,
+    model_catalog_path: Path = DEFAULT_MODEL_CATALOG_PATH,
     mcp_transport: str | None = None,
     factory_mcp_url: str | None = None,
     knowledge_mcp_url: str | None = None,
@@ -156,10 +171,26 @@ def create_default_troubleshooting_run_service(
     runtime_database_url: str | None = None,
     telemetry: Telemetry | None = None,
     internal_diagnostic_scope_validator=None,
+    model_assignment_repository=None,
 ) -> TroubleshootingRunService:
     """Compose the local demo service without exposing deployment details to FastAPI."""
-    configuration = load_llm_configuration(model_configuration_path)
-    policy = ModelEgressPolicy()
+    configuration = load_model_catalog(model_catalog_path)
+    authorizer = ModelExecutionAuthorizer()
+    if model_assignment_repository is None and not runtime_database_url:
+        raise RuntimeError("runtime_database_url is required for model assignments")
+    assignments = model_assignment_repository or PostgreSqlModelAssignmentRepository(
+        PostgreSqlSessionFactory(runtime_database_url or ""),
+        DEMO_RUNTIME_SECURITY_CONTEXT,
+    )
+    model_resolver = ModelResolutionService(
+        catalog=configuration,
+        assignments=assignments,
+        authorizer=authorizer,
+        consumer_requirements={AGENT_CONSUMER: AGENT_REQUIREMENTS},
+        observer=(
+            TelemetryModelDecisionObserver(telemetry) if telemetry is not None else None
+        ),
+    )
     transport = mcp_transport or os.getenv("AGENT_MCP_TRANSPORT", "http")
     resolved_factory_mcp_url = factory_mcp_url or os.getenv(
         "FACTORY_MCP_URL", DEFAULT_FACTORY_MCP_URL
@@ -189,15 +220,11 @@ def create_default_troubleshooting_run_service(
         )
 
     return TroubleshootingRunService(
-        router=DeterministicModelRouter(policy),
-        profiles=configuration.get_available_routing_profiles(
-            environment=os.environ,
-            local_only=local_only_mode_enabled(),
-        ),
+        model_resolver=model_resolver,
         agent_factory=_LangGraphTroubleshootingAgentFactory(
             configuration=configuration,
             mcp_tool_provider_factory=mcp_tool_provider_factory,
-            egress_policy=policy,
+            authorizer=authorizer,
             telemetry=telemetry,
         ),
         internal_diagnostic_scope_validator=internal_diagnostic_scope_validator,
@@ -211,12 +238,12 @@ def create_default_troubleshooting_run_service(
 
 def _restricted_ollama_reasoning_effort(
     *,
-    configuration: LLMConfiguration,
-    profile: ModelProfile,
+    configuration: ModelCatalogConfiguration,
+    model_id: ModelId,
     run_policy: ResolvedRunPolicy,
 ) -> LLMReasoningEffort | None:
     """Disable unbounded local thinking for restricted agent tool workflows."""
-    profile_config = configuration.get_profile(profile.name)
+    profile_config = configuration.get_model_config(model_id.value)
     if (
         run_policy.data_classification.name == "RESTRICTED"
         and profile_config.provider.casefold() == "ollama"

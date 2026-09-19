@@ -11,13 +11,20 @@ from industrial_ai_agent.agent.llm import (
     LLMClient,
     LLMRequest,
     LLMResponse,
+    ModelId,
 )
-from industrial_ai_agent.agent.model_egress import EgressCheckedLLMClient, ExecutionZone
-from industrial_ai_agent.agent.model_routing import (
+from industrial_ai_agent.agent.model_egress import (
+    EgressCheckedLLMClient,
+    ExecutionZone,
+    ModelExecutionAuthorizer,
+)
+from industrial_ai_agent.agent.model_selection import (
+    RCA_REASONING_CONSUMER,
+    RCA_REASONING_REQUIREMENTS,
     CostClass,
-    DeterministicModelRouter,
-    LLMCapability,
-    ModelProfileMetadata,
+    ModelAssignment,
+    ModelDefinition,
+    ModelResolutionService,
     QualityClass,
 )
 from industrial_ai_agent.application.rca import (
@@ -110,12 +117,14 @@ def test_no_eligible_egress_profile_is_not_allowed_without_provider_call() -> No
         "public", ExecutionZone.PUBLIC_CLOUD, DataClassification.PUBLIC
     )
     reasoner = LlmRcaReasoner(
-        router=DeterministicModelRouter(),
-        profiles=(public_only,),
+        model_resolver=_resolver(public_only, DataClassification.RESTRICTED),
         client_factory=lambda classification, focus: client,
     )
 
-    result = reasoner.reason(_report(), focus=RcaFocus.OVERVIEW)
+    result = reasoner.reason(
+        _report(classification=DataClassification.RESTRICTED),
+        focus=RcaFocus.OVERVIEW,
+    )
 
     assert result.status is RcaReasoningStatus.NOT_ALLOWED
     assert client.calls == []
@@ -126,15 +135,19 @@ def test_final_egress_check_still_blocks_provider_after_routing() -> None:
     checked = EgressCheckedLLMClient(
         delegate,
         _FixedZoneResolver(ExecutionZone.PUBLIC_CLOUD, DataClassification.PUBLIC),
-        DataClassification.INTERNAL,
+        DataClassification.RESTRICTED,
     )
     reasoner = LlmRcaReasoner(
-        router=DeterministicModelRouter(),
-        profiles=(_profile("local", ExecutionZone.LOCAL),),
+        model_resolver=_resolver(
+            _profile("local", ExecutionZone.LOCAL), DataClassification.RESTRICTED
+        ),
         client_factory=lambda classification, focus: checked,
     )
 
-    result = reasoner.reason(_report(), focus=RcaFocus.OVERVIEW)
+    result = reasoner.reason(
+        _report(classification=DataClassification.RESTRICTED),
+        focus=RcaFocus.OVERVIEW,
+    )
 
     assert result.status is RcaReasoningStatus.NOT_ALLOWED
     assert delegate.calls == []
@@ -205,8 +218,9 @@ def test_provider_failure_and_timeout_are_isolated() -> None:
 
 def test_blocking_provider_times_out_without_failing_reasoning_caller() -> None:
     result = LlmRcaReasoner(
-        router=DeterministicModelRouter(),
-        profiles=(_profile("local", ExecutionZone.LOCAL),),
+        model_resolver=_resolver(
+            _profile("local", ExecutionZone.LOCAL), DataClassification.INTERNAL
+        ),
         client_factory=lambda classification, focus: _BlockingClient(),
         timeout_seconds=0.01,
     ).reason(_report(), focus=RcaFocus.OVERVIEW)
@@ -229,8 +243,9 @@ def test_configured_cost_and_deterministic_limitations_remain_explicit() -> None
 
 def _reasoner(client: LLMClient) -> LlmRcaReasoner:
     return LlmRcaReasoner(
-        router=DeterministicModelRouter(),
-        profiles=(_profile("local", ExecutionZone.LOCAL),),
+        model_resolver=_resolver(
+            _profile("local", ExecutionZone.LOCAL), DataClassification.INTERNAL
+        ),
         client_factory=lambda classification, focus: client,
     )
 
@@ -239,16 +254,67 @@ def _profile(
     name: str,
     zone: ExecutionZone,
     max_data_classification: DataClassification = DataClassification.RESTRICTED,
-) -> ModelProfileMetadata:
-    from industrial_ai_agent.agent.llm import ModelProfile
-
-    return ModelProfileMetadata(
-        profile=ModelProfile(name),
-        capabilities=frozenset({LLMCapability.TEXT}),
+) -> ModelDefinition:
+    return ModelDefinition(
+        model_id=ModelId(name),
+        display_name=name.title(),
+        provider="test",
+        provider_model=f"test/{name}",
+        max_data_classification=max_data_classification,
+        capabilities=RCA_REASONING_REQUIREMENTS,
         quality_class=QualityClass.STANDARD,
         cost_class=CostClass.LOW,
         execution_zone=zone,
-        max_data_classification=max_data_classification,
+    )
+
+
+class _Catalog:
+    def __init__(self, model: ModelDefinition) -> None:
+        self.model = model
+
+    def get_model(self, model_id: str) -> ModelDefinition:
+        if model_id != self.model.model_id.value:
+            raise ValueError("Unknown model")
+        return self.model
+
+    def list_models(self):
+        return (self.model,)
+
+
+class _Assignments:
+    def __init__(self, assignment: ModelAssignment) -> None:
+        self.assignment = assignment
+
+    def get(self, consumer_id, data_classification):
+        if (
+            consumer_id == self.assignment.consumer_id
+            and data_classification == self.assignment.data_classification
+        ):
+            return self.assignment
+        return None
+
+    def list(self):
+        return (self.assignment,)
+
+    def upsert(self, assignment):
+        self.assignment = assignment
+        return assignment
+
+
+def _resolver(
+    model: ModelDefinition, classification: DataClassification
+) -> ModelResolutionService:
+    return ModelResolutionService(
+        catalog=_Catalog(model),
+        assignments=_Assignments(
+            ModelAssignment(
+                consumer_id=RCA_REASONING_CONSUMER,
+                data_classification=classification,
+                model_id=model.model_id,
+            )
+        ),
+        authorizer=ModelExecutionAuthorizer(),
+        consumer_requirements={RCA_REASONING_CONSUMER: RCA_REASONING_REQUIREMENTS},
     )
 
 

@@ -102,7 +102,7 @@ the actual tool-call ID as `request_id` and calls the strict MCP tool exactly on
 
 MCP is not a model-egress boundary. The graph's model node continues to use the selected
 profile through `EgressCheckedLLMClient`; ADR-009 still blocks confidential or restricted
-context from public-cloud model profiles. A local HTTP connection to either container is
+context from disallowed public-cloud models. A local HTTP connection to either container is
 MCP service-network transport, not authorization to send factory or knowledge results to
 the selected egress-eligible cloud profile. Knowledge MCP's documents, chunks, queries,
 embeddings, and reranker

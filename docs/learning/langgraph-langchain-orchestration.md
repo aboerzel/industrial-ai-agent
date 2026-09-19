@@ -87,14 +87,15 @@ The project continues to own:
 * Domain models, invariants, repositories, and capability semantics
 * `DataClassification`, `ExecutionZone`, and `ModelEgressPolicy`
 * the final `EgressCheckedLLMClient` boundary
-* `TaskRequirements`, profile metadata, and `DeterministicModelRouter`
+* model-consumer capability requirements and `ModelResolutionService`
 * tool budgets, argument validation, dispatch, and termination guarantees
 * retrieval ports, eval datasets, ground truth, and deterministic scoring
 
-The Composition Root performs security eligibility and task-level routing before it
-constructs the graph path. It injects the selected `ModelProfile` and an
-egress-controlled client. LangGraph performs neither autonomous model routing nor
-fallback. The final pre-adapter egress check remains active for every model call.
+The Composition Root resolves the persistent assignment, validates capabilities, and
+authorizes egress before it constructs the graph path. It injects the selected stable
+`ModelId` and an egress-controlled client. LangGraph performs neither autonomous model
+selection nor fallback. The final pre-adapter egress check remains active for every
+model call.
 
 ## Checkpointing and Human Approval
 

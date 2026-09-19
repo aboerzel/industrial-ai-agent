@@ -6,7 +6,7 @@ from industrial_ai_agent.agent.llm import (
     LLMMessage,
     LLMRequest,
     MessageRole,
-    ModelProfile,
+    ModelId,
 )
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
@@ -14,8 +14,8 @@ from industrial_ai_agent.agent.model_egress import (
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
-    LLMConfiguration,
-    load_llm_configuration,
+    ModelCatalogConfiguration,
+    load_model_catalog,
 )
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
@@ -33,11 +33,9 @@ PUBLIC_EXPECTED_RESPONSE = "PUBLIC_LLM_OK"
 
 def main() -> None:
     args = parse_args()
-    profile_names = tuple(args.profiles or DEFAULT_PROFILES)
+    model_ids = tuple(args.model_ids or DEFAULT_PROFILES)
     load_local_environment(PROJECT_ROOT / ".env")
-    configuration = load_llm_configuration(
-        PROJECT_ROOT / "config" / "model_profiles.toml"
-    )
+    configuration = load_model_catalog(PROJECT_ROOT / "config" / "model_catalog.toml")
 
     with OpenAICompatibleLLMClient(configuration) as adapter:
         client = EgressCheckedLLMClient(
@@ -45,34 +43,34 @@ def main() -> None:
             configuration,
             DataClassification.PUBLIC,
         )
-        for profile_name in profile_names:
-            run_profile_smoke_test(client, configuration, profile_name)
+        for model_id in model_ids:
+            run_model_smoke_test(client, configuration, model_id)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Explicitly call one or more configured model profiles."
+        description="Explicitly call one or more configured catalog models."
     )
     parser.add_argument(
-        "--profile",
+        "--model-id",
         action="append",
-        dest="profiles",
-        metavar="PROFILE",
+        dest="model_ids",
+        metavar="MODEL_ID",
         help=(
-            "Semantic model profile to call. Repeat for multiple profiles. "
+            "Stable model ID to call. Repeat for multiple models. "
             "Defaults to local_fast and local_quality."
         ),
     )
     return parser.parse_args()
 
 
-def run_profile_smoke_test(
+def run_model_smoke_test(
     client: LLMClient,
-    configuration: LLMConfiguration,
-    profile_name: str,
+    configuration: ModelCatalogConfiguration,
+    model_id: str,
 ) -> None:
-    profile_config = configuration.get_profile(profile_name)
-    if profile_name == PUBLIC_PROFILE:
+    profile_config = configuration.get_model_config(model_id)
+    if model_id == PUBLIC_PROFILE:
         if profile_config.provider != "groq":
             raise RuntimeError("groq_benchmark is not configured for Groq")
         if profile_config.authentication is not AuthenticationMode.API_KEY:
@@ -88,23 +86,23 @@ def run_profile_smoke_test(
             )
         if profile_config.authentication is not AuthenticationMode.NONE:
             raise RuntimeError(
-                f"Local Ollama profile requires authentication: {profile_name}"
+                f"Local Ollama model requires authentication: {model_id}"
             )
         prompt = f"Reply exactly with {LOCAL_EXPECTED_RESPONSE}"
         expected_response = LOCAL_EXPECTED_RESPONSE
 
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content=prompt),))
-    response = client.chat(ModelProfile(profile_name), request)
+    response = client.chat(ModelId(model_id), request)
 
     if response.text is None or not response.text.strip():
-        raise RuntimeError(f"Smoke test response did not contain text: {profile_name}")
+        raise RuntimeError(f"Smoke test response did not contain text: {model_id}")
     actual_response = response.text.strip()
     if actual_response != expected_response:
         raise RuntimeError(
-            f"Unexpected smoke test response for {profile_name}: {actual_response}"
+            f"Unexpected smoke test response for {model_id}: {actual_response}"
         )
 
-    print(f"profile={profile_name}")
+    print(f"model_id={model_id}")
     print(f"configured_model={profile_config.model}")
     print(f"response={actual_response}")
     print(f"finish_reason={response.finish_reason.value}")

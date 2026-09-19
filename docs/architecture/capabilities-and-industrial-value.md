@@ -45,13 +45,14 @@ a production identity interface.
 
 ### Cost and efficiency
 
-Not every task needs the same model. Configured model profiles describe a model's
-capabilities, expected quality, cost category, and whether processing is local or
-external. Defined tasks can be tested with suitable profiles and compared deliberately.
+Not every workflow needs the same model. The catalog describes capabilities, expected
+quality, cost category, and execution zone. Persistent assignments select one stable
+model ID for a consumer and classification; consumer requirements and security policy
+are validated separately.
 
 This lets a team select a suitable model without rebuilding data-protection rules for
-each model vendor. The current troubleshooting route deliberately requires `HIGH`
-quality and prefers quality. Selection is rule-based, not a self-learning cost optimizer.
+each model vendor. An assignment never authorizes egress, and provider availability,
+cost, or latency never triggers an automatic fallback.
 
 ### Access control
 
@@ -79,7 +80,7 @@ traceability and limited failure impact, not high availability, failover, or an 
 
 | Capability | How it works | Value for production |
 |---|---|---|
-| Choosing a model for the task | Fixed requirements select a configured model profile by needed capability, quality, data protection, and cost preference. | Models and model vendors can change without rewriting data-protection rules. |
+| Choosing a model for the task | A persistent consumer/classification assignment resolves one stable model ID; capability and security checks then permit or deny execution. | Models and model vendors can change without rewriting data-protection rules. |
 | Data protection before model use | Before every model call, the system checks whether the selected local or external model may receive the data. Unknown or incomplete security information is refused. | Restricted production information is not sent to public-cloud models because of a fallback or configuration error. |
 | Fixed protection rules outside the AI | Strict inputs, a fixed set of allowed tools, limits on permitted tools and steps, validation, and approval rules are enforced by code. | The AI cannot turn an unsupported or unsafe proposal into an action. |
 | Secure access to data and tools | User permissions are checked on the server. Production and document data are limited at their source by RLS. Approved tools and data sources are provided through a standardized AI interface (MCP). | An employee cannot use the assistant to obtain information they are not allowed to see. |
@@ -152,23 +153,23 @@ The project supports a controlled selection process, not automatic optimization:
 
 ```mermaid
 flowchart LR
-    Task["Defined task and data-protection requirements"] --> Candidates["Approved configured model profiles"]
-    Candidates --> Tests["Versioned test cases"]
+    Task["Defined consumer requirements and data classification"] --> Catalog["Model Catalog"]
+    Catalog --> Tests["Versioned test cases"]
     Tests --> Compare["Compare defined quality and tool behavior"]
-    Compare --> Choice["Choose a model and rules deliberately"]
+    Compare --> Choice["Persist one assignment deliberately"]
     Choice --> Operation["Observe operation"]
     Operation --> Review["Review runtime, usage, and cost information when reliably available"]
     Review --> Choice
 ```
 
-The intended principle is to choose the lowest-cost *approved* model that has
-demonstrated acceptable quality for the defined task and meets latency and data-protection
-requirements. The repository supports deterministic selection and repeatable evaluations
+The intended operator process is to choose an *approved* model that has demonstrated
+acceptable quality for the consumer and meets latency and data-protection requirements.
+The repository supports explicit assignment and repeatable evaluations
 of tools and step sequences. It records operating time, token values reported by the
 model vendor when available, and costs only when their origin is reliably known.
 
-It does not create an automatic benchmark ranking, calculate total cost of ownership, or
-change the selection rules by itself.
+It does not create an automatic benchmark ranking, calculate total cost of ownership,
+change assignments by itself, or fall back to another model.
 
 ## Example production scenarios
 

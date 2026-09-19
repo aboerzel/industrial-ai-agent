@@ -178,8 +178,8 @@ def _assert_waiting_for_approval(payload: object) -> None:
         raise TypeError("FastAPI smoke did not return an approval request")
     if approval.get("action") != "create_maintenance_ticket":
         raise RuntimeError("FastAPI smoke paused for an unexpected action")
-    if approval.get("model_profile") != "local_quality":
-        raise RuntimeError("FastAPI smoke did not route to local_quality")
+    if approval.get("model_id") != "local_quality":
+        raise RuntimeError("FastAPI smoke did not retain model ID local_quality")
     tool_names = _tool_names(payload)
     if tool_names != EXPECTED_READ_TOOLS:
         raise RuntimeError(

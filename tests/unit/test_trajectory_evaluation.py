@@ -337,7 +337,7 @@ def test_agent_run_result_exposes_provider_independent_executed_trajectory() -> 
     result = run_result(product_call(), machine_call())
 
     assert result.executed_tool_calls == (product_call(), machine_call())
-    assert result.model_dump()["executed_tool_calls"] == (
+    assert result.model_dump(exclude_none=True)["executed_tool_calls"] == (
         {"tool": "get_product_history", "arguments": {"product_id": "P4711"}},
         {"tool": "get_machine_status", "arguments": {"station_id": "S04"}},
     )

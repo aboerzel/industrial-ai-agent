@@ -7,10 +7,14 @@ from industrial_ai_agent.agent.llm import (
     LLMProviderError,
     LLMRequest,
     LLMResponse,
-    ModelProfile,
+    ModelId,
 )
+from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
+from industrial_ai_agent.agent.model_selection import ModelCapability, ModelConsumerId
 from industrial_ai_agent.domain.security import DataClassification
-from industrial_ai_agent.infrastructure.llm.configuration import LLMConfiguration
+from industrial_ai_agent.infrastructure.llm.configuration import (
+    ModelCatalogConfiguration,
+)
 from industrial_ai_agent.infrastructure.telemetry import Telemetry
 
 
@@ -21,24 +25,31 @@ class ObservedLLMClient:
         self,
         delegate: LLMClient,
         *,
-        configuration: LLMConfiguration,
+        catalog: ModelCatalogConfiguration | None = None,
+        configuration: ModelCatalogConfiguration | None = None,
         data_classification: DataClassification,
         telemetry: Telemetry,
         operation_type: str | None = None,
         rca_focus: str | None = None,
+        consumer_id: ModelConsumerId | None = None,
+        required_capabilities: frozenset[ModelCapability] = frozenset(),
     ) -> None:
         self._delegate = delegate
-        self._configuration = configuration
+        self._catalog = catalog or configuration
+        if self._catalog is None:
+            raise ValueError("Model catalog is required")
         self._data_classification = data_classification
         self._telemetry = telemetry
         self._operation_type = operation_type
         self._rca_focus = rca_focus
+        self._consumer_id = consumer_id
+        self._required_capabilities = required_capabilities
 
-    def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
-        profile_config = self._configuration.get_profile(profile.name)
+    def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
+        profile_config = self._catalog.get_model_config(model_id.value)
         attributes = {
-            "model.profile": profile.name,
-            "model.name": profile_config.model,
+            "model.id": model_id.value,
+            "model.name": profile_config.provider_model,
             "model.provider": profile_config.provider,
             "execution.zone": profile_config.execution_zone.value,
             "data.classification": self._data_classification.name,
@@ -51,7 +62,7 @@ class ObservedLLMClient:
         status = "success"
         try:
             with self._telemetry.span("llm.call", attributes) as span:
-                response = self._delegate.chat(profile, request)
+                response = self._delegate.chat(model_id, request)
                 self._telemetry.set_span_attributes(
                     span,
                     _response_telemetry_attributes(
@@ -100,7 +111,55 @@ class ObservedLLMClient:
                             else None
                         ),
                     )
+                if self._consumer_id is not None:
+                    decision_attributes = {
+                        **attributes,
+                        **_response_telemetry_attributes(
+                            response, profile_config.api_cost_usd
+                        ),
+                        "operation.duration_ms": (perf_counter() - started) * 1000,
+                    }
+                    with self._telemetry.span(
+                        "model.decision",
+                        {
+                            **decision_attributes,
+                            "model.consumer_id": self._consumer_id.value,
+                            "model.required_capabilities": ",".join(
+                                sorted(
+                                    capability.value
+                                    for capability in self._required_capabilities
+                                )
+                            ),
+                            "model.capability_decision": "ALLOW",
+                            "model.egress_decision": "ALLOW",
+                            "model.decision_outcome": "EXECUTED",
+                        },
+                    ):
+                        pass
                 return response
+        except ModelEgressDeniedError:
+            status = "failure"
+            attributes["error.code"] = "model_egress_denied"
+            if self._consumer_id is not None:
+                with self._telemetry.span(
+                    "model.decision",
+                    {
+                        **attributes,
+                        "operation.duration_ms": (perf_counter() - started) * 1000,
+                        "model.consumer_id": self._consumer_id.value,
+                        "model.required_capabilities": ",".join(
+                            sorted(
+                                capability.value
+                                for capability in self._required_capabilities
+                            )
+                        ),
+                        "model.capability_decision": "ALLOW",
+                        "model.egress_decision": "DENY",
+                        "model.decision_outcome": "EGRESS_DENIED",
+                    },
+                ):
+                    pass
+            raise
         except LLMProviderError as error:
             status = "failure"
             attributes.update(

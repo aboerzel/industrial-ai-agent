@@ -9,28 +9,20 @@ from mcp.client.stdio import StdioServerParameters
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     LangGraphTroubleshootingAgent,
 )
-from industrial_ai_agent.agent.llm import ModelProfile
+from industrial_ai_agent.agent.llm import ModelId
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     EgressCheckedLLMClient,
-    ExecutionZone,
-    ModelEgressPolicy,
+    ModelExecutionAuthorizer,
 )
-from industrial_ai_agent.agent.model_routing import (
-    CostPreference,
-    DeterministicModelRouter,
-    LLMCapability,
-    QualityClass,
-    TaskRequirements,
-    TaskRole,
-)
+from industrial_ai_agent.agent.model_selection import AGENT_REQUIREMENTS
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     FactoryMcpTransport,
     StreamableHttpServerParameters,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
-    LLMConfiguration,
-    load_llm_configuration,
+    ModelCatalogConfiguration,
+    load_model_catalog,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
@@ -45,7 +37,7 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "config" / "model_profiles.toml"
+CONFIG_PATH = PROJECT_ROOT / "config" / "model_catalog.toml"
 PUBLIC_PROMPT = "Reply exactly with LANGGRAPH_LLM_OK. Do not call a tool."
 CONFIDENTIAL_PROMPT = (
     "P4711 failed during production. Investigate what happened and check the current "
@@ -57,54 +49,29 @@ CONFIDENTIAL_PROMPT = (
 def main() -> None:
     args = _parse_args()
     load_local_environment(PROJECT_ROOT / ".env")
-    configuration = load_llm_configuration(CONFIG_PATH)
-    policy = ModelEgressPolicy()
+    configuration = load_model_catalog(CONFIG_PATH)
+    authorizer = ModelExecutionAuthorizer()
 
     if args.confidential_troubleshooting:
-        requirements = TaskRequirements(
-            task_role=TaskRole.TROUBLESHOOTING,
-            required_capabilities=frozenset(
-                {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-            ),
-            minimum_quality=QualityClass.HIGH,
-            cost_preference=CostPreference.PREFER_QUALITY,
-            data_classification=DataClassification.CONFIDENTIAL,
-        )
-        candidates = configuration.get_routing_profiles()
+        model_id = ModelId("local_quality")
+        data_classification = DataClassification.CONFIDENTIAL
         prompt = CONFIDENTIAL_PROMPT
     else:
-        requested_profile = ModelProfile(args.profile)
-        candidates = tuple(
-            candidate
-            for candidate in configuration.get_routing_profiles()
-            if candidate.profile == requested_profile
-        )
-        if not candidates:
-            raise ValueError(f"Unknown model profile: {requested_profile.name}")
-        requirements = TaskRequirements(
-            task_role=TaskRole.GENERAL_REASONING,
-            required_capabilities=frozenset({LLMCapability.TEXT}),
-            minimum_quality=candidates[0].quality_class,
-            cost_preference=CostPreference.BALANCED,
-            data_classification=DataClassification.PUBLIC,
-        )
+        model_id = ModelId(args.model_id)
+        data_classification = DataClassification.PUBLIC
         prompt = PUBLIC_PROMPT
 
-    selected_profile = DeterministicModelRouter(policy).route(
-        requirements,
-        candidates,
-    )
-    _assert_expected_zone(configuration, requirements, selected_profile)
+    _validate_model(configuration, model_id, data_classification, authorizer)
 
     with OpenAICompatibleLLMClient(configuration) as adapter:
         checked_client = EgressCheckedLLMClient(
             adapter,
             configuration,
-            requirements.data_classification,
-            policy=policy,
+            data_classification,
+            authorizer=authorizer,
         )
         agent = LangGraphTroubleshootingAgent(
-            LLMClientChatModel(checked_client, selected_profile),
+            LLMClientChatModel(checked_client, model_id),
             mcp_tool_provider=McpLangChainToolProvider(_mcp_servers_from_args(args)),
         )
         session_lines: list[str] = []
@@ -143,8 +110,8 @@ def main() -> None:
             raise RuntimeError(
                 f"MCP troubleshooting smoke expected {expected_tools}, got {actual_tools}"
             )
-    print(f"selected_profile={selected_profile.name}")
-    print(f"classification={requirements.data_classification.name}")
+    print(f"model_id={model_id.value}")
+    print(f"classification={data_classification.name}")
     print(f"status={result.status.value}")
     print(f"tool_call_count={result.tool_call_count}")
     for line in session_lines:
@@ -152,17 +119,18 @@ def main() -> None:
     print(result.final_answer)
 
 
-def _assert_expected_zone(
-    configuration: LLMConfiguration,
-    requirements: TaskRequirements,
-    selected_profile: ModelProfile,
+def _validate_model(
+    configuration: ModelCatalogConfiguration,
+    model_id: ModelId,
+    data_classification: DataClassification,
+    authorizer: ModelExecutionAuthorizer,
 ) -> None:
-    if (
-        requirements.data_classification is DataClassification.CONFIDENTIAL
-        and configuration.get_execution_zone(selected_profile.name)
-        is not ExecutionZone.LOCAL
-    ):
-        raise RuntimeError("Confidential smoke test selected a non-local profile")
+    model = configuration.get_model(model_id.value)
+    if not AGENT_REQUIREMENTS <= model.capabilities:
+        raise RuntimeError("Configured smoke-test model lacks agent capabilities")
+    authorizer.require_allowed(
+        data_classification, model.execution_zone, model.max_data_classification
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -170,7 +138,7 @@ def _parse_args() -> argparse.Namespace:
         description="Run explicit LangGraph troubleshooting smoke scenarios."
     )
     selection = parser.add_mutually_exclusive_group(required=True)
-    selection.add_argument("--profile")
+    selection.add_argument("--model-id")
     selection.add_argument("--confidential-troubleshooting", action="store_true")
     parser.add_argument(
         "--mcp-transport",

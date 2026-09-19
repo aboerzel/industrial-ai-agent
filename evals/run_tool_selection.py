@@ -12,25 +12,20 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     LangGraphTroubleshootingAgent,
 )
-from industrial_ai_agent.agent.llm import LLMResponse, ModelProfile
+from industrial_ai_agent.agent.llm import LLMResponse, ModelId
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     EgressCheckedLLMClient,
+    ModelExecutionAuthorizer,
 )
-from industrial_ai_agent.agent.model_routing import (
-    CostPreference,
-    DeterministicModelRouter,
-    LLMCapability,
-    TaskRequirements,
-    TaskRole,
-)
+from industrial_ai_agent.agent.model_selection import AGENT_REQUIREMENTS
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     FactoryMcpTransport,
     StreamableHttpServerParameters,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
-    LLMConfiguration,
-    load_llm_configuration,
+    ModelCatalogConfiguration,
+    load_model_catalog,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
@@ -47,7 +42,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_PATH = (
     PROJECT_ROOT / "evals" / "datasets" / "troubleshooting_tool_selection_v1.jsonl"
 )
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "model_profiles.toml"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "model_catalog.toml"
 
 
 class ToolSelectionEvalCase(BaseModel):
@@ -257,7 +252,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate the first troubleshooting LLM tool-selection decision."
     )
-    parser.add_argument("--profile", default="troubleshooting")
+    parser.add_argument("--model-id", default="local_quality")
     parser.add_argument("--mcp-transport", choices=("stdio", "http"), default="stdio")
     parser.add_argument("--mcp-url", default="http://127.0.0.1:8001/mcp")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET_PATH)
@@ -274,8 +269,8 @@ def main() -> None:
     args = _parse_args()
     load_local_environment(PROJECT_ROOT / ".env")
     cases = load_eval_cases(args.dataset)
-    configuration = load_llm_configuration(args.config)
-    requested_profile = ModelProfile(args.profile)
+    configuration = load_model_catalog(args.config)
+    requested_model = ModelId(args.model_id)
     request_classification = DataClassification.INTERNAL
     with OpenAICompatibleLLMClient(configuration) as adapter:
         llm_client = EgressCheckedLLMClient(
@@ -283,14 +278,13 @@ def main() -> None:
             configuration,
             request_classification,
         )
-        model_profile = _route_requested_profile(
+        model_id = _validate_requested_model(
             configuration,
-            requested_profile,
-            TaskRole.TOOL_SELECTION,
+            requested_model,
             request_classification,
         )
         agent = LangGraphTroubleshootingAgent(
-            LLMClientChatModel(llm_client, model_profile),
+            LLMClientChatModel(llm_client, model_id),
             mcp_tool_provider=McpLangChainToolProvider(_mcp_transport_from_args(args)),
         )
         report = asyncio.run(
@@ -298,7 +292,7 @@ def main() -> None:
                 cases=cases,
                 request_tool_selection=agent.request_tool_selection_via_mcp,
                 dataset=args.dataset.name,
-                model_profile=model_profile.name,
+                model_profile=model_id.value,
                 orchestration_path="langgraph-mcp",
             )
         )
@@ -313,32 +307,20 @@ def main() -> None:
         output_path.write_text(f"{serialized_report}\n", encoding="utf-8")
 
 
-def _route_requested_profile(
-    configuration: LLMConfiguration,
-    requested_profile: ModelProfile,
-    task_role: TaskRole,
+def _validate_requested_model(
+    configuration: ModelCatalogConfiguration,
+    requested_model: ModelId,
     data_classification: DataClassification,
-) -> ModelProfile:
-    candidates = tuple(
-        profile
-        for profile in configuration.get_routing_profiles()
-        if profile.profile == requested_profile
+) -> ModelId:
+    model = configuration.get_model(requested_model.value)
+    if not AGENT_REQUIREMENTS <= model.capabilities:
+        raise ValueError("Configured evaluation model lacks agent capabilities")
+    ModelExecutionAuthorizer().require_allowed(
+        data_classification,
+        model.execution_zone,
+        model.max_data_classification,
     )
-    if not candidates:
-        raise ValueError(f"Unknown model profile: {requested_profile.name}")
-    candidate = candidates[0]
-    return DeterministicModelRouter().route(
-        TaskRequirements(
-            task_role=task_role,
-            required_capabilities=frozenset(
-                {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-            ),
-            minimum_quality=candidate.quality_class,
-            cost_preference=CostPreference.BALANCED,
-            data_classification=data_classification,
-        ),
-        candidates,
-    )
+    return requested_model
 
 
 def _mcp_transport_from_args(args: argparse.Namespace) -> FactoryMcpTransport:

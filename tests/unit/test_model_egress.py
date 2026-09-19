@@ -18,6 +18,7 @@ from industrial_ai_agent.agent.model_egress import (
     ExecutionZone,
     ModelEgressDeniedError,
     ModelEgressPolicy,
+    ModelExecutionAuthorizer,
     effective_data_classification,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
@@ -188,7 +189,7 @@ def test_denied_public_cloud_request_never_reaches_adapter() -> None:
         FixedExecutionZoneResolver(
             ExecutionZone.PUBLIC_CLOUD, DataClassification.PUBLIC
         ),
-        DataClassification.CONFIDENTIAL,
+        DataClassification.RESTRICTED,
     )
 
     with pytest.raises(ModelEgressDeniedError, match="Model egress denied by policy"):
@@ -202,7 +203,7 @@ def test_s04_confidential_egress_uses_the_same_final_policy_for_new_public_profi
     profile_name: str,
 ) -> None:
     configuration = load_llm_configuration(
-        PROJECT_ROOT / "config" / "model_profiles.toml"
+        PROJECT_ROOT / "config" / "model_catalog.toml"
     )
     adapter = RecordingLLMClient()
     request = create_request("S04 position-reference observation")
@@ -216,7 +217,7 @@ def test_s04_confidential_egress_uses_the_same_final_policy_for_new_public_profi
 
     assert response.text == "response"
     assert adapter.calls == [(ModelProfile(profile_name), request)]
-    assert ModelEgressPolicy().is_allowed(
+    assert ModelExecutionAuthorizer().is_allowed(
         DataClassification.CONFIDENTIAL,
         configuration.get_execution_zone(profile_name),
         configuration.get_max_data_classification(profile_name),

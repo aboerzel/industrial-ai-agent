@@ -5,7 +5,7 @@ from industrial_ai_agent.agent.llm import (
     LLMClient,
     LLMRequest,
     LLMResponse,
-    ModelProfile,
+    ModelId,
 )
 from industrial_ai_agent.domain.security import (
     DataClassification,
@@ -27,9 +27,9 @@ class DataClassificationBoundaryError(RuntimeError):
 
 
 class ModelExecutionZoneResolver(Protocol):
-    def get_execution_zone(self, profile_name: str) -> object | None: ...
+    def get_execution_zone(self, model_id: str) -> object | None: ...
 
-    def get_max_data_classification(self, profile_name: str) -> object | None: ...
+    def get_max_data_classification(self, model_id: str) -> object | None: ...
 
 
 class ModelEgressPolicy:
@@ -74,6 +74,34 @@ class ModelEgressPolicy:
             raise ModelEgressDeniedError("Model egress denied by policy")
 
 
+class ModelExecutionAuthorizer:
+    """Authoritative fail-closed facade over the unchanged ADR-009 combinations."""
+
+    def __init__(self, policy: ModelEgressPolicy | None = None) -> None:
+        self._policy = policy or ModelEgressPolicy()
+
+    def is_allowed(
+        self,
+        data_classification: object | None,
+        execution_zone: object | None,
+        max_data_classification: object | None,
+    ) -> bool:
+        return self._policy.is_allowed(
+            data_classification, execution_zone, max_data_classification
+        )
+
+    def require_allowed(
+        self,
+        data_classification: object | None,
+        execution_zone: object | None,
+        max_data_classification: object | None,
+    ) -> None:
+        if not self.is_allowed(
+            data_classification, execution_zone, max_data_classification
+        ):
+            raise ModelEgressDeniedError("Model egress denied by policy")
+
+
 class EgressCheckedLLMClient:
     def __init__(
         self,
@@ -81,24 +109,27 @@ class EgressCheckedLLMClient:
         execution_zone_resolver: ModelExecutionZoneResolver,
         request_classification: DataClassification | None,
         *,
+        authorizer: ModelExecutionAuthorizer | None = None,
         policy: ModelEgressPolicy | None = None,
     ) -> None:
         self._delegate = delegate
         self._execution_zone_resolver = execution_zone_resolver
         self._request_classification = request_classification
-        self._policy = policy or ModelEgressPolicy()
+        self._authorizer = authorizer or ModelExecutionAuthorizer(policy)
 
-    def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
-        execution_zone = self._execution_zone_resolver.get_execution_zone(profile.name)
-        max_data_classification = (
-            self._execution_zone_resolver.get_max_data_classification(profile.name)
+    def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
+        execution_zone = self._execution_zone_resolver.get_execution_zone(
+            model_id.value
         )
-        self._policy.require_allowed(
+        max_data_classification = (
+            self._execution_zone_resolver.get_max_data_classification(model_id.value)
+        )
+        self._authorizer.require_allowed(
             self._request_classification,
             execution_zone,
             max_data_classification,
         )
-        return self._delegate.chat(profile, request)
+        return self._delegate.chat(model_id, request)
 
     def raise_request_classification(self, classification: DataClassification) -> None:
         """Monotonically retain the highest classified data observed in this run."""

@@ -1,53 +1,58 @@
-[profiles.local_fast]
+[[models]]
+id = "local_fast"
+display_name = "Local Qwen 3.5 4B"
 provider = "ollama"
-model = "qwen3.5:4b"
+provider_model = "qwen3.5:4b"
 base_url = "http://localhost:11434/v1"
 temperature = 0
 authentication = "none"
 execution_zone = "LOCAL"
 max_data_classification = "RESTRICTED"
-capabilities = ["TEXT", "TOOL_CALLING"]
+cost_class = "LOW"
 quality_class = "STANDARD"
-cost_class = "LOW"
-supports_structured_output = true
+capabilities = ["text", "tool_calling", "structured_output"]
 supports_reasoning_effort = true
 max_output_tokens = 192
 api_cost_usd = 0
 
-[profiles.local_quality]
+[[models]]
+id = "local_quality"
+display_name = "Local Qwen 3.5 9B"
 provider = "ollama"
-model = "qwen3.5:9b"
+provider_model = "qwen3.5:9b"
 base_url = "http://localhost:11434/v1"
 temperature = 0
 authentication = "none"
 execution_zone = "LOCAL"
 max_data_classification = "RESTRICTED"
-capabilities = ["TEXT", "TOOL_CALLING"]
-quality_class = "HIGH"
 cost_class = "LOW"
-supports_structured_output = true
+quality_class = "HIGH"
+capabilities = ["text", "tool_calling", "structured_output"]
 supports_reasoning_effort = true
 max_output_tokens = 192
 api_cost_usd = 0
 
-[profiles.groq_benchmark]
+[[models]]
+id = "groq_benchmark"
+display_name = "Groq GPT OSS 20B"
 provider = "groq"
-model = "openai/gpt-oss-20b"
+provider_model = "openai/gpt-oss-20b"
 base_url = "https://api.groq.com/openai/v1"
 temperature = 0
 authentication = "api_key"
 api_key_env = "GROQ_API_KEY"
 execution_zone = "PUBLIC_CLOUD"
 max_data_classification = "CONFIDENTIAL"
-capabilities = ["TEXT", "TOOL_CALLING"]
-quality_class = "HIGH"
 cost_class = "LOW"
-automatic_routing = false
+quality_class = "HIGH"
+capabilities = ["text", "tool_calling"]
 
-[profiles.mistral_fast]
+[[models]]
+id = "mistral_fast"
+display_name = "Mistral Small"
 provider = "mistral"
-model = "mistral-small-latest"
-model_env = "MISTRAL_MODEL"
+provider_model = "mistral-small-latest"
+provider_model_env = "MISTRAL_MODEL"
 base_url = "https://api.mistral.ai/v1"
 base_url_env = "MISTRAL_BASE_URL"
 temperature = 0
@@ -55,15 +60,16 @@ authentication = "api_key"
 api_key_env = "MISTRAL_API_KEY"
 execution_zone = "PUBLIC_CLOUD"
 max_data_classification = "CONFIDENTIAL"
-capabilities = ["TEXT", "TOOL_CALLING"]
-quality_class = "STANDARD"
 cost_class = "LOW"
-automatic_routing = false
+quality_class = "STANDARD"
+capabilities = ["text", "tool_calling"]
 
-[profiles.nvidia_quality]
+[[models]]
+id = "nvidia_quality"
+display_name = "NVIDIA Nemotron 3.5 Lightning"
 provider = "nvidia"
-model = "nvidia/nemotron-3.5-lightning-30b-a3b"
-model_env = "NVIDIA_MODEL"
+provider_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
+provider_model_env = "NVIDIA_MODEL"
 base_url = "https://integrate.api.nvidia.com/v1"
 base_url_env = "NVIDIA_BASE_URL"
 temperature = 0
@@ -71,8 +77,7 @@ authentication = "api_key"
 api_key_env = "NVIDIA_API_KEY"
 execution_zone = "PUBLIC_CLOUD"
 max_data_classification = "CONFIDENTIAL"
-capabilities = ["TEXT", "TOOL_CALLING"]
-quality_class = "HIGH"
 cost_class = "HIGH"
-supports_structured_output = true
+quality_class = "HIGH"
+capabilities = ["text", "tool_calling", "structured_output"]
 max_output_tokens = 256

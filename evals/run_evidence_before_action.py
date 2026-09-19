@@ -19,25 +19,20 @@ from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     CREATE_MAINTENANCE_TICKET_TOOL_NAME,
     LangGraphTroubleshootingAgent,
 )
-from industrial_ai_agent.agent.llm import ModelProfile
+from industrial_ai_agent.agent.llm import ModelId
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     EgressCheckedLLMClient,
+    ModelExecutionAuthorizer,
 )
-from industrial_ai_agent.agent.model_routing import (
-    CostPreference,
-    DeterministicModelRouter,
-    LLMCapability,
-    TaskRequirements,
-    TaskRole,
-)
+from industrial_ai_agent.agent.model_selection import AGENT_REQUIREMENTS
 from industrial_ai_agent.domain.security import DEMO_ENGINEER_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     StreamableHttpServerParameters,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
-    LLMConfiguration,
-    load_llm_configuration,
+    ModelCatalogConfiguration,
+    load_model_catalog,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
@@ -197,10 +192,8 @@ async def run_evaluation(
 ) -> EvaluationAggregate:
     ticket_count_before = _ticket_count(database_url)
     observations: list[EvidenceEvalObservation] = []
-    configuration = load_llm_configuration(
-        PROJECT_ROOT / "config" / "model_profiles.toml"
-    )
-    profile = _route_local_quality(configuration)
+    configuration = load_model_catalog(PROJECT_ROOT / "config" / "model_catalog.toml")
+    model_id = _validate_local_quality(configuration)
     provider = _mcp_tool_provider()
     async with open_langgraph_postgres_checkpointer(database_url) as checkpointer:
         with OpenAICompatibleLLMClient(configuration) as adapter:
@@ -210,7 +203,7 @@ async def run_evaluation(
                 DataClassification.CONFIDENTIAL,
             )
             agent = LangGraphTroubleshootingAgent(
-                LLMClientChatModel(checked_client, profile),
+                LLMClientChatModel(checked_client, model_id),
                 mcp_tool_provider=provider,
                 checkpointer=checkpointer,
                 run_classification=DataClassification.CONFIDENTIAL,
@@ -406,29 +399,17 @@ def _rate(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
-def _route_local_quality(configuration: LLMConfiguration) -> ModelProfile:
-    candidate = next(
-        (
-            profile
-            for profile in configuration.get_routing_profiles()
-            if profile.profile.name == "local_quality"
-        ),
-        None,
+def _validate_local_quality(configuration: ModelCatalogConfiguration) -> ModelId:
+    model_id = ModelId("local_quality")
+    model = configuration.get_model(model_id.value)
+    if not AGENT_REQUIREMENTS <= model.capabilities:
+        raise ValueError("local_quality lacks agent capabilities")
+    ModelExecutionAuthorizer().require_allowed(
+        DataClassification.CONFIDENTIAL,
+        model.execution_zone,
+        model.max_data_classification,
     )
-    if candidate is None:
-        raise ValueError("local_quality profile is not configured")
-    return DeterministicModelRouter().route(
-        TaskRequirements(
-            task_role=TaskRole.TROUBLESHOOTING,
-            required_capabilities=frozenset(
-                {LLMCapability.TEXT, LLMCapability.TOOL_CALLING}
-            ),
-            minimum_quality=candidate.quality_class,
-            cost_preference=CostPreference.BALANCED,
-            data_classification=DataClassification.CONFIDENTIAL,
-        ),
-        (candidate,),
-    )
+    return model_id
 
 
 def _mcp_tool_provider() -> McpLangChainToolProvider:

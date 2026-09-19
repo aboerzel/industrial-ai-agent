@@ -15,12 +15,12 @@ from industrial_ai_agent.agent.llm import (
     LLMResponse,
     LLMToolCall,
     LLMUsage,
-    ModelProfile,
+    ModelId,
 )
 from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
-    LLMConfiguration,
-    ModelProfileConfig,
+    ModelCatalogConfiguration,
+    ModelConfig,
 )
 
 _FINISH_REASONS = {
@@ -50,7 +50,7 @@ _PROVIDER_UNAVAILABLE_STATUS_CODES = frozenset({502, 503, 504})
 class OpenAICompatibleLLMClient:
     def __init__(
         self,
-        configuration: LLMConfiguration,
+        configuration: ModelCatalogConfiguration,
         *,
         environment: Mapping[str, str] | None = None,
         client_factory: Callable[..., Any] = OpenAI,
@@ -60,12 +60,14 @@ class OpenAICompatibleLLMClient:
         self._client_factory = client_factory
         self._clients: dict[str, Any] = {}
 
-    def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
-        profile_config = self._configuration.get_profile(profile.name)
-        client = self._get_client(profile)
+    def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
+        profile_config = self._configuration.get_model_config(model_id.value)
+        client = self._get_client(model_id)
         parameters: dict[str, Any] = {
             "model": _resolve_configured_value(
-                profile_config.model, profile_config.model_env, self._environment
+                profile_config.provider_model,
+                profile_config.provider_model_env,
+                self._environment,
             ),
             "messages": [_serialize_message(message) for message in request.messages],
             "temperature": profile_config.temperature,
@@ -87,18 +89,14 @@ class OpenAICompatibleLLMClient:
             # The bounded ADR-004 loop accepts exactly one next tool decision.
             parameters["parallel_tool_calls"] = False
         if request.response_format is not None:
-            if not profile_config.supports_structured_output:
-                raise ValueError(
-                    "Model profile does not support structured response output"
-                )
+            if "structured_output" not in profile_config.capabilities:
+                raise ValueError("Model does not support structured response output")
             parameters["response_format"] = request.response_format.model_dump(
                 mode="json", by_alias=True
             )
         if request.reasoning_effort is not None:
             if not profile_config.supports_reasoning_effort:
-                raise ValueError(
-                    "Model profile does not support reasoning-effort control"
-                )
+                raise ValueError("Model does not support reasoning-effort control")
             # Ollama's OpenAI-compatible endpoint accepts the documented
             # ``reasoning_effort`` field. Sending native ``think`` through
             # ``extra_body`` leaves Qwen thinking enabled on this endpoint.
@@ -145,10 +143,10 @@ class OpenAICompatibleLLMClient:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def _get_client(self, profile: ModelProfile) -> Any:
-        if profile.name not in self._clients:
-            profile_config = self._configuration.get_profile(profile.name)
-            self._clients[profile.name] = self._client_factory(
+    def _get_client(self, model_id: ModelId) -> Any:
+        if model_id.value not in self._clients:
+            profile_config = self._configuration.get_model_config(model_id.value)
+            self._clients[model_id.value] = self._client_factory(
                 api_key=self._resolve_api_key(profile_config),
                 base_url=_resolve_configured_value(
                     str(profile_config.base_url),
@@ -160,15 +158,15 @@ class OpenAICompatibleLLMClient:
                 # the bounded Agent execution deadline.
                 max_retries=_SDK_MAX_RETRIES,
             )
-        return self._clients[profile.name]
+        return self._clients[model_id.value]
 
-    def _resolve_api_key(self, profile_config: ModelProfileConfig) -> str:
+    def _resolve_api_key(self, profile_config: ModelConfig) -> str:
         if profile_config.authentication is AuthenticationMode.NONE:
             return _NO_AUTH_SDK_API_KEY
 
         api_key_env = profile_config.api_key_env
         if api_key_env is None:
-            raise ValueError("Authenticated model profile is missing api_key_env")
+            raise ValueError("Authenticated model is missing api_key_env")
         api_key = self._environment.get(api_key_env)
         if not api_key:
             raise ValueError(f"Missing API key environment variable: {api_key_env}")
