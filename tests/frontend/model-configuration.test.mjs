@@ -43,6 +43,26 @@ test("shows missing assignment and catalog references without choosing a fallbac
   assert.match(content.textContent, /Unconfigured. No model will be selected automatically/);
 });
 
+test("renders automatic mode, policy, required capabilities, and eligible display names", () => {
+  const { content } = render([{
+    consumer_id: "agent",
+    data_classification: "RESTRICTED",
+    model_id: null,
+    selection_mode: "AUTO",
+    selection_policy: "QUALITY_FIRST",
+  }]);
+  const mode = content.querySelector('[aria-label="Agent RESTRICTED selection mode"] input:checked');
+  const policy = content.querySelector('[aria-label="Agent RESTRICTED automatic selection policy"]');
+  const model = content.querySelector('[aria-label="Agent RESTRICTED model"]');
+
+  assert.equal(mode.value, "AUTO");
+  assert.equal(policy.value, "QUALITY_FIRST");
+  assert.equal(model.disabled, true);
+  assert.match(content.textContent, /Required capabilities: Text, Tool Calling, Structured Output/);
+  assert.match(content.textContent, /Currently eligible: Local Qwen 3.5 9B/);
+  assert.doesNotMatch(content.textContent, /local_quality/);
+});
+
 function render(assignments = [{ consumer_id: "agent", data_classification: "RESTRICTED", model_id: "local_quality" }]) {
   const dom = new JSDOM("<main id='content'></main>");
   globalThis.window = dom.window;

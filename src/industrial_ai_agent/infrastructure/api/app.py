@@ -240,12 +240,16 @@ def create_app(
         payload: AssignModelRequest, request: Request
     ) -> ModelAssignmentResponse:
         try:
-            assignment = _model_configuration_service(request).assign(
+            assignment = _model_configuration_service(request).configure(
                 consumer_id=ModelConsumerId(payload.consumer_id),
                 data_classification=DataClassification[
                     payload.data_classification.value
                 ],
-                model_id=ModelId(payload.model_id),
+                selection_mode=payload.selection_mode,
+                model_id=(
+                    ModelId(payload.model_id) if payload.model_id is not None else None
+                ),
+                selection_policy=payload.selection_policy,
                 updated_by="api",
             )
         except ModelAssignmentPolicyError as error:
@@ -619,7 +623,11 @@ def _model_assignment_response(
         data_classification=DataClassificationLabel[
             assignment.data_classification.name
         ],
-        model_id=assignment.model_id.value,
+        model_id=(
+            assignment.model_id.value if assignment.model_id is not None else None
+        ),
+        selection_mode=assignment.selection_mode,
+        selection_policy=assignment.selection_policy,
         updated_at=(
             assignment.updated_at.isoformat()
             if assignment.updated_at is not None

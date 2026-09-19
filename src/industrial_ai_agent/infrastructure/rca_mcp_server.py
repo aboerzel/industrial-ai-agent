@@ -414,6 +414,9 @@ def _create_rca_reasoner(
         observer=(
             TelemetryModelDecisionObserver(telemetry) if telemetry is not None else None
         ),
+        model_is_statically_available=lambda model: configuration.is_model_available(
+            model.model_id.value, environment=os.environ
+        ),
     )
     return LlmRcaReasoner(
         model_resolver=resolver,

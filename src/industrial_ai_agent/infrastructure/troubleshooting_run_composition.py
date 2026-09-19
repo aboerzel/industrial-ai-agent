@@ -190,6 +190,9 @@ def create_default_troubleshooting_run_service(
         observer=(
             TelemetryModelDecisionObserver(telemetry) if telemetry is not None else None
         ),
+        model_is_statically_available=lambda model: configuration.is_model_available(
+            model.model_id.value, environment=os.environ
+        ),
     )
     transport = mcp_transport or os.getenv("AGENT_MCP_TRANSPORT", "http")
     resolved_factory_mcp_url = factory_mcp_url or os.getenv(

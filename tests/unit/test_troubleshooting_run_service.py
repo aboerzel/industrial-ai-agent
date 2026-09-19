@@ -107,6 +107,28 @@ class FailingFactory(CapturingFactory):
         yield FailingAgent()
 
 
+class ProviderFailingAgent:
+    @staticmethod
+    async def aanswer_via_mcp(
+        user_request: str, *, response_language: ResponseLanguage | None = None
+    ) -> AgentRunResult:
+        raise RuntimeError("provider timeout")
+
+
+class ProviderFailingFactory(CapturingFactory):
+    @contextmanager
+    def _open_agent(
+        self,
+        *,
+        model_id: ModelId,
+        run_policy: ResolvedRunPolicy,
+    ) -> Iterator[McpBackedTroubleshootingAgent]:
+        self.model_id = model_id
+        self.classification = run_policy.data_classification
+        self.run_policy = run_policy
+        yield ProviderFailingAgent()
+
+
 class FixedResolver:
     def __init__(self, model: ModelDefinition) -> None:
         self.model = model
@@ -122,6 +144,16 @@ class FixedResolver:
             egress_allowed=True,
             run_id=run_id,
         )
+
+
+class CountingResolver(FixedResolver):
+    def __init__(self, model: ModelDefinition) -> None:
+        super().__init__(model)
+        self.calls = 0
+
+    def resolve_model(self, consumer_id, data_classification, *, run_id=None):
+        self.calls += 1
+        return super().resolve_model(consumer_id, data_classification, run_id=run_id)
 
 
 def _selected_model() -> ModelDefinition:
@@ -167,6 +199,19 @@ def test_single_cause_exception_group_preserves_invalid_tool_arguments_error() -
 
     with pytest.raises(InvalidToolArgumentsError, match="get_product_history"):
         asyncio.run(service.run("Investigate P4711."))
+
+
+def test_provider_failure_does_not_reselect_or_fallback() -> None:
+    resolver = CountingResolver(_selected_model())
+    service = TroubleshootingRunService(
+        model_resolver=resolver,
+        agent_factory=ProviderFailingFactory(),
+    )
+
+    with pytest.raises(RuntimeError, match="provider timeout"):
+        asyncio.run(service.run("Investigate P4711."))
+
+    assert resolver.calls == 1
 
 
 def test_hardware_approval_preserves_the_graph_action_identity() -> None:

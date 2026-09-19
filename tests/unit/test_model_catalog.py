@@ -101,3 +101,13 @@ def test_api_key_authentication_requires_environment_variable_name() -> None:
                 ]
             }
         )
+
+
+def test_catalog_static_availability_requires_configured_api_key() -> None:
+    catalog = load_model_catalog(PROJECT_ROOT / "config" / "model_catalog.toml")
+
+    assert catalog.is_model_available("local_quality", environment={})
+    assert not catalog.is_model_available("nvidia_quality", environment={})
+    assert catalog.is_model_available(
+        "nvidia_quality", environment={"NVIDIA_API_KEY": "configured-key"}
+    )

@@ -328,6 +328,14 @@ select:focus, textarea:focus {
 .model-assignment-row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: start; border-top: 1px solid #e0e7e4; padding: 14px 0; }
 .model-assignment-row h4 { margin: 7px 0 0; font-size: .84rem; }
 .model-assignment-row select { flex: 1 1 180px; width: 100%; border: 1px solid #a6b5b0; border-radius: 4px; padding: 7px; color: #233231; background: #fcfdfd; font-weight: 700; }
+.model-selection-mode { display: inline-flex; flex: 0 0 auto; gap: 0; margin: 0; border: 0; padding: 0; }
+.model-selection-mode input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+.model-selection-mode label { border: 1px solid #a6b5b0; padding: 7px 10px; color: #35504b; background: #fcfdfd; font-size: .78rem; font-weight: 700; cursor: pointer; }
+.model-selection-mode label + input + label { border-left: 0; }
+.model-selection-mode label:first-of-type { border-radius: 4px 0 0 4px; }
+.model-selection-mode label:last-of-type { border-radius: 0 4px 4px 0; }
+.model-selection-mode input:checked + label { color: #fff; background: #17685b; }
+.model-selection-mode input:focus-visible + label { outline: 2px solid #17685b; outline-offset: 2px; }
 .model-assignment-meta { flex: 2 1 260px; }
 .model-assignment-meta p, .model-assignment-feedback { margin: 0 0 4px; color: #53615f; font-size: .78rem; }
 .model-assignment-feedback { flex: 1 1 100%; }

@@ -259,9 +259,12 @@ test("persists model configuration with stable model_id values", async () => {
       consumer_id: "agent",
       data_classification: "RESTRICTED",
       model_id: "local_quality",
+      selection_mode: "MANUAL",
+      selection_policy: null,
     });
     return new Response(JSON.stringify({
       consumer_id: "agent", data_classification: "RESTRICTED", model_id: "local_quality",
+      selection_mode: "MANUAL", selection_policy: null,
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
   try {

@@ -22,6 +22,11 @@ def test_model_execution_dashboard_uses_catalog_display_names_and_stable_identit
     assert "Run-Level Execution Path" in {
         panel["title"] for panel in dashboard["panels"]
     }
+    assert "Selection Mode and Policy" in {
+        panel["title"] for panel in dashboard["panels"]
+    }
+    assert "model_selection_mode" in rendered
+    assert "model_selection_policy" in rendered
 
 
 def test_model_execution_dashboard_distinguishes_all_policy_outcomes() -> None:

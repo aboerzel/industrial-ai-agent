@@ -17,6 +17,8 @@ from industrial_ai_agent.agent.model_egress import ExecutionZone
 from industrial_ai_agent.agent.model_selection import (
     CostClass,
     ModelCapability,
+    ModelSelectionMode,
+    ModelSelectionPolicy,
     QualityClass,
 )
 from industrial_ai_agent.agent.response_language import ResponseLanguage
@@ -89,7 +91,9 @@ class ModelAssignmentResponse(BaseModel):
         str, StringConstraints(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
     ]
     data_classification: DataClassificationLabel
-    model_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")]
+    model_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")] | None
+    selection_mode: ModelSelectionMode
+    selection_policy: ModelSelectionPolicy | None = None
     updated_at: str | None = None
     updated_by: str | None = None
 
@@ -111,7 +115,11 @@ class AssignModelRequest(BaseModel):
         str, StringConstraints(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
     ]
     data_classification: DataClassificationLabel
-    model_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")]
+    model_id: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]*$")] | None = (
+        None
+    )
+    selection_mode: ModelSelectionMode = ModelSelectionMode.MANUAL
+    selection_policy: ModelSelectionPolicy | None = None
 
 
 class CreateRunRequest(BaseModel):

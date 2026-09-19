@@ -27,6 +27,9 @@ from industrial_ai_agent.agent.model_selection import (
     ModelDefinition,
     ModelResolutionError,
     ModelResolutionService,
+    ModelSelectionCandidate,
+    ModelSelectionMode,
+    ModelSelectionPolicy,
     QualityClass,
 )
 from industrial_ai_agent.domain.security import DataClassification
@@ -76,6 +79,8 @@ def _model(
     *,
     zone: ExecutionZone,
     capabilities: frozenset[ModelCapability] = VISION_REQUIREMENTS,
+    quality: QualityClass = QualityClass.STANDARD,
+    cost: CostClass = CostClass.LOW,
 ) -> ModelDefinition:
     return ModelDefinition(
         model_id=ModelId(model_id),
@@ -89,8 +94,8 @@ def _model(
             else DataClassification.CONFIDENTIAL
         ),
         capabilities=capabilities,
-        quality_class=QualityClass.STANDARD,
-        cost_class=CostClass.LOW,
+        quality_class=quality,
+        cost_class=cost,
     )
 
 
@@ -159,6 +164,139 @@ def test_missing_assignment_fails_closed_without_catalog_fallback() -> None:
 
     assert captured.value.decision.outcome is ModelDecisionOutcome.MODEL_NOT_CONFIGURED
     assert captured.value.decision.model is None
+
+
+def _auto_resolver(
+    *models: ModelDefinition,
+    policy: ModelSelectionPolicy | None = ModelSelectionPolicy.QUALITY_FIRST,
+    model_is_statically_available=None,
+) -> ModelResolutionService:
+    return ModelResolutionService(
+        catalog=Catalog(*models),
+        assignments=Assignments(
+            ModelAssignment(
+                consumer_id=VISION_VLM,
+                data_classification=DataClassification.RESTRICTED,
+                model_id=None,
+                selection_mode=ModelSelectionMode.AUTO,
+                selection_policy=policy,
+            )
+        ),
+        authorizer=ModelExecutionAuthorizer(),
+        consumer_requirements={VISION_VLM: VISION_REQUIREMENTS},
+        model_is_statically_available=model_is_statically_available,
+    )
+
+
+def test_auto_quality_first_filters_capabilities_and_egress_before_ranking() -> None:
+    decision = _auto_resolver(
+        _model("local_medium", zone=ExecutionZone.LOCAL),
+        _model(
+            "local_high",
+            zone=ExecutionZone.LOCAL,
+            quality=QualityClass.HIGH,
+            cost=CostClass.HIGH,
+        ),
+        _model(
+            "public_high",
+            zone=ExecutionZone.PUBLIC_CLOUD,
+            quality=QualityClass.HIGH,
+        ),
+        _model(
+            "local_text",
+            zone=ExecutionZone.LOCAL,
+            capabilities=frozenset({ModelCapability.TEXT}),
+        ),
+    ).resolve_model(VISION_VLM, DataClassification.RESTRICTED)
+
+    assert decision.model is not None
+    assert decision.model.model_id == ModelId("local_high")
+    assert decision.selection_mode is ModelSelectionMode.AUTO
+    assert decision.selection_policy is ModelSelectionPolicy.QUALITY_FIRST
+    exclusions = {
+        item.model.model_id.value: item.exclusion_reason for item in decision.candidates
+    }
+    assert exclusions["local_text"] == "capability_mismatch"
+    assert exclusions["public_high"] == "egress_denied"
+
+
+def test_auto_cost_first_uses_stable_model_id_as_tie_breaker() -> None:
+    decision = _auto_resolver(
+        _model("local_z", zone=ExecutionZone.LOCAL, quality=QualityClass.HIGH),
+        _model("local_a", zone=ExecutionZone.LOCAL, quality=QualityClass.HIGH),
+        policy=ModelSelectionPolicy.COST_FIRST,
+    ).resolve_model(VISION_VLM, DataClassification.RESTRICTED)
+
+    assert decision.model is not None
+    assert decision.model.model_id == ModelId("local_a")
+
+
+def test_auto_reports_capability_and_security_denials_separately() -> None:
+    no_capabilities = _auto_resolver(
+        _model(
+            "local_text",
+            zone=ExecutionZone.LOCAL,
+            capabilities=frozenset({ModelCapability.TEXT}),
+        )
+    )
+    only_public = _auto_resolver(
+        _model("public_vision", zone=ExecutionZone.PUBLIC_CLOUD)
+    )
+
+    with pytest.raises(ModelResolutionError) as capability_error:
+        no_capabilities.resolve_model(VISION_VLM, DataClassification.RESTRICTED)
+    with pytest.raises(ModelResolutionError) as egress_error:
+        only_public.resolve_model(VISION_VLM, DataClassification.RESTRICTED)
+
+    assert (
+        capability_error.value.decision.outcome
+        is ModelDecisionOutcome.CAPABILITY_MISMATCH
+    )
+    assert egress_error.value.decision.outcome is ModelDecisionOutcome.EGRESS_DENIED
+
+
+def test_auto_excludes_statically_unavailable_models_before_ranking() -> None:
+    configured = _model("configured", zone=ExecutionZone.LOCAL)
+    unavailable = _model(
+        "unavailable", zone=ExecutionZone.LOCAL, quality=QualityClass.HIGH
+    )
+
+    decision = _auto_resolver(
+        configured,
+        unavailable,
+        model_is_statically_available=lambda model: (
+            model.model_id == configured.model_id
+        ),
+    ).resolve_model(VISION_VLM, DataClassification.RESTRICTED)
+
+    assert decision.model == configured
+    excluded = next(item for item in decision.candidates if item.model == unavailable)
+    assert excluded.runtime_available is False
+    assert excluded.capability_allowed is False
+    assert excluded.egress_allowed is None
+    assert excluded.exclusion_reason == "runtime_unavailable"
+
+
+def test_auto_with_only_statically_unavailable_models_is_not_configured() -> None:
+    with pytest.raises(ModelResolutionError) as captured:
+        _auto_resolver(
+            _model("unavailable", zone=ExecutionZone.LOCAL),
+            model_is_statically_available=lambda _: False,
+        ).resolve_model(VISION_VLM, DataClassification.RESTRICTED)
+
+    assert captured.value.decision.outcome is ModelDecisionOutcome.MODEL_NOT_CONFIGURED
+    assert captured.value.decision.error_code == "model_runtime_unavailable"
+
+
+def test_auto_without_policy_fails_closed_as_not_configured() -> None:
+    resolver = _auto_resolver(
+        _model("local_vision", zone=ExecutionZone.LOCAL), policy=None
+    )
+
+    with pytest.raises(ModelResolutionError) as captured:
+        resolver.resolve_model(VISION_VLM, DataClassification.RESTRICTED)
+
+    assert captured.value.decision.outcome is ModelDecisionOutcome.MODEL_NOT_CONFIGURED
 
 
 class PublicZoneCatalog:
@@ -247,6 +385,7 @@ def test_model_decision_telemetry_exposes_distinct_bounded_outcome_metadata() ->
         "model.capability_decision": "ALLOW",
         "model.egress_decision": "DENY",
         "model.decision_outcome": "EGRESS_DENIED",
+        "model.selection_mode": "MANUAL",
         "run.id": str(run_id),
         "error.code": "model_egress_denied",
         "operation.duration_ms": 1.25,
@@ -277,15 +416,50 @@ def test_unconfigured_model_decision_uses_neutral_presentation_name() -> None:
     assert "model.id" not in telemetry.attributes
 
 
+def test_auto_candidate_trace_uses_safe_catalog_metadata_only() -> None:
+    telemetry = CapturingTelemetry()
+    capable = _model("local_vision", zone=ExecutionZone.LOCAL)
+    rejected = _model("public_vision", zone=ExecutionZone.PUBLIC_CLOUD)
+
+    TelemetryModelDecisionObserver(telemetry).record(  # type: ignore[arg-type]
+        ModelDecision(
+            consumer_id=VISION_VLM,
+            effective_data_classification=DataClassification.RESTRICTED,
+            required_capabilities=VISION_REQUIREMENTS,
+            outcome=ModelDecisionOutcome.EXECUTION_ALLOWED,
+            model=capable,
+            capability_allowed=True,
+            egress_allowed=True,
+            selection_mode=ModelSelectionMode.AUTO,
+            selection_policy=ModelSelectionPolicy.QUALITY_FIRST,
+            candidates=(
+                ModelSelectionCandidate(capable, True, True),
+                ModelSelectionCandidate(rejected, True, False, "egress_denied"),
+            ),
+        )
+    )
+
+    candidate_spans = [
+        item for item in telemetry.spans if item[0] == "model.selection.candidate"
+    ]
+    assert len(candidate_spans) == 2
+    assert candidate_spans[1][1]["model.candidate_exclusion_reason"] == "egress_denied"
+    assert "prompt" not in candidate_spans[0][1]
+    assert "tool_result" not in candidate_spans[0][1]
+
+
 class CapturingTelemetry:
-    name: str | None = None
-    attributes: dict[str, object] | None = None
+    def __init__(self) -> None:
+        self.name: str | None = None
+        self.attributes: dict[str, object] | None = None
+        self.spans: list[tuple[str, dict[str, object]]] = []
 
     @contextmanager
     def span(self, name: str, attributes: dict[str, object]):
         self.name = name
         self.attributes = attributes
+        self.spans.append((name, attributes))
         yield object()
 
     def record_model_decision(self, *, attributes: dict[str, object]) -> None:
-        assert attributes is self.attributes
+        assert attributes is not None

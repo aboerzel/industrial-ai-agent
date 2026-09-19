@@ -9,6 +9,8 @@ from industrial_ai_agent.agent.model_selection import (
     ModelConsumerDefinition,
     ModelConsumerId,
     ModelDefinition,
+    ModelSelectionMode,
+    ModelSelectionPolicy,
 )
 from industrial_ai_agent.domain.security import DataClassification
 
@@ -54,22 +56,50 @@ class ModelConfigurationService:
         model_id: ModelId,
         updated_by: str | None = None,
     ) -> ModelAssignment:
+        return self.configure(
+            consumer_id=consumer_id,
+            data_classification=data_classification,
+            selection_mode=ModelSelectionMode.MANUAL,
+            model_id=model_id,
+            updated_by=updated_by,
+        )
+
+    def configure(
+        self,
+        *,
+        consumer_id: ModelConsumerId,
+        data_classification: DataClassification,
+        selection_mode: ModelSelectionMode,
+        model_id: ModelId | None = None,
+        selection_policy: ModelSelectionPolicy | None = None,
+        updated_by: str | None = None,
+    ) -> ModelAssignment:
         if consumer_id not in self._supported_consumers:
             raise ValueError("Unsupported model consumer")
-        model = self._catalog.get_model(model_id.value)
-        if not self._authorizer.is_allowed(
-            data_classification,
-            model.execution_zone,
-            model.max_data_classification,
-        ):
-            raise ModelAssignmentPolicyError(
-                "Model execution zone is not authorized for this classification"
-            )
+        if selection_mode is ModelSelectionMode.MANUAL:
+            if model_id is None or selection_policy is not None:
+                raise ValueError("Manual selection requires exactly one model")
+            model = self._catalog.get_model(model_id.value)
+            if not self._authorizer.is_allowed(
+                data_classification,
+                model.execution_zone,
+                model.max_data_classification,
+            ):
+                raise ModelAssignmentPolicyError(
+                    "Model execution zone is not authorized for this classification"
+                )
+        elif selection_mode is ModelSelectionMode.AUTO:
+            if model_id is not None or selection_policy is None:
+                raise ValueError("Automatic selection requires exactly one policy")
+        else:
+            raise ValueError("Unsupported model selection mode")
         return self._assignments.upsert(
             ModelAssignment(
                 consumer_id=consumer_id,
                 data_classification=data_classification,
                 model_id=model_id,
+                selection_mode=selection_mode,
+                selection_policy=selection_policy,
                 updated_by=updated_by,
             )
         )

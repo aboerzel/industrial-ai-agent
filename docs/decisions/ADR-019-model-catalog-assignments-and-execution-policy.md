@@ -85,6 +85,34 @@ vision, embedding, or specialized models. Tool/MCP data can raise effective
 classification monotonically but cannot lower it. Model selection never changes database
 RLS, document, retrieval, MCP, tool, hardware, or persisted-investigation access.
 
+### Deterministic automatic selection
+
+An assignment has an explicit selection mode. `MANUAL` preserves the assigned `model_id`
+resolution described above. `AUTO` persists only `QUALITY_FIRST` or `COST_FIRST`; the
+concrete model selected for a run is execution evidence, never configuration state. The
+migration marks every existing assignment as `MANUAL`.
+
+For `AUTO`, the resolver first filters the loaded runtime catalog by static availability:
+an API-key-authenticated model is eligible only when its configured key environment
+variable is non-empty. Local catalog entries represent configured local runtime endpoints;
+the filter does not actively probe provider or model health. It then filters the remaining
+entries by all required capabilities and applies the authoritative ADR-009 security/egress
+authorization to every capable candidate.
+Security denial removes a candidate; it is never a weighted score or ranking penalty. If
+no capable candidate exists the outcome is `CAPABILITY_MISMATCH`; if capable candidates
+exist but all are denied it is `EGRESS_DENIED`; a missing or malformed automatic policy is
+`MODEL_NOT_CONFIGURED`. `QUALITY_FIRST` orders highest quality, then lowest cost, then
+stable `model_id`; `COST_FIRST` orders lowest cost, then highest quality, then stable
+`model_id`. The selected candidate receives the same final capability and egress checks
+and provider-boundary guard as a manual assignment.
+
+Static unavailability is traceable as `runtime_unavailable` candidate metadata and is
+separate from capability and egress decisions. Provider rate limits, timeouts, connection
+errors, and temporary provider outages occur after selection and never cause reselection
+or cross-provider fallback. Automatic candidate reasoning is emitted as
+metadata-only trace spans; bounded metrics carry only selection mode and policy, not
+candidate lists or protected model input.
+
 ### API and observability
 
 The Phase 1 API exposes catalog reads, assignment reads, and assignment upsert by
@@ -117,8 +145,10 @@ Rejected. Configuration mistakes would become security grants and bypass ADR-009
 
 ### Automatically select another suitable model
 
-Rejected for Phase 1. Fallback can cross execution zones or providers and makes decisions
-harder to audit. Any future fallback requires a separate architecture and security review.
+Rejected for execution failure. Deterministic `AUTO` selection before invocation is
+permitted because it applies capability and security hard filters and records the entire
+decision. Fallback after a provider failure remains prohibited because it can cross
+execution zones or providers and makes decisions harder to audit.
 
 ### Reject every capability-mismatched assignment
 

@@ -2,7 +2,7 @@ import {
   getModelAssignments,
   getModelCatalog,
   getModelConsumers,
-  saveModelAssignment,
+  saveModelConfiguration,
 } from "./api.js";
 
 const CLASSIFICATIONS = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"];
@@ -60,10 +60,15 @@ function renderConsumer(consumer, catalog, assignmentsByKey, title) {
 }
 
 function renderAssignmentRow(consumer, classification, catalog, assignment) {
+  let persistedAssignment = assignment;
   const row = document.createElement("article");
   row.className = "model-assignment-row";
   const heading = document.createElement("h4");
   heading.textContent = classification;
+  const mode = selectionModeControl(
+    `${consumer.display_name} ${classification} selection mode`,
+    assignment?.selection_mode ?? "MANUAL",
+  );
   const select = document.createElement("select");
   select.setAttribute("aria-label", `${consumer.display_name} ${classification} model`);
   const assignedModel = catalog.find((model) => model.model_id === assignment?.model_id);
@@ -85,30 +90,97 @@ function renderAssignmentRow(consumer, classification, catalog, assignment) {
   save.type = "button";
   save.className = "secondary-button";
   save.textContent = "Save";
-  const update = () => showModelDetails(meta, catalog.find((model) => model.model_id === select.value), consumer.required_capabilities, classification, feedback);
+  const policy = document.createElement("select");
+  policy.setAttribute("aria-label", `${consumer.display_name} ${classification} automatic selection policy`);
+  policy.add(option("Quality first", "QUALITY_FIRST", assignment?.selection_policy !== "COST_FIRST"));
+  policy.add(option("Cost first", "COST_FIRST", assignment?.selection_policy === "COST_FIRST"));
+  const update = () => {
+    const automatic = selectedMode(mode) === "AUTO";
+    select.disabled = automatic;
+    policy.hidden = !automatic;
+    showModelDetails(
+      meta,
+      automatic ? null : catalog.find((model) => model.model_id === select.value),
+      consumer.required_capabilities,
+      classification,
+      feedback,
+      automatic ? eligibleModels(catalog, consumer.required_capabilities, classification) : null,
+    );
+  };
   update();
   select.addEventListener("change", update);
+  mode.addEventListener("change", update);
+  policy.addEventListener("change", update);
   save.addEventListener("click", async () => {
+    const automatic = selectedMode(mode) === "AUTO";
     const selected = catalog.find((model) => model.model_id === select.value);
-    if (!selected || !isAllowed(selected, classification)) return;
+    if (!automatic && (!selected || !isAllowed(selected, classification))) return;
     save.disabled = true;
     feedback.textContent = "Saving...";
     try {
-      const persisted = await saveModelAssignment(consumer.consumer_id, classification, selected.model_id);
-      select.value = persisted.model_id;
+      const persisted = await saveModelConfiguration(consumer.consumer_id, classification, {
+        selectionMode: selectedMode(mode),
+        modelId: automatic ? null : selected.model_id,
+        selectionPolicy: automatic ? policy.value : null,
+      });
+      persistedAssignment = persisted;
+      setSelectedMode(mode, persistedAssignment.selection_mode);
+      select.value = persistedAssignment.model_id ?? "";
+      policy.value = persistedAssignment.selection_policy ?? "QUALITY_FIRST";
       feedback.textContent = "Saved.";
     } catch (error) {
-      select.value = assignment?.model_id ?? "";
+      setSelectedMode(mode, persistedAssignment?.selection_mode ?? "MANUAL");
+      select.value = persistedAssignment?.model_id ?? "";
+      policy.value = persistedAssignment?.selection_policy ?? "QUALITY_FIRST";
       feedback.textContent = error?.message ?? "The assignment could not be saved.";
       update();
     } finally { save.disabled = false; }
   });
-  row.append(heading, select, meta, save, feedback);
+  row.append(heading, mode, select, policy, meta, save, feedback);
   return row;
 }
 
-function showModelDetails(container, model, requiredCapabilities, classification, feedback) {
+function selectionModeControl(label, value) {
+  const fieldset = document.createElement("fieldset");
+  fieldset.className = "model-selection-mode";
+  fieldset.setAttribute("aria-label", label);
+  for (const [mode, text] of [["MANUAL", "Manual"], ["AUTO", "Automatic"]]) {
+    const optionId = `${label}-${mode}`.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = `${label}-mode`;
+    input.id = optionId;
+    input.value = mode;
+    input.checked = mode === value;
+    const optionLabel = document.createElement("label");
+    optionLabel.htmlFor = optionId;
+    optionLabel.textContent = text;
+    fieldset.append(input, optionLabel);
+  }
+  return fieldset;
+}
+
+function selectedMode(control) {
+  return control.querySelector("input:checked")?.value ?? "MANUAL";
+}
+
+function setSelectedMode(control, value) {
+  const input = control.querySelector(`input[value="${value}"]`);
+  if (input) input.checked = true;
+}
+
+function showModelDetails(container, model, requiredCapabilities, classification, feedback, preview = null) {
   container.replaceChildren();
+  if (preview !== null) {
+    const required = document.createElement("p");
+    required.textContent = `Required capabilities: ${requiredCapabilities.map((item) => CAPABILITY_LABELS[item] ?? item).join(", ")}`;
+    const eligible = document.createElement("p");
+    eligible.textContent = preview.length
+      ? `Currently eligible: ${preview.map((item) => item.display_name).join(", ")}`
+      : "No currently eligible model. Execution will be denied.";
+    container.append(required, eligible);
+    return;
+  }
   if (!model) {
     const notice = document.createElement("p");
     notice.className = "model-unconfigured";
@@ -129,6 +201,10 @@ function showModelDetails(container, model, requiredCapabilities, classification
     container.append(warning);
   }
   if (!isAllowed(model, classification)) feedback.textContent = `Not allowed for ${classification} data.`;
+}
+
+function eligibleModels(catalog, requiredCapabilities, classification) {
+  return catalog.filter((model) => isAllowed(model, classification) && requiredCapabilities.every((item) => model.capabilities.includes(item)));
 }
 
 function isAllowed(model, classification) {

@@ -23,12 +23,21 @@ export async function getModelAssignments() {
 }
 
 export async function saveModelAssignment(consumerId, dataClassification, modelId) {
+  return saveModelConfiguration(consumerId, dataClassification, {
+    selectionMode: "MANUAL",
+    modelId,
+  });
+}
+
+export async function saveModelConfiguration(consumerId, dataClassification, configuration) {
   return request("/api/v1/model-assignments", {
     method: "PUT",
     body: JSON.stringify({
       consumer_id: consumerId,
       data_classification: dataClassification,
-      model_id: modelId,
+      selection_mode: configuration.selectionMode,
+      model_id: configuration.modelId ?? null,
+      selection_policy: configuration.selectionPolicy ?? null,
     }),
   }, isModelAssignment);
 }
@@ -223,9 +232,11 @@ function isModelAssignments(value) {
 }
 
 function isModelAssignment(value) {
-  return isRecord(value) && hasOnlyKeys(value, ["consumer_id", "data_classification", "model_id", "updated_at", "updated_by"]) &&
+  return isRecord(value) && hasOnlyKeys(value, ["consumer_id", "data_classification", "model_id", "selection_mode", "selection_policy", "updated_at", "updated_by"]) &&
     isBoundedString(value.consumer_id, 100, true) && isClassification(value.data_classification) &&
-    isBoundedString(value.model_id, 80, true);
+    (value.model_id === null || isBoundedString(value.model_id, 80, true)) &&
+    ["MANUAL", "AUTO"].includes(value.selection_mode) &&
+    (value.selection_policy === null || ["QUALITY_FIRST", "COST_FIRST"].includes(value.selection_policy));
 }
 
 function isClassification(value) {

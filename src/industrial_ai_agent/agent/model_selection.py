@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -38,6 +39,16 @@ class QualityClass(StrEnum):
 class CostClass(StrEnum):
     LOW = "LOW"
     HIGH = "HIGH"
+
+
+class ModelSelectionMode(StrEnum):
+    MANUAL = "MANUAL"
+    AUTO = "AUTO"
+
+
+class ModelSelectionPolicy(StrEnum):
+    QUALITY_FIRST = "QUALITY_FIRST"
+    COST_FIRST = "COST_FIRST"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +92,9 @@ class ModelConsumerDefinition:
 class ModelAssignment:
     consumer_id: ModelConsumerId
     data_classification: DataClassification
-    model_id: ModelId
+    model_id: ModelId | None
+    selection_mode: ModelSelectionMode = ModelSelectionMode.MANUAL
+    selection_policy: ModelSelectionPolicy | None = None
     updated_at: datetime | None = None
     updated_by: str | None = None
 
@@ -124,6 +137,20 @@ class ModelDecision:
     run_id: UUID | None = None
     error_code: str | None = None
     duration_ms: float | None = None
+    selection_mode: ModelSelectionMode = ModelSelectionMode.MANUAL
+    selection_policy: ModelSelectionPolicy | None = None
+    candidates: tuple[ModelSelectionCandidate, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ModelSelectionCandidate:
+    """Metadata-only explanation for one automatic-selection catalog candidate."""
+
+    model: ModelDefinition
+    capability_allowed: bool
+    egress_allowed: bool | None
+    exclusion_reason: str | None = None
+    runtime_available: bool = True
 
 
 class ModelDecisionObserver(Protocol):
@@ -148,12 +175,16 @@ class ModelResolutionService:
         authorizer: ModelExecutionAuthorizer,
         consumer_requirements: dict[ModelConsumerId, frozenset[ModelCapability]],
         observer: ModelDecisionObserver | None = None,
+        model_is_statically_available: Callable[[ModelDefinition], bool] | None = None,
     ) -> None:
         self._catalog = catalog
         self._assignments = assignments
         self._authorizer = authorizer
         self._requirements = dict(consumer_requirements)
         self._observer = observer
+        self._model_is_statically_available = (
+            model_is_statically_available or _always_statically_available
+        )
 
     @property
     def supported_consumers(self) -> tuple[ModelConsumerId, ...]:
@@ -178,16 +209,24 @@ class ModelResolutionService:
         required = self.required_capabilities(consumer_id)
         assignment = self._assignments.get(consumer_id, data_classification)
         if assignment is None:
-            return self._deny(
-                ModelDecision(
-                    consumer_id=consumer_id,
-                    effective_data_classification=data_classification,
-                    required_capabilities=required,
-                    outcome=ModelDecisionOutcome.MODEL_NOT_CONFIGURED,
-                    run_id=run_id,
-                    error_code="model_not_configured",
-                    duration_ms=_duration_ms(started),
-                )
+            return self._not_configured(
+                consumer_id, data_classification, required, run_id, started
+            )
+        if assignment.selection_mode is ModelSelectionMode.AUTO:
+            return self._resolve_auto(
+                consumer_id=consumer_id,
+                data_classification=data_classification,
+                required=required,
+                assignment=assignment,
+                run_id=run_id,
+                started=started,
+            )
+        if (
+            assignment.selection_mode is not ModelSelectionMode.MANUAL
+            or assignment.model_id is None
+        ):
+            return self._not_configured(
+                consumer_id, data_classification, required, run_id, started
             )
         try:
             model = self._catalog.get_model(assignment.model_id.value)
@@ -201,6 +240,7 @@ class ModelResolutionService:
                     run_id=run_id,
                     error_code="model_not_configured",
                     duration_ms=_duration_ms(started),
+                    selection_mode=ModelSelectionMode.MANUAL,
                 )
             )
         capability_allowed = required <= model.capabilities
@@ -249,9 +289,200 @@ class ModelResolutionService:
             egress_allowed=True,
             run_id=run_id,
             duration_ms=_duration_ms(started),
+            selection_mode=ModelSelectionMode.MANUAL,
         )
         self._record(decision)
         return decision
+
+    def _resolve_auto(
+        self,
+        *,
+        consumer_id: ModelConsumerId,
+        data_classification: DataClassification,
+        required: frozenset[ModelCapability],
+        assignment: ModelAssignment,
+        run_id: UUID | None,
+        started: float,
+    ) -> ModelDecision:
+        policy = assignment.selection_policy
+        if policy is None:
+            return self._not_configured(
+                consumer_id,
+                data_classification,
+                required,
+                run_id,
+                started,
+                selection_mode=ModelSelectionMode.AUTO,
+            )
+        candidates: list[ModelSelectionCandidate] = []
+        statically_available: list[ModelDefinition] = []
+        for model in self._catalog.list_models():
+            if not self._model_is_statically_available(model):
+                candidates.append(
+                    ModelSelectionCandidate(
+                        model, False, None, "runtime_unavailable", False
+                    )
+                )
+                continue
+            statically_available.append(model)
+        capable: list[ModelDefinition] = []
+        for model in statically_available:
+            capability_allowed = required <= model.capabilities
+            if not capability_allowed:
+                candidates.append(
+                    ModelSelectionCandidate(model, False, None, "capability_mismatch")
+                )
+                continue
+            capable.append(model)
+        if not capable:
+            if not statically_available:
+                return self._not_configured(
+                    consumer_id,
+                    data_classification,
+                    required,
+                    run_id,
+                    started,
+                    selection_mode=ModelSelectionMode.AUTO,
+                    selection_policy=policy,
+                    candidates=tuple(candidates),
+                    error_code="model_runtime_unavailable",
+                )
+            return self._deny(
+                ModelDecision(
+                    consumer_id=consumer_id,
+                    effective_data_classification=data_classification,
+                    required_capabilities=required,
+                    outcome=ModelDecisionOutcome.CAPABILITY_MISMATCH,
+                    capability_allowed=False,
+                    egress_allowed=None,
+                    run_id=run_id,
+                    error_code="model_capability_mismatch",
+                    duration_ms=_duration_ms(started),
+                    selection_mode=ModelSelectionMode.AUTO,
+                    selection_policy=policy,
+                    candidates=tuple(candidates),
+                )
+            )
+        authorized: list[ModelDefinition] = []
+        for model in capable:
+            egress_allowed = self._authorizer.is_allowed(
+                data_classification,
+                model.execution_zone,
+                model.max_data_classification,
+            )
+            candidates.append(
+                ModelSelectionCandidate(
+                    model,
+                    True,
+                    egress_allowed,
+                    None if egress_allowed else "egress_denied",
+                )
+            )
+            if egress_allowed:
+                authorized.append(model)
+        if not authorized:
+            return self._deny(
+                ModelDecision(
+                    consumer_id=consumer_id,
+                    effective_data_classification=data_classification,
+                    required_capabilities=required,
+                    outcome=ModelDecisionOutcome.EGRESS_DENIED,
+                    capability_allowed=True,
+                    egress_allowed=False,
+                    run_id=run_id,
+                    error_code="model_egress_denied",
+                    duration_ms=_duration_ms(started),
+                    selection_mode=ModelSelectionMode.AUTO,
+                    selection_policy=policy,
+                    candidates=tuple(candidates),
+                )
+            )
+        model = min(authorized, key=lambda item: _selection_sort_key(item, policy))
+        # Revalidate the chosen candidate. Filtering never substitutes for final guards.
+        capability_allowed = required <= model.capabilities
+        egress_allowed = self._authorizer.is_allowed(
+            data_classification, model.execution_zone, model.max_data_classification
+        )
+        if not egress_allowed:
+            return self._deny(
+                ModelDecision(
+                    consumer_id=consumer_id,
+                    effective_data_classification=data_classification,
+                    required_capabilities=required,
+                    outcome=ModelDecisionOutcome.EGRESS_DENIED,
+                    model=model,
+                    capability_allowed=capability_allowed,
+                    egress_allowed=False,
+                    run_id=run_id,
+                    error_code="model_egress_denied",
+                    duration_ms=_duration_ms(started),
+                    selection_mode=ModelSelectionMode.AUTO,
+                    selection_policy=policy,
+                    candidates=tuple(candidates),
+                )
+            )
+        if not capability_allowed:
+            return self._deny(
+                ModelDecision(
+                    consumer_id=consumer_id,
+                    effective_data_classification=data_classification,
+                    required_capabilities=required,
+                    outcome=ModelDecisionOutcome.CAPABILITY_MISMATCH,
+                    model=model,
+                    capability_allowed=False,
+                    egress_allowed=True,
+                    run_id=run_id,
+                    error_code="model_capability_mismatch",
+                    duration_ms=_duration_ms(started),
+                    selection_mode=ModelSelectionMode.AUTO,
+                    selection_policy=policy,
+                    candidates=tuple(candidates),
+                )
+            )
+        decision = ModelDecision(
+            consumer_id=consumer_id,
+            effective_data_classification=data_classification,
+            required_capabilities=required,
+            outcome=ModelDecisionOutcome.EXECUTION_ALLOWED,
+            model=model,
+            capability_allowed=True,
+            egress_allowed=True,
+            run_id=run_id,
+            duration_ms=_duration_ms(started),
+            selection_mode=ModelSelectionMode.AUTO,
+            selection_policy=policy,
+            candidates=tuple(candidates),
+        )
+        self._record(decision)
+        return decision
+
+    def _not_configured(
+        self,
+        consumer_id: ModelConsumerId,
+        data_classification: DataClassification,
+        required: frozenset[ModelCapability],
+        run_id: UUID | None,
+        started: float,
+        *,
+        selection_mode: ModelSelectionMode = ModelSelectionMode.MANUAL,
+        selection_policy: ModelSelectionPolicy | None = None,
+        candidates: tuple[ModelSelectionCandidate, ...] = (),
+        error_code: str = "model_not_configured",
+    ) -> NoReturn:
+        return self._deny(
+            ModelDecision(
+                consumer_id=consumer_id,
+                effective_data_classification=data_classification,
+                required_capabilities=required,
+                outcome=ModelDecisionOutcome.MODEL_NOT_CONFIGURED,
+                run_id=run_id,
+                error_code=error_code,
+                duration_ms=_duration_ms(started),
+                selection_mode=selection_mode,
+                selection_policy=selection_policy,
+                candidates=candidates,
+            )
+        )
 
     def _deny(self, decision: ModelDecision) -> NoReturn:
         self._record(decision)
@@ -289,3 +520,27 @@ CURRENT_CONSUMER_REQUIREMENTS = {
 
 def _duration_ms(started: float) -> float:
     return (perf_counter() - started) * 1000
+
+
+def _always_statically_available(_: ModelDefinition) -> bool:
+    """Keep non-runtime catalog implementations usable in deterministic unit tests."""
+
+    return True
+
+
+def _selection_sort_key(
+    model: ModelDefinition, policy: ModelSelectionPolicy
+) -> tuple[int, int, str]:
+    quality_rank = {QualityClass.HIGH: 0, QualityClass.STANDARD: 1}
+    cost_rank = {CostClass.LOW: 0, CostClass.HIGH: 1}
+    if policy is ModelSelectionPolicy.QUALITY_FIRST:
+        return (
+            quality_rank[model.quality_class],
+            cost_rank[model.cost_class],
+            model.model_id.value,
+        )
+    return (
+        cost_rank[model.cost_class],
+        quality_rank[model.quality_class],
+        model.model_id.value,
+    )

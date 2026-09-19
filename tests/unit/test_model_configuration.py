@@ -15,6 +15,8 @@ from industrial_ai_agent.agent.model_selection import (
     ModelAssignment,
     ModelCapability,
     ModelDefinition,
+    ModelSelectionMode,
+    ModelSelectionPolicy,
     QualityClass,
 )
 from industrial_ai_agent.application.model_configuration import (
@@ -58,6 +60,8 @@ class Assignments:
             consumer_id=assignment.consumer_id,
             data_classification=assignment.data_classification,
             model_id=assignment.model_id,
+            selection_mode=assignment.selection_mode,
+            selection_policy=assignment.selection_policy,
             updated_at=datetime(2026, 9, 19, tzinfo=UTC),
             updated_by=assignment.updated_by,
         )
@@ -127,6 +131,8 @@ def test_configuration_api_uses_model_id_and_rejects_forbidden_assignment() -> N
             "consumer_id": "agent",
             "data_classification": "RESTRICTED",
             "model_id": "local",
+            "selection_mode": "MANUAL",
+            "selection_policy": None,
         },
     )
     assignments = client.get("/api/v1/model-assignments")
@@ -145,6 +151,8 @@ def test_configuration_api_uses_model_id_and_rejects_forbidden_assignment() -> N
             "consumer_id": "agent",
             "data_classification": "RESTRICTED",
             "model_id": "local",
+            "selection_mode": "MANUAL",
+            "selection_policy": None,
             "updated_at": "2026-09-19T00:00:00+00:00",
             "updated_by": "api",
         }
@@ -199,3 +207,28 @@ def test_configuration_api_rejects_unknown_model_and_consumer() -> None:
     assert unknown_model.json()["detail"]["code"] == "invalid_model_assignment"
     assert unknown_consumer.status_code == 400
     assert unknown_consumer.json()["detail"]["code"] == "invalid_model_assignment"
+
+
+def test_configuration_api_persists_auto_policy_without_model_id() -> None:
+    service = _service()
+    app = create_app(
+        object(),
+        run_store=InMemoryAgentRunStore(),
+        model_configuration_service=service,
+    )
+
+    response = TestClient(app).put(
+        "/api/v1/model-assignments",
+        json={
+            "consumer_id": "agent",
+            "data_classification": "RESTRICTED",
+            "model_id": None,
+            "selection_mode": "AUTO",
+            "selection_policy": "QUALITY_FIRST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_id"] is None
+    assert response.json()["selection_mode"] == ModelSelectionMode.AUTO
+    assert response.json()["selection_policy"] == ModelSelectionPolicy.QUALITY_FIRST

@@ -92,6 +92,56 @@ decides eligible profiles and enforces the final data-to-model check. `RESTRICTE
 can only use approved local profiles; a configured public profile can be eligible only
 up to its approved maximum classification.
 
+## Model Selection
+
+`MANUAL` model configuration resolves one persisted stable `model_id`. `AUTO` configuration
+persists only a deterministic policy and chooses from the catalog before provider
+invocation. Capability and security are hard filters; security is never a ranking score.
+Both modes retain final capability validation, the authoritative egress check, and the
+provider-boundary guard. Provider failures never trigger reselection.
+
+```mermaid
+flowchart TD
+    A[Request] --> B[Trusted DataClassification]
+    B --> C[Model Consumer]
+    C --> D[Required Capabilities]
+    D --> E{Selection Mode}
+    E -->|MANUAL| F[Load persisted assignment]
+    F --> G{Assignment exists?}
+    G -->|No| H[MODEL_NOT_CONFIGURED]
+    G -->|Yes| I[Selected model]
+    E -->|AUTO| J[Load models from runtime catalog]
+    J --> J1[Filter static runtime availability]
+    J1 --> J2{Any statically available models?}
+    J2 -->|No| H
+    J2 -->|Yes| K[Filter by required capabilities]
+    K --> L{Any capable models?}
+    L -->|No| M[CAPABILITY_MISMATCH]
+    L -->|Yes| N[Filter by Security / Egress Policy]
+    N --> O{Any authorized models?}
+    O -->|No| P[EGRESS_DENIED]
+    O -->|Yes| Q[Apply deterministic selection policy]
+    Q --> R[Selected model]
+    I --> S[Final Capability Validation]
+    R --> S
+    S --> T{Capabilities valid?}
+    T -->|No| M
+    T -->|Yes| U[Final Security / Egress Authorization]
+    U --> V{Authorized?}
+    V -->|No| P
+    V -->|Yes| W[Provider Boundary Guard]
+    W --> X[Execute Model]
+    X --> Y[EXECUTED]
+```
+
+The loaded runtime catalog is the static availability boundary for `AUTO`: models using
+API-key authentication enter candidates only when their configured environment variable
+is non-empty. Local catalog entries represent configured local runtime endpoints; this
+check deliberately does not probe model health or availability. Static unavailability is
+recorded as `runtime_unavailable` candidate metadata and remains distinct from capability
+and security exclusions. Timeouts, rate limits, connection errors, and provider outages
+occur after selection and never trigger reselection.
+
 ## Current Architecture
 
 ### Investigation History and PDF Export
