@@ -31,6 +31,9 @@ _FINISH_REASONS = {
 }
 _NO_AUTH_SDK_API_KEY = "not-used"
 _SDK_MAX_RETRIES = 0
+# Keep an individual provider request inside the bounded agent-run deadline.
+# This is a request deadline, not a retry or model-selection mechanism.
+_SDK_TIMEOUT_SECONDS = 45.0
 _RATE_LIMIT_CODES = frozenset({"rate_limit_exceeded", "rate_limited"})
 _QUOTA_CODES = frozenset(
     {
@@ -157,6 +160,7 @@ class OpenAICompatibleLLMClient:
                 # OpenAI SDK otherwise retries 429 responses with backoff inside
                 # the bounded Agent execution deadline.
                 max_retries=_SDK_MAX_RETRIES,
+                timeout=_SDK_TIMEOUT_SECONDS,
             )
         return self._clients[model_id.value]
 

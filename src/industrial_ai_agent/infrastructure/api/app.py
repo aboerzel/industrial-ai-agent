@@ -134,7 +134,7 @@ def create_app(
     telemetry: Telemetry | None = None,
     document_content_reader: AuthorizedDocumentContentReader | None = None,
     model_configuration_service: ModelConfigurationService | None = None,
-    execution_timeout_seconds: float = 60.0,
+    execution_timeout_seconds: float = 90.0,
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
     app = FastAPI(

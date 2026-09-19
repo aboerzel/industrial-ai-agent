@@ -125,7 +125,7 @@ def create_app(
     *,
     allowed_origins: tuple[str, ...] = (),
     document_content_reader: FakeDocumentContentReader | None = None,
-    execution_timeout_seconds: float = 60.0,
+    execution_timeout_seconds: float = 90.0,
 ):
     """Keep the in-memory adapter explicit and isolated to API unit tests."""
     return _create_app(
@@ -160,6 +160,12 @@ def test_health_returns_ok() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_default_execution_budget_supports_bounded_sequential_tool_runs() -> None:
+    app = create_app(FakeRunService(result=_success_result()))
+
+    assert app.state.execution_timeout_seconds == 90.0
 
 
 def test_execution_timeout_persists_terminal_sanitized_failure(

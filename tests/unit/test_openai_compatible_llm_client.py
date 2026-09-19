@@ -348,6 +348,7 @@ def test_maps_chat_request_and_text_response_without_network_call() -> None:
         "api_key": "not-used",
         "base_url": "http://localhost:11434/v1",
         "max_retries": 0,
+        "timeout": 45.0,
     }
     assert fake_client.completions.parameters == {
         "model": "qwen3.5:9b",
@@ -488,6 +489,7 @@ def test_external_profiles_reuse_openai_compatible_tool_and_usage_contract(
         "api_key": api_key,
         "base_url": base_url_override,
         "max_retries": 0,
+        "timeout": 45.0,
     }
     assert fake_client.completions.parameters is not None
     assert fake_client.completions.parameters["model"] == model_override
@@ -670,6 +672,7 @@ def test_reads_authenticated_profile_api_key_from_environment_variable() -> None
         "api_key": "test-api-key-from-environment",
         "base_url": "https://llm.example.com/v1",
         "max_retries": 0,
+        "timeout": 45.0,
     }
 
 
