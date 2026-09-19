@@ -38,7 +38,7 @@ SERVICE_HEALTH_WINDOWS = {
 _OWNED_FAILURE_OPERATIONS = frozenset(
     {
         "agent.run",
-        "model.routing",
+        "model.decision",
         "llm.call",
         "mcp.discovery",
         "mcp.tool",

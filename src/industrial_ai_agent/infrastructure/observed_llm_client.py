@@ -46,9 +46,11 @@ class ObservedLLMClient:
         self._required_capabilities = required_capabilities
 
     def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
+        self._telemetry.clear_tool_parent()
         profile_config = self._catalog.get_model_config(model_id.value)
         attributes = {
             "model.id": model_id.value,
+            "model.display_name": profile_config.display_name,
             "model.name": profile_config.provider_model,
             "model.provider": profile_config.provider,
             "execution.zone": profile_config.execution_zone.value,
@@ -111,6 +113,7 @@ class ObservedLLMClient:
                             else None
                         ),
                     )
+                    self._telemetry.remember_tool_parent(span)
                 if self._consumer_id is not None:
                     decision_attributes = {
                         **attributes,
@@ -119,33 +122,8 @@ class ObservedLLMClient:
                         ),
                         "operation.duration_ms": (perf_counter() - started) * 1000,
                     }
-                    with self._telemetry.span(
-                        "model.decision",
-                        {
-                            **decision_attributes,
-                            "model.consumer_id": self._consumer_id.value,
-                            "model.required_capabilities": ",".join(
-                                sorted(
-                                    capability.value
-                                    for capability in self._required_capabilities
-                                )
-                            ),
-                            "model.capability_decision": "ALLOW",
-                            "model.egress_decision": "ALLOW",
-                            "model.decision_outcome": "EXECUTED",
-                        },
-                    ):
-                        pass
-                return response
-        except ModelEgressDeniedError:
-            status = "failure"
-            attributes["error.code"] = "model_egress_denied"
-            if self._consumer_id is not None:
-                with self._telemetry.span(
-                    "model.decision",
-                    {
-                        **attributes,
-                        "operation.duration_ms": (perf_counter() - started) * 1000,
+                    execution_decision_attributes = {
+                        **decision_attributes,
                         "model.consumer_id": self._consumer_id.value,
                         "model.required_capabilities": ",".join(
                             sorted(
@@ -154,11 +132,44 @@ class ObservedLLMClient:
                             )
                         ),
                         "model.capability_decision": "ALLOW",
-                        "model.egress_decision": "DENY",
-                        "model.decision_outcome": "EGRESS_DENIED",
-                    },
+                        "model.egress_decision": "ALLOW",
+                        "model.decision_outcome": "EXECUTED",
+                    }
+                    with self._telemetry.span(
+                        "model.decision",
+                        execution_decision_attributes,
+                    ):
+                        pass
+                    self._telemetry.record_model_decision(
+                        attributes=execution_decision_attributes
+                    )
+                return response
+        except ModelEgressDeniedError:
+            status = "failure"
+            attributes["error.code"] = "model_egress_denied"
+            if self._consumer_id is not None:
+                denial_decision_attributes = {
+                    **attributes,
+                    "operation.duration_ms": (perf_counter() - started) * 1000,
+                    "model.consumer_id": self._consumer_id.value,
+                    "model.required_capabilities": ",".join(
+                        sorted(
+                            capability.value
+                            for capability in self._required_capabilities
+                        )
+                    ),
+                    "model.capability_decision": "ALLOW",
+                    "model.egress_decision": "DENY",
+                    "model.decision_outcome": "EGRESS_DENIED",
+                }
+                with self._telemetry.span(
+                    "model.decision",
+                    denial_decision_attributes,
                 ):
                     pass
+                self._telemetry.record_model_decision(
+                    attributes=denial_decision_attributes
+                )
             raise
         except LLMProviderError as error:
             status = "failure"

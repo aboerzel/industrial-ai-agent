@@ -1,0 +1,20 @@
+{
+  "annotations": {"list": []},
+  "description": "Security and configuration outcomes for model decisions. EGRESS_DENIED is a policy signal, not a provider failure.",
+  "editable": true,
+  "panels": [
+    {"id": 1, "title": "Allowed and Executed Decisions", "type": "stat", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(increase(model_decisions_total{model_decision_outcome=\"EXECUTED\"}[$__range]))", "instant": true, "refId": "A"}], "fieldConfig": {"defaults": {"unit": "short", "noValue": "NO DECISION DATA", "color": {"mode": "fixed", "fixedColor": "#73BF69"}}, "overrides": []}, "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none"}, "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}},
+    {"id": 2, "title": "Egress Denied", "type": "stat", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(increase(model_decisions_total{model_decision_outcome=\"EGRESS_DENIED\"}[$__range]))", "instant": true, "refId": "A"}], "fieldConfig": {"defaults": {"unit": "short", "noValue": "NO DENIAL DATA", "color": {"mode": "fixed", "fixedColor": "#E02F44"}}, "overrides": []}, "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none"}, "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0}},
+    {"id": 3, "title": "Capability Mismatch", "type": "stat", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(increase(model_decisions_total{model_decision_outcome=\"CAPABILITY_MISMATCH\"}[$__range]))", "instant": true, "refId": "A"}], "fieldConfig": {"defaults": {"unit": "short", "noValue": "NO MISMATCH DATA", "color": {"mode": "fixed", "fixedColor": "#FF9830"}}, "overrides": []}, "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none"}, "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0}},
+    {"id": 4, "title": "Model Not Configured", "type": "stat", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum(increase(model_decisions_total{model_decision_outcome=\"MODEL_NOT_CONFIGURED\"}[$__range]))", "instant": true, "refId": "A"}], "fieldConfig": {"defaults": {"unit": "short", "noValue": "NO CONFIGURATION GAP", "color": {"mode": "fixed", "fixedColor": "#5794F2"}}, "overrides": []}, "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none"}, "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0}},
+    {"id": 5, "title": "Denied Decision Details", "description": "Use Tempo run-level inspection for run_id and span relations. This metric table intentionally excludes run IDs and payload data.", "type": "table", "datasource": {"uid": "prometheus"}, "targets": [{"expr": "sum by (model_consumer_id, model_display_name, data_classification, execution_zone, model_decision_outcome, error_code) (increase(model_decisions_total{model_decision_outcome=~\"EGRESS_DENIED|CAPABILITY_MISMATCH|MODEL_NOT_CONFIGURED\"}[$__range]))", "instant": true, "legendFormat": "{{model_consumer_id}} / {{model_display_name}} / {{data_classification}} / {{execution_zone}} / {{model_decision_outcome}} / {{error_code}}", "refId": "A"}], "fieldConfig": {"defaults": {"noValue": "NO DENIAL DATA"}, "overrides": []}, "options": {"showHeader": true}, "gridPos": {"h": 10, "w": 24, "x": 0, "y": 6}}
+  ],
+  "schemaVersion": 41,
+  "tags": ["industrial-ai-agent", "models", "security"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Industrial AI Agent - Model Policy",
+  "uid": "industrial-ai-agent-model-policy",
+  "version": 1
+}

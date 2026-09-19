@@ -104,11 +104,11 @@
     },
     {
       "id": 10,
-      "title": "LLM Activity by Model Profile",
-      "description": "Instrumented LLM call rate by bounded semantic model profile.",
+      "title": "LLM Activity by Model",
+      "description": "Instrumented LLM call rate by bounded semantic catalog display name.",
       "type": "timeseries",
       "datasource": {"uid": "prometheus"},
-      "targets": [{"expr": "sum by (model_profile) (rate(llm_calls_total[$__rate_interval]))", "legendFormat": "{{model_profile}}", "refId": "A"}],
+      "targets": [{"expr": "sum by (model_display_name) (rate(llm_calls_total[$__rate_interval]))", "legendFormat": "{{model_display_name}}", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "ops", "decimals": 2, "noValue": "NO LLM DATA"}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"]}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14}

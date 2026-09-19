@@ -21,7 +21,7 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Span
+from opentelemetry.trace import NonRecordingSpan, Span, SpanContext
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.trace.status import Status, StatusCode
 
@@ -78,10 +78,12 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "mcp.tool",
         "model.name",
         "model.id",
+        "model.display_name",
         "model.provider",
         "model.profile",
         "model.consumer_id",
         "model.required_capabilities",
+        "model.available_capabilities",
         "model.capability_decision",
         "model.egress_decision",
         "model.decision_outcome",
@@ -128,6 +130,7 @@ _METRIC_ATTRIBUTE_KEYS = frozenset(
         "mcp.tool",
         "model.profile",
         "model.id",
+        "model.display_name",
         "model.consumer_id",
         "model.capability_decision",
         "model.egress_decision",
@@ -188,6 +191,7 @@ class Telemetry:
         langfuse_client: object | None = None,
     ) -> None:
         self._configuration = configuration
+        self._tool_parent_contexts: dict[str, SpanContext] = {}
         self._tracer_provider = tracer_provider
         self._meter_provider = meter_provider
         self._logger_provider = logger_provider
@@ -208,6 +212,7 @@ class Telemetry:
         self._mcp_discovery = meter.create_counter("mcp_discovery_total")
         self._mcp_reconnect = meter.create_counter("mcp_reconnect_total")
         self._llm_calls = meter.create_counter("llm_calls_total")
+        self._model_decisions = meter.create_counter("model_decisions_total")
         self._llm_input_tokens = meter.create_counter("llm_input_tokens_total")
         self._llm_output_tokens = meter.create_counter("llm_output_tokens_total")
         self._llm_total_tokens = meter.create_counter("llm_total_tokens_total")
@@ -269,6 +274,19 @@ class Telemetry:
         """Add allowlisted metadata to the active span without exposing payloads."""
         self.set_span_attributes(trace.get_current_span(), attributes)
 
+    def remember_tool_parent(self, span: Span) -> None:
+        """Link the next bounded MCP tool span to its selecting model-call span."""
+        run_id = _ACTIVE_RUN_ID.get()
+        context = span.get_span_context()
+        if run_id is not None and context.is_valid:
+            self._tool_parent_contexts[run_id] = context
+
+    def clear_tool_parent(self) -> None:
+        """Discard an unconsumed model-to-tool link for the current trusted run."""
+        run_id = _ACTIVE_RUN_ID.get()
+        if run_id is not None:
+            self._tool_parent_contexts.pop(run_id, None)
+
     def shutdown(self) -> None:
         """Flush optional telemetry before an API process exits; never raise to business code."""
         if self._langfuse_client is not None:
@@ -307,8 +325,10 @@ class Telemetry:
         run_id_token: Token[str | None] | None = None
         if isinstance(run_id, str):
             run_id_token = _ACTIVE_RUN_ID.set(run_id)
+        parent_context = self._take_tool_parent_context(name, inherited_run_id)
         with self._tracer.start_as_current_span(
             name,
+            context=parent_context,
             record_exception=False,
             set_status_on_exception=False,
         ) as span:
@@ -329,8 +349,20 @@ class Telemetry:
                 span.set_status(Status(StatusCode.ERROR, sanitized_error_code(error)))
                 raise
             finally:
+                # A cancelled run can exit after a model selects a tool but before the
+                # tool span starts. The correlation is only valid within this run.
+                if name == "agent.run" and isinstance(run_id, str):
+                    self._tool_parent_contexts.pop(run_id, None)
                 if run_id_token is not None:
                     _ACTIVE_RUN_ID.reset(run_id_token)
+
+    def _take_tool_parent_context(self, name: str, run_id: str | None):
+        if name != "mcp.tool" or run_id is None:
+            return None
+        context = self._tool_parent_contexts.pop(run_id, None)
+        if context is None:
+            return None
+        return trace.set_span_in_context(NonRecordingSpan(context))
 
     def _span_attributes(
         self, name: str, attributes: Mapping[str, object]
@@ -383,6 +415,10 @@ class Telemetry:
         safe = metric_attributes(attributes)
         self._record_metric(self._llm_calls.add, 1, safe)
         self._record_metric(self._llm_duration.record, duration_seconds, safe)
+
+    def record_model_decision(self, *, attributes: Mapping[str, object]) -> None:
+        """Record a bounded model decision without using it for authorization."""
+        self._record_metric(self._model_decisions.add, 1, metric_attributes(attributes))
 
     def record_llm_usage(
         self,

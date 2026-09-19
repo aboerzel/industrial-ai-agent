@@ -196,15 +196,16 @@ logging. Tempo service filters can select `industrial-ai-agent`, `factory-mcp`, 
 
 The Collector exposes `agent_runs_total`, `agent_errors_total`,
 `agent_run_duration_seconds`, `mcp_discovery_total`, `mcp_tool_calls_total`,
-`mcp_tool_duration_seconds`, `llm_calls_total`, `llm_call_duration_seconds`,
+`mcp_tool_duration_seconds`, `llm_calls_total`, `model_decisions_total`, `llm_call_duration_seconds`,
 `llm_input_tokens_total`, `llm_output_tokens_total`, `llm_total_tokens_total`,
 `llm_tool_calls_total`, `llm_tool_input_tokens_total`,
 `llm_tool_output_tokens_total`, `llm_tool_tokens_total`,
 `retrieval_calls_total`, `approval_total`, `persistence_operations_total`, and
 `persistence_operation_duration_seconds` to Prometheus. Labels are bounded operational
-categories only. LLM token counters use only model profile, data classification,
-execution zone, and operation status. They never include run/trace/span IDs, provider or
-concrete model names, product or station IDs, request text, user text, or tool arguments.
+categories only. LLM token counters use stable model ID, catalog-derived display name,
+data classification, execution zone, consumer, and operation status. They never include
+run/trace/span IDs, provider model names, product or station IDs, request text, user
+text, or tool arguments.
 Tool-decision counters add only the MCP tool name after checking it against the bounded
 tool definitions supplied to that LLM call. The sequential graph admits one tool call per
 turn; when a non-compliant provider returns several, only the first admitted call receives
@@ -221,13 +222,30 @@ uninstrumented: the current LangGraph saver exposes no stable public operation b
 without framework intrusion.
 
 Model selection emits metadata-only `model.decision` spans. They correlate the stable
-`model.id`, consumer, effective classification, execution zone, required capabilities,
-capability result, egress result, provider, sanitized error code, and final outcome.
-`EXECUTED`, `EGRESS_DENIED`, `CAPABILITY_MISMATCH`, and `MODEL_NOT_CONFIGURED` remain
-analytically distinct. Prompt, response, document, image, and tool-result contents are
-never attached. The catalog API retains the `model.id` to `display_name` mapping needed
-for a later dashboard presentation update; existing dashboards are not redesigned in
-this phase.
+`model.id`, catalog-derived `model.display_name`, consumer, effective classification,
+execution zone, required and available capabilities, capability result, egress result,
+provider, sanitized error code, and final outcome. `model.id` remains the internal
+identity; `model.display_name` is presentation metadata only. Prompt, response,
+document, image, tool arguments, and tool-result contents are never attached.
+
+Each run is one OpenTelemetry hierarchy: `agent.run` contains resolution decisions and
+`llm.call` spans; an admitted tool call is an `mcp.tool` child and propagates its context
+to the remote MCP operation. The existing `rca.reasoning` span and its model decisions
+therefore remain in the same `trace_id`, with `run.id`, span ID, and parent span relation
+available for reconstruction. Future specialized consumers use the same generic
+`model.consumer_id` contract. Telemetry observes this flow only; it never grants access
+or participates in authorization.
+
+`model_decisions_total` exposes the four final decision outcomes independently:
+`EXECUTED`, `EGRESS_DENIED`, `CAPABILITY_MISMATCH`, and `MODEL_NOT_CONFIGURED`.
+`EGRESS_DENIED` means policy prevented execution before a provider call.
+`CAPABILITY_MISMATCH` means an allowed configured model lacks a required capability.
+`MODEL_NOT_CONFIGURED` means the persistent assignment is incomplete. Provider rate
+limits and other provider errors occur only after authorization and remain separate
+runtime failures. The Model Execution and Model Policy Grafana dashboards use bounded
+catalog display-name labels while retaining `model_id` in telemetry for filtering and
+historical correlation. Their Run ID field opens the correlated Tempo trace; unknown
+historical IDs remain unmapped rather than being reassigned to another model.
 
 ## Telemetry Security
 

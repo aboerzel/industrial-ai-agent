@@ -146,10 +146,7 @@ class ObservedTroubleshootingRunService:
         started = perf_counter()
         status = "success"
         try:
-            with (
-                self._telemetry.span("agent.run", attributes),
-                self._telemetry.span("model.routing", attributes),
-            ):
+            with self._telemetry.span("agent.run", attributes):
                 if run_id is None:
                     result = await operation(message)
                 elif conversation_context:

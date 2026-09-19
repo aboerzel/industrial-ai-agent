@@ -75,7 +75,7 @@ establishes identity, clearance, or permission.
 Every application run retains its UUID `run_id` as a business identifier. It is a safe
 span/log attribute. OTel `trace_id` and `span_id` remain OTel identifiers; neither
 replaces `run_id`. FastAPI auto-instrumentation creates inbound request spans.
-The current API emits operational spans for `agent.run`, `model.routing`, `llm.call`,
+The current API emits operational spans for `agent.run`, `model.decision`, `llm.call`,
 `mcp.discovery`, `mcp.tool`, `retrieval.search`, `approval.resume`,
 `maintenance_ticket.create`, and `persistence.run_store`. Future stable owned
 boundaries may add `retrieval.embedding`, `retrieval.lexical`, `retrieval.fusion`,

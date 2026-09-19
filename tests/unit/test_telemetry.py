@@ -150,6 +150,33 @@ def test_metric_dimensions_keep_only_bounded_persistence_operation() -> None:
     }
 
 
+def test_model_decision_metrics_keep_catalog_presentation_metadata_but_no_payloads() -> (
+    None
+):
+    attributes = metric_attributes(
+        {
+            "model.id": "local_quality",
+            "model.display_name": "Local Qwen 3.5 9B",
+            "model.consumer_id": "vision.vlm",
+            "data.classification": "RESTRICTED",
+            "execution.zone": "LOCAL",
+            "model.decision_outcome": "EGRESS_DENIED",
+            "run.id": "123e4567-e89b-12d3-a456-426614174000",
+            "prompt": "restricted prompt",
+            "tool_result": "restricted result",
+        }
+    )
+
+    assert attributes == {
+        "model.id": "local_quality",
+        "model.display_name": "Local Qwen 3.5 9B",
+        "model.consumer_id": "vision.vlm",
+        "data.classification": "RESTRICTED",
+        "execution.zone": "LOCAL",
+        "model.decision_outcome": "EGRESS_DENIED",
+    }
+
+
 def test_recovery_lifecycle_metrics_keep_only_bounded_dimensions() -> None:
     telemetry, reader = _metric_telemetry()
 
@@ -294,6 +321,65 @@ def test_attribute_allowlist_drops_tool_results_tokens_and_unknown_values() -> N
         "mcp.server": "factory",
         "error.stage": "final_output_normalization",
     }
+
+
+def test_mcp_tool_span_is_child_of_its_selecting_model_call() -> None:
+    telemetry, exporter = _recording_telemetry()
+
+    with telemetry.span("agent.run", {"run.id": "run-1"}):
+        with telemetry.span("llm.call") as model_span:
+            telemetry.remember_tool_parent(model_span)
+        with telemetry.span("mcp.tool", {"mcp.tool": "get_machine_status"}):
+            pass
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["mcp.tool"].parent is not None
+    assert spans["mcp.tool"].parent.span_id == spans["llm.call"].context.span_id
+    assert spans["mcp.tool"].context.trace_id == spans["llm.call"].context.trace_id
+
+
+def test_repeated_sequential_tools_keep_their_selecting_model_call_parent() -> None:
+    telemetry, exporter = _recording_telemetry()
+
+    with telemetry.span("agent.run", {"run.id": "run-1"}):
+        with telemetry.span("llm.call") as first_model_span:
+            telemetry.remember_tool_parent(first_model_span)
+        with telemetry.span("mcp.tool", {"mcp.tool": "get_machine_status"}):
+            pass
+        with telemetry.span("llm.call") as second_model_span:
+            telemetry.remember_tool_parent(second_model_span)
+        with telemetry.span("mcp.tool", {"mcp.tool": "get_product_history"}):
+            pass
+
+    spans = exporter.get_finished_spans()
+    model_spans = [span for span in spans if span.name == "llm.call"]
+    tool_spans = [span for span in spans if span.name == "mcp.tool"]
+    assert tool_spans[0].parent is not None
+    assert tool_spans[0].parent.span_id == model_spans[0].context.span_id
+    assert tool_spans[1].parent is not None
+    assert tool_spans[1].parent.span_id == model_spans[1].context.span_id
+
+
+def test_unconsumed_tool_parent_is_cleared_when_agent_run_exits() -> None:
+    telemetry, exporter = _recording_telemetry()
+
+    with (
+        telemetry.span("agent.run", {"run.id": "run-1"}),
+        telemetry.span("llm.call") as model_span,
+    ):
+        telemetry.remember_tool_parent(model_span)
+
+    with (
+        telemetry.span("agent.run", {"run.id": "run-1"}) as resumed_run_span,
+        telemetry.span("mcp.tool", {"mcp.tool": "get_machine_status"}),
+    ):
+        pass
+
+    tool_span = next(
+        span for span in exporter.get_finished_spans() if span.name == "mcp.tool"
+    )
+    assert tool_span.parent is not None
+    assert tool_span.parent.span_id == resumed_run_span.get_span_context().span_id
 
 
 def test_mcp_http_hook_injects_w3c_context_without_changing_authorization() -> None:

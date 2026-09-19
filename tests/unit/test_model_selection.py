@@ -251,9 +251,30 @@ def test_model_decision_telemetry_exposes_distinct_bounded_outcome_metadata() ->
         "error.code": "model_egress_denied",
         "operation.duration_ms": 1.25,
         "model.id": "public_vision",
+        "model.display_name": "Public Vision",
         "model.provider": "test",
         "execution.zone": "PUBLIC_CLOUD",
+        "model.available_capabilities": "text,vision",
     }
+
+
+def test_unconfigured_model_decision_uses_neutral_presentation_name() -> None:
+    telemetry = CapturingTelemetry()
+    observer = TelemetryModelDecisionObserver(telemetry)  # type: ignore[arg-type]
+
+    observer.record(
+        ModelDecision(
+            consumer_id=VISION_VLM,
+            effective_data_classification=DataClassification.RESTRICTED,
+            required_capabilities=VISION_REQUIREMENTS,
+            outcome=ModelDecisionOutcome.MODEL_NOT_CONFIGURED,
+            error_code="model_not_configured",
+        )
+    )
+
+    assert telemetry.attributes is not None
+    assert telemetry.attributes["model.display_name"] == "Unconfigured model"
+    assert "model.id" not in telemetry.attributes
 
 
 class CapturingTelemetry:
@@ -265,3 +286,6 @@ class CapturingTelemetry:
         self.name = name
         self.attributes = attributes
         yield object()
+
+    def record_model_decision(self, *, attributes: dict[str, object]) -> None:
+        assert attributes is self.attributes

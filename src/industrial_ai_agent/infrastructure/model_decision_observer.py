@@ -21,6 +21,9 @@ class TelemetryModelDecisionObserver:
             "model.capability_decision": _decision_label(decision.capability_allowed),
             "model.egress_decision": _decision_label(decision.egress_allowed),
             "model.decision_outcome": decision.outcome.value,
+            "model.display_name": "Unconfigured model"
+            if model is None
+            else model.display_name,
         }
         if decision.run_id is not None:
             attributes["run.id"] = str(decision.run_id)
@@ -34,10 +37,14 @@ class TelemetryModelDecisionObserver:
                     "model.id": model.model_id.value,
                     "model.provider": model.provider,
                     "execution.zone": model.execution_zone.value,
+                    "model.available_capabilities": ",".join(
+                        sorted(capability.value for capability in model.capabilities)
+                    ),
                 }
             )
         with self._telemetry.span("model.decision", attributes):
             pass
+        self._telemetry.record_model_decision(attributes=attributes)
 
 
 def _decision_label(value: bool | None) -> str:
