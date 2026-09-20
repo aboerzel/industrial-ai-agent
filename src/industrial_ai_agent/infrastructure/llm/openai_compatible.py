@@ -153,6 +153,7 @@ class OpenAICompatibleLLMClient:
             ),
             usage=_parse_usage(getattr(completion, "usage", None)),
             request_diagnostics=request_diagnostics,
+            reasoning_content_present=_has_reasoning_content(choice.message),
         )
 
     def close(self) -> None:
@@ -314,6 +315,14 @@ def _response_text(message: Any, *, structured_output: bool) -> str | None:
     if structured_output and isinstance(content, Mapping):
         return _serialized_structured_content(content)
     raise TypeError("LLM response content must be text or documented text blocks")
+
+
+def _has_reasoning_content(message: Any) -> bool | None:
+    """Expose only presence of provider reasoning content for safe diagnostics."""
+    if not hasattr(message, "reasoning_content"):
+        return None
+    content = message.reasoning_content
+    return bool(content)
 
 
 def _serialized_structured_content(content: object) -> str:

@@ -193,6 +193,7 @@ class LLMResponse(BaseModel):
     finish_reason: FinishReason
     usage: LLMUsage | None = None
     request_diagnostics: LLMRequestDiagnostics | None = None
+    reasoning_content_present: bool | None = None
 
 
 class LLMClient(Protocol):

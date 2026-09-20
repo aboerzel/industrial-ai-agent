@@ -150,10 +150,9 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                         ModelCapability.STRUCTURED_OUTPUT
                         in self._configuration.get_model(model_id.value).capabilities
                     ),
-                    reasoning_effort=_restricted_ollama_reasoning_effort(
+                    reasoning_effort=_ollama_reasoning_effort(
                         configuration=self._configuration,
                         model_id=model_id,
-                        run_policy=run_policy,
                     ),
                 ),
                 mcp_tool_provider=self._mcp_tool_provider_factory(run_policy),
@@ -247,18 +246,14 @@ def create_default_troubleshooting_run_service(
     )
 
 
-def _restricted_ollama_reasoning_effort(
+def _ollama_reasoning_effort(
     *,
     configuration: ModelCatalogConfiguration,
     model_id: ModelId,
-    run_policy: ResolvedRunPolicy,
 ) -> LLMReasoningEffort | None:
-    """Disable unbounded local thinking for restricted agent tool workflows."""
+    """Keep Ollama Qwen tool and structured calls on the verified visible-output mode."""
     profile_config = configuration.get_model_config(model_id.value)
-    if (
-        run_policy.data_classification.name == "RESTRICTED"
-        and profile_config.provider.casefold() == "ollama"
-    ):
+    if profile_config.provider.casefold() == "ollama":
         return LLMReasoningEffort.NONE
     return None
 

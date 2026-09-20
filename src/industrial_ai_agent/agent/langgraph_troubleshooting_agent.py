@@ -276,9 +276,13 @@ class LangGraphTroubleshootingAgent:
     async def request_tool_selection_via_mcp(
         self,
         user_request: str,
+        *,
+        session_observer: Callable[[McpToolSession], None] | None = None,
     ) -> LLMResponse:
         """Bind runtime-discovered MCP tools for one first-decision run."""
         async with self._open_mcp_session() as session:
+            if session_observer is not None:
+                session_observer(session)
             response = self._chat_model.bind_tools(
                 _read_only_tools(session.tools, session.tool_policies)
             ).invoke(

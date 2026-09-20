@@ -8,7 +8,7 @@ from industrial_ai_agent.agent.run_classification_policy import (
 from industrial_ai_agent.infrastructure.llm.configuration import load_llm_configuration
 from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     _mcp_server_configurations,
-    _restricted_ollama_reasoning_effort,
+    _ollama_reasoning_effort,
     _system_message_for,
 )
 
@@ -46,38 +46,28 @@ def test_public_run_connects_only_to_its_authorized_read_only_servers(
     assert servers[1].allowed_tool_names == frozenset({"search_documentation"})
 
 
-def test_restricted_ollama_agent_disables_thinking_without_changing_profile() -> None:
+def test_ollama_agent_disables_thinking_without_changing_profile() -> None:
     configuration = load_llm_configuration(
         PROJECT_ROOT / "config" / "model_catalog.toml"
     )
-    policy = AgentRunClassificationPolicy().resolve(
-        AgentRunProfile.RESTRICTED_TROUBLESHOOTING
-    )
-
-    effort = _restricted_ollama_reasoning_effort(
+    effort = _ollama_reasoning_effort(
         configuration=configuration,
         model_id=ModelProfile("local_quality"),
-        run_policy=policy,
     )
 
     assert effort is LLMReasoningEffort.NONE
 
 
-def test_confidential_run_does_not_override_its_profile_reasoning_policy() -> None:
+def test_confidential_ollama_agent_disables_thinking() -> None:
     configuration = load_llm_configuration(
         PROJECT_ROOT / "config" / "model_catalog.toml"
     )
-    policy = AgentRunClassificationPolicy().resolve(
-        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
-    )
-
-    effort = _restricted_ollama_reasoning_effort(
+    effort = _ollama_reasoning_effort(
         configuration=configuration,
         model_id=ModelProfile("local_quality"),
-        run_policy=policy,
     )
 
-    assert effort is None
+    assert effort is LLMReasoningEffort.NONE
 
 
 def test_restricted_information_uses_the_bounded_operations_system_message() -> None:
