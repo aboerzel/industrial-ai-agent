@@ -272,7 +272,7 @@ def _action_response(
                 id="ticket-call-1",
                 name=CREATE_MAINTENANCE_TICKET_TOOL_NAME,
                 arguments=arguments
-                or {"station_id": "S04", "summary": "Investigate E-STOP-17"},
+                or {"station_id": "S04", "summary": "Investigate QUALITY-09"},
             ),
         ),
         finish_reason=FinishReason.TOOL_CALLS,
@@ -506,7 +506,7 @@ def test_mcp_hitl_interrupt_approves_once_and_survives_agent_recreation() -> Non
     assert payload == {
         "kind": "action_approval",
         "action": CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-        "details": {"station_id": "S04", "summary": "Investigate E-STOP-17"},
+        "details": {"station_id": "S04", "summary": "Investigate QUALITY-09"},
     }
     assert provider.calls == []
 
@@ -862,7 +862,7 @@ def test_mcp_hitl_rejects_model_controlled_idempotency_key_before_write() -> Non
                 _action_response(
                     {
                         "station_id": "S04",
-                        "summary": "Investigate E-STOP-17",
+                        "summary": "Investigate QUALITY-09",
                         "request_id": "model-controlled",
                     }
                 )

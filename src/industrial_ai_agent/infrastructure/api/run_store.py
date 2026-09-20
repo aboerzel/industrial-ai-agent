@@ -7,6 +7,10 @@ from typing import Protocol
 from uuid import UUID
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.failure_origin import (
+    FailureOrigin,
+    failure_origin_for_error_code,
+)
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification
@@ -27,6 +31,7 @@ class StoredAgentRun:
     response_language: ResponseLanguage = ResponseLanguage.EN
     result: AgentRunResult | None = None
     error_code: str | None = None
+    failure_origin: FailureOrigin | None = None
     approval_request: dict[str, object] | None = None
     approval_action: str | None = None
     approval_decision: str | None = None
@@ -55,6 +60,7 @@ class RuntimeRunInspection:
     approval_decided_at: datetime | None
     created_at: datetime | None
     updated_at: datetime | None
+    failure_origin: FailureOrigin | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +93,13 @@ class AgentRunStore(Protocol):
         self, run_id: UUID, result: AgentRunResult
     ) -> StoredAgentRun: ...
 
-    async def fail(self, run_id: UUID, error_code: str) -> StoredAgentRun: ...
+    async def fail(
+        self,
+        run_id: UUID,
+        error_code: str,
+        *,
+        failure_origin: FailureOrigin | None = None,
+    ) -> StoredAgentRun: ...
 
     async def bind_execution_context(
         self,
@@ -189,6 +201,7 @@ class InMemoryAgentRunStore:
             response_language=existing.response_language,
             result=result,
             error_code=recovery_failure_code(result),
+            failure_origin=None,
             approval_request=None,
             approval_action=existing.approval_action,
             approval_decision=existing.approval_decision,
@@ -199,7 +212,13 @@ class InMemoryAgentRunStore:
         )
         return await self._replace_existing(record)
 
-    async def fail(self, run_id: UUID, error_code: str) -> StoredAgentRun:
+    async def fail(
+        self,
+        run_id: UUID,
+        error_code: str,
+        *,
+        failure_origin: FailureOrigin | None = None,
+    ) -> StoredAgentRun:
         existing = await self._require(run_id)
         record = StoredAgentRun(
             run_id=run_id,
@@ -213,6 +232,7 @@ class InMemoryAgentRunStore:
             request_text=existing.request_text,
             response_language=existing.response_language,
             error_code=error_code,
+            failure_origin=failure_origin or failure_origin_for_error_code(error_code),
             approval_request=None,
             approval_action=existing.approval_action,
             approval_decision=existing.approval_decision,
@@ -349,6 +369,7 @@ class InMemoryAgentRunStore:
                 response_language=existing.response_language,
                 result=existing.result,
                 error_code=existing.error_code,
+                failure_origin=existing.failure_origin,
                 approval_request=existing.approval_request,
                 approval_action=existing.approval_action,
                 approval_decision=existing.approval_decision,
@@ -404,6 +425,7 @@ def _inspection(record: StoredAgentRun) -> RuntimeRunInspection:
         if record.result is not None
         else (),
         error_code=record.error_code,
+        failure_origin=record.failure_origin,
         approval_action=record.approval_action,
         approval_decision=record.approval_decision,
         approval_requested_at=record.approval_requested_at,

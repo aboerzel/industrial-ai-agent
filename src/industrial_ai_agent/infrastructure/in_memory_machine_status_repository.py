@@ -2,6 +2,9 @@ from collections.abc import Iterable
 
 from industrial_ai_agent.domain.machine_status import MachineState, MachineStatus
 from industrial_ai_agent.domain.product_history import StationId
+from industrial_ai_agent.infrastructure.demo_factory_scenarios import (
+    S04_TROUBLESHOOTING_ERROR_CODE,
+)
 
 
 class InMemoryMachineStatusRepository:
@@ -18,7 +21,7 @@ def _create_demo_statuses() -> tuple[MachineStatus, ...]:
         MachineStatus(
             station_id=StationId("S04"),
             state=MachineState.FAULTED,
-            active_error_code="E-STOP-17",
+            active_error_code=S04_TROUBLESHOOTING_ERROR_CODE,
         ),
         MachineStatus(
             station_id=StationId("S12"),

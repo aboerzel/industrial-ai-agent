@@ -23,7 +23,7 @@ def test_get_machine_status_returns_faulted_s04() -> None:
         station_id="S04",
         found=True,
         state=MachineState.FAULTED,
-        active_error_code="E-STOP-17",
+        active_error_code="QUALITY-09",
     )
 
 

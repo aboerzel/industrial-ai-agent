@@ -16,7 +16,7 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
 )
 from industrial_ai_agent.infrastructure.local_environment import load_local_environment
 
-SMOKE_QUERY = "E-STOP-17 emergency stop at station S04"
+SMOKE_QUERY = "E-STOP-17 emergency stop at station S02"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

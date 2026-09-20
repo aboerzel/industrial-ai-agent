@@ -183,6 +183,14 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
                     Paragraph(error_label, label),
                     Paragraph(escape(turn.error.code), text),
                     Paragraph(_inline_markup(turn.error.message, code_font), text),
+                    *(
+                        [
+                            Paragraph("Failure origin", label),
+                            Paragraph(escape(turn.error.failure_origin.value), text),
+                        ]
+                        if turn.error.failure_origin is not None
+                        else []
+                    ),
                 ]
             )
         if turn.recovery_outcome is not None:

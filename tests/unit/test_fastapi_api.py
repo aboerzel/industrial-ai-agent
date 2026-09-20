@@ -11,8 +11,10 @@ from industrial_ai_agent.agent.agent_run import (
     AgentRunStatus,
     DocumentReference,
     ExecutedToolCall,
+    FinalAgentOutputContractError,
     InvestigationStep,
 )
+from industrial_ai_agent.agent.failure_origin import failure_origin_for_error_code
 from industrial_ai_agent.agent.llm import (
     LLMProviderError,
     LLMProviderErrorCode,
@@ -190,6 +192,7 @@ def test_execution_timeout_persists_terminal_sanitized_failure(
     assert response.json()["error"] == {
         "code": "agent_execution_timeout",
         "message": "The agent run exceeded its execution time limit.",
+        "failure_origin": "ORCHESTRATION",
     }
     stored = asyncio.run(store.get(run_id))
     assert stored is not None
@@ -211,6 +214,7 @@ def test_execution_timeout_persists_terminal_sanitized_failure(
     assert history.json()["turns"][0]["error"] == {
         "code": "agent_execution_timeout",
         "message": "The agent run exceeded its execution time limit.",
+        "failure_origin": "ORCHESTRATION",
     }
     pdf = TestClient(app).get(
         f"/api/v1/investigations/{run_id}/pdf?user_clearance=CONFIDENTIAL"
@@ -1121,6 +1125,22 @@ def test_mcp_unavailability_returns_a_persisted_failed_run() -> None:
     assert response.json()["error"] == {
         "code": "mcp_service_unavailable",
         "message": "A required MCP service is unavailable.",
+        "failure_origin": "MCP",
+    }
+
+
+def test_invalid_final_model_output_has_a_distinct_persisted_origin() -> None:
+    client = TestClient(
+        create_app(FakeRunService(error=FinalAgentOutputContractError("invalid")))
+    )
+
+    response = client.post("/api/v1/runs", json=_confidential_request())
+
+    assert response.status_code == 200
+    assert response.json()["error"] == {
+        "code": "model_output_invalid",
+        "message": "The model returned an invalid final response.",
+        "failure_origin": "MODEL_OUTPUT_VALIDATION",
     }
 
 
@@ -1189,7 +1209,12 @@ def test_llm_provider_limit_is_sanitized_persisted_and_available_in_history(
 
     assert response.status_code == 200
     assert response.json()["status"] == "failed"
-    assert response.json()["error"] == {"code": code.value, "message": message}
+    expected_error = {
+        "code": code.value,
+        "message": message,
+        "failure_origin": failure_origin_for_error_code(code.value).value,
+    }
+    assert response.json()["error"] == expected_error
     assert "RateLimitError" not in response.text
     stored = asyncio.run(store.get(run_id))
     assert stored is not None
@@ -1204,6 +1229,7 @@ def test_llm_provider_limit_is_sanitized_persisted_and_available_in_history(
     assert history.json()["turns"][0]["error"] == {
         "code": code.value,
         "message": message,
+        "failure_origin": failure_origin_for_error_code(code.value).value,
     }
 
 
@@ -1247,6 +1273,8 @@ def test_pdf_exports_persisted_operational_failure_transcripts(
     assert expected_code.encode() in pdf.content
     assert expected_message.split()[0].encode() in pdf.content
     assert expected_message.split()[-2].encode() in pdf.content
+    assert b"Failure origin" in pdf.content
+    assert failure_origin_for_error_code(expected_code).value.encode() in pdf.content
     assert b"Status:" in pdf.content
 
 

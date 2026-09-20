@@ -13,6 +13,9 @@ from industrial_ai_agent.domain.product_history import (
     StationId,
 )
 from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.infrastructure.demo_factory_scenarios import (
+    S04_TROUBLESHOOTING_ERROR_CODE,
+)
 
 
 class InMemoryFactoryDiscoveryRepository:
@@ -73,7 +76,7 @@ def _demo_stations() -> tuple[StationDiscovery, ...]:
             station_id=StationId("S04"),
             name="Quality Inspection",
             state=MachineState.FAULTED,
-            active_error_code="QUALITY-09",
+            active_error_code=S04_TROUBLESHOOTING_ERROR_CODE,
             classification=DataClassification.CONFIDENTIAL,
         ),
     )
@@ -86,7 +89,7 @@ def _demo_products() -> tuple[ProductOverview, ...]:
                 product_id=ProductId("P4711"),
                 latest_station_id=StationId("S04"),
                 latest_status=ProductionStepStatus.FAILED,
-                latest_error_code="QUALITY-09",
+                latest_error_code=S04_TROUBLESHOOTING_ERROR_CODE,
                 classification=DataClassification.CONFIDENTIAL,
             ),
             passed_station_ids=(StationId("S01"), StationId("S02"), StationId("S04")),

@@ -73,7 +73,7 @@ def test_knowledge_mcp_handler_delegates_and_preserves_structured_provenance() -
 
     async def call_tool() -> dict[str, object]:
         response = await server.call_tool(
-            "search_documentation", {"query": "S04 E-STOP-17", "top_k": 1}
+            "search_documentation", {"query": "S02 E-STOP-17", "top_k": 1}
         )
         assert isinstance(response, CallToolResult)
         assert response.structured_content is not None
@@ -81,8 +81,8 @@ def test_knowledge_mcp_handler_delegates_and_preserves_structured_provenance() -
 
     result = asyncio.run(call_tool())
 
-    assert capability.requests == [("S04 E-STOP-17", 1)]
-    assert result["query"] == "S04 E-STOP-17"
+    assert capability.requests == [("S02 E-STOP-17", 1)]
+    assert result["query"] == "S02 E-STOP-17"
     assert result["results"] == [
         {
             "rank": 1,

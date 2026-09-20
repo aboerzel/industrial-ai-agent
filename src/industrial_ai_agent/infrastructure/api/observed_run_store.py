@@ -6,6 +6,7 @@ from typing import ParamSpec, TypeVar
 from uuid import UUID
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.failure_origin import FailureOrigin
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.run_store import (
@@ -35,9 +36,20 @@ class ObservedAgentRunStore:
             "complete", run_id, self._delegate.complete, run_id, result
         )
 
-    async def fail(self, run_id: UUID, error_code: str) -> StoredAgentRun:
+    async def fail(
+        self,
+        run_id: UUID,
+        error_code: str,
+        *,
+        failure_origin: FailureOrigin | None = None,
+    ) -> StoredAgentRun:
         return await self._observe(
-            "fail", run_id, self._delegate.fail, run_id, error_code
+            "fail",
+            run_id,
+            self._delegate.fail,
+            run_id,
+            error_code,
+            failure_origin=failure_origin,
         )
 
     async def bind_execution_context(
@@ -133,6 +145,11 @@ class ObservedAgentRunStore:
                         {
                             "data.classification": result.data_classification.name,
                             "run.profile": result.run_profile.value,
+                            "failure.origin": (
+                                result.failure_origin.value
+                                if result.failure_origin is not None
+                                else "none"
+                            ),
                         }
                     )
                     self._telemetry.set_span_attributes(span, attributes)

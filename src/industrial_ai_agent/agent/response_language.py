@@ -120,6 +120,8 @@ def user_facing_error_message(
         "llm_provider_request_invalid": (
             "The language model provider rejected this request. Please try again later."
         ),
+        "model_output_invalid": "The model returned an invalid final response.",
+        "tool_execution_failed": "A required tool could not complete the request.",
         "internal_error": "The agent run could not be completed.",
         "agent_execution_timeout": "The agent run exceeded its execution time limit.",
         "recovery_incomplete": "The requested recovery was not completed.",
@@ -154,6 +156,8 @@ def user_facing_error_message(
             "Der Anbieter des Sprachmodells hat diese Anfrage abgelehnt. Bitte "
             "versuchen Sie es später erneut."
         ),
+        "model_output_invalid": "Das Modell hat keine gültige finale Antwort geliefert.",
+        "tool_execution_failed": "Ein erforderliches Werkzeug konnte die Anfrage nicht abschließen.",
         "internal_error": "Der Agent-Run konnte nicht abgeschlossen werden.",
         "agent_execution_timeout": "Der Agent-Run hat sein Ausfuehrungszeitlimit ueberschritten.",
         "recovery_incomplete": "Die angeforderte Recovery wurde nicht abgeschlossen.",

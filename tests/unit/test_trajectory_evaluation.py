@@ -147,7 +147,7 @@ def test_knowledge_mcp_dataset_has_an_explicit_three_tool_trajectory() -> None:
         "search_documentation",
     ]
     assert cases[0].expected_trajectory[-1].arguments == {
-        "query": "E-STOP-17 at S04",
+        "query": "QUALITY-09 at S04",
         "top_k": 3,
     }
 

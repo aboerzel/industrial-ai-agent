@@ -109,11 +109,11 @@ def test_loaded_chunk_preserves_content_and_provenance() -> None:
     chunk = next(item for item in chunks if item.chunk_id == "station_s04::chunk-002")
 
     assert "P4711" in chunk.content
-    assert "E-STOP-17" in chunk.content
+    assert "QUALITY-09" in chunk.content
     assert chunk.document_id == "station_s04"
     assert chunk.source == "station_s04.md"
     assert chunk.metadata == {
-        "title": "Fault state and E-STOP-17",
+        "title": "Fault state and QUALITY-09",
         "format": "markdown",
     }
     assert chunk.relevance_score is None
@@ -288,10 +288,10 @@ def test_bm25_ranking_is_deterministic_and_breaks_ties_by_chunk_id() -> None:
 def test_bm25_preserves_identifiers_top_k_and_provenance() -> None:
     chunks = load_markdown_chunks(KNOWLEDGE_BASE_PATH)
     original_by_id = {chunk.chunk_id: chunk for chunk in chunks}
-    results = InMemoryBm25KnowledgeRetriever(chunks).search("E-STOP-17 S04", limit=2)
+    results = InMemoryBm25KnowledgeRetriever(chunks).search("E-STOP-17 S02", limit=2)
 
     assert len(results) == 2
-    assert results[0].chunk_id == "station_s04::chunk-002"
+    assert results[0].chunk_id == "error_codes::chunk-002"
     for result in results:
         original = original_by_id[result.chunk_id]
         assert result.content == original.content

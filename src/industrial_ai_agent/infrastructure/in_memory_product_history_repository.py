@@ -8,6 +8,9 @@ from industrial_ai_agent.domain.product_history import (
     ProductionStepStatus,
     StationId,
 )
+from industrial_ai_agent.infrastructure.demo_factory_scenarios import (
+    S04_TROUBLESHOOTING_ERROR_CODE,
+)
 
 
 class InMemoryProductHistoryRepository:
@@ -32,13 +35,14 @@ def _create_demo_histories() -> tuple[ProductHistory, ...]:
                 ProductionStep(
                     station_id=StationId("S02"),
                     timestamp=datetime(2026, 1, 15, 8, 4, tzinfo=UTC),
-                    status=ProductionStepStatus.COMPLETED,
+                    status=ProductionStepStatus.WARNING,
+                    error_code="POSITION-ENC-02",
                 ),
                 ProductionStep(
                     station_id=StationId("S04"),
                     timestamp=datetime(2026, 1, 15, 8, 9, tzinfo=UTC),
                     status=ProductionStepStatus.FAILED,
-                    error_code="E-STOP-17",
+                    error_code=S04_TROUBLESHOOTING_ERROR_CODE,
                 ),
             ),
         ),

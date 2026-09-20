@@ -10,7 +10,13 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from industrial_ai_agent.agent.agent_run import AgentRunResult, DocumentReference
+from industrial_ai_agent.agent.agent_run import (
+    AgentRunResult,
+    DocumentReference,
+    FinalAgentOutputContractError,
+    InvalidToolArgumentsError,
+)
+from industrial_ai_agent.agent.failure_origin import failure_origin_for_error_code
 from industrial_ai_agent.agent.llm import LLMProviderError, ModelId
 from industrial_ai_agent.agent.model_egress import (
     DataClassificationBoundaryError,
@@ -101,6 +107,9 @@ _PERSISTED_RUN_ERROR_CODES = frozenset(
         "model_egress_denied",
         "model_not_configured",
         "model_capability_mismatch",
+        "model_runtime_unavailable",
+        "model_output_invalid",
+        "tool_execution_failed",
         "agent_execution_timeout",
         "recovery_incomplete",
         "recovery_blocked",
@@ -552,6 +561,17 @@ def create_app(
             )
         # noinspection PyBroadException
         except Exception as error:  # noqa: BLE001 - public API must sanitize failures.
+            known_error_code = _known_application_error_code(error)
+            if known_error_code is not None:
+                failed_record = await store.fail(run_id, known_error_code)
+                _raise_api_run_error(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    code=known_error_code,
+                    message=user_facing_error_message(
+                        known_error_code, claimed.response_language
+                    ),
+                    investigation_id=failed_record.investigation_id,
+                )
             provider_error = _provider_error_from(error)
             if provider_error is not None:
                 await store.fail(run_id, provider_error.code)
@@ -818,6 +838,9 @@ async def _start_run(
     except McpServiceUnavailableError:
         return _to_run_response(await store.fail(run_id, "mcp_service_unavailable"))
     except Exception as error:  # noqa: BLE001 - public API must sanitize unexpected errors.
+        known_error_code = _known_application_error_code(error)
+        if known_error_code is not None:
+            return _to_run_response(await store.fail(run_id, known_error_code))
         provider_error = _provider_error_from(error)
         if provider_error is not None:
             failed_record = await store.fail(run_id, provider_error.code)
@@ -873,11 +896,15 @@ def _record_internal_failure(
         )
     if telemetry is not None and diagnostics:
         primary = diagnostics[0]
+        origin = failure_origin_for_error_code(primary.safe_error_code)
         telemetry.set_current_span_attributes(
             {
                 "error.type": primary.exception_type,
                 "error.code": primary.safe_error_code,
                 "error.stage": primary.operation,
+                "failure.origin": origin.value
+                if origin is not None
+                else "ORCHESTRATION",
             }
         )
 
@@ -901,11 +928,15 @@ def _record_llm_provider_failure(
         request_reason,
     )
     if telemetry is not None:
+        origin = failure_origin_for_error_code(error.code)
         telemetry.set_current_span_attributes(
             {
                 "error.code": error.code,
                 "error.stage": error.error_stage,
                 "error.type": error_type,
+                "failure.origin": origin.value
+                if origin is not None
+                else "ORCHESTRATION",
             }
         )
 
@@ -925,6 +956,18 @@ def _provider_error_from(error: BaseException) -> LLMProviderError | None:
     ):
         return None
     return provider_errors[0]
+
+
+def _known_application_error_code(error: BaseException) -> str | None:
+    """Project bounded output/tool contract failures without exception details."""
+    leaves = _exception_leaves(error)
+    if leaves and all(
+        isinstance(leaf, FinalAgentOutputContractError) for leaf in leaves
+    ):
+        return "model_output_invalid"
+    if leaves and all(isinstance(leaf, InvalidToolArgumentsError) for leaf in leaves):
+        return "tool_execution_failed"
+    return None
 
 
 def _exception_leaves(error: BaseException) -> tuple[BaseException, ...]:
@@ -1106,6 +1149,7 @@ def _to_persisted_run_error(record: StoredAgentRun) -> ApiErrorResponse | None:
     return ApiErrorResponse(
         code=code,
         message=user_facing_error_message(code, record.response_language),
+        failure_origin=record.failure_origin,
     )
 
 

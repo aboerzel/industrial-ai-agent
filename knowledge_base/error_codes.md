@@ -7,8 +7,7 @@ technical conditions they represent.
 
 Error code E-STOP-17 means that the emergency-stop safety circuit is open. Typical
 causes include an engaged emergency-stop button, an open protective guard, or a safety
-circuit interruption. Station S04 reports the state FAULTED while the condition is
-active.
+circuit interruption. The affected station remains FAULTED while the condition is active.
 
 ## QUALITY-09
 

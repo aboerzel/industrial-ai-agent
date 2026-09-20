@@ -13,6 +13,7 @@ from pydantic import (
     field_validator,
 )
 
+from industrial_ai_agent.agent.failure_origin import FailureOrigin
 from industrial_ai_agent.agent.model_egress import ExecutionZone
 from industrial_ai_agent.agent.model_selection import (
     CostClass,
@@ -60,6 +61,10 @@ class ApiErrorResponse(BaseModel):
     code: Annotated[str, StringConstraints(min_length=1, max_length=80)]
     message: Annotated[str, StringConstraints(min_length=1, max_length=500)]
     investigation_id: UUID | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    failure_origin: FailureOrigin | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )

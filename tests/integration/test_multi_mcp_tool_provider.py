@@ -32,7 +32,7 @@ from industrial_ai_agent.infrastructure.knowledge_mcp_server import create_knowl
 from industrial_ai_agent.tools.documentation_search import DocumentationSearchCapability
 class Retriever:
     def search(self, query, limit):
-        return (KnowledgeRetrievalResult(content="E-STOP-17 documentation", document_id="error_codes", source="error_codes.md", chunk_id="error_codes::chunk-002", relevance_score=0.9, metadata={"title": "E-STOP-17"}),)[:limit]
+        return (KnowledgeRetrievalResult(content="QUALITY-09 documentation", document_id="error_codes", source="error_codes.md", chunk_id="error_codes::chunk-003", relevance_score=0.9, metadata={"title": "QUALITY-09"}),)[:limit]
 create_knowledge_mcp_server(documentation_search=DocumentationSearchCapability(Retriever())).run(transport="stdio")
 """
 _FACTORY_SERVER_WITH_UNAUTHORIZED_TOOL_SOURCE = """
@@ -157,7 +157,7 @@ def test_multi_mcp_langgraph_run_is_sequential_and_has_no_direct_retriever_acces
         _response("get_machine_status", {"station_id": "S04"}, "status"),
         _response(
             "search_documentation",
-            {"query": "E-STOP-17 at S04", "top_k": 3},
+            {"query": "QUALITY-09 at S04", "top_k": 3},
             "documentation",
         ),
         LLMResponse(text="Diagnosis complete.", finish_reason=FinishReason.STOP),

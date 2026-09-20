@@ -147,6 +147,48 @@ shown as disabled with a configuration/runtime reason; it is not silently remove
 not reported as an egress denial. Security-forbidden entries remain separately disabled
 with their classification reason.
 
+## Reliability Acceptance and Failure Attribution
+
+The project separates three independent reliability signals. Deterministic full-stack
+acceptance injects a scripted `LLMClient` only at the provider port and still executes
+the FastAPI boundary, trusted classification, model resolution, final capability and
+egress guards, LangGraph, real MCP tool servers, persistence, and report projection.
+Its Knowledge MCP composition uses the existing deterministic lexical retriever over the
+versioned local documentation, so acceptance does not depend on an embedding service,
+reranker, or local model quality.
+The scripted model is test-only: it is absent from the production catalog, Compose, and
+automatic selection. The canonical German S04 acceptance trajectory reads machine status,
+retrieves QUALITY-09 documentation, and produces a structured final response ten times
+without external provider calls.
+
+Provider contract tests separately verify one adapter/provider request shape. Real-model
+evaluations separately assess reasoning and answer quality. A failure therefore has a
+useful interpretation without turning telemetry into an authorization input.
+
+| Deterministic acceptance | Provider contract | Real model | Interpretation |
+| --- | --- | --- | --- |
+| FAIL | any | FAIL | Application or integration regression |
+| PASS | FAIL | FAIL | Provider, quota, or adapter issue |
+| PASS | PASS | FAIL | Model, prompt, or output-quality issue |
+| PASS | PASS | PASS | End-to-end healthy |
+
+Failed persisted runs retain their existing detailed `error_code` plus a coarse
+`failure_origin`: model selection/availability, capability validation, security policy,
+provider rate limit/connection/request, MCP, tool execution, model-output validation,
+or orchestration. This metadata is safe to expose in investigation and PDF projections;
+it contains no prompts, tool payloads, provider messages, or exception details. Successful
+runs have no failure origin.
+
+### S04 Demo Scenarios
+
+The general Factory troubleshooting scenario is `S04` Quality Inspection in state
+`FAULTED` with active `QUALITY-09`, consistently represented by the persistent seed,
+the in-memory Factory MCP fixture, product history, and S04 documentation. The separate
+physical closed-loop recovery demonstrator also targets S04, but concerns device
+`POSITION-ENC-02`, its reference state, and approval-bound calibration only. It does not
+reinterpret the general quality fault. `E-STOP-17` remains a generic safety condition and
+an S02 historical alarm in the demo data; it is not the default S04 troubleshooting fact.
+
 ## Current Architecture
 
 ### Investigation History and PDF Export

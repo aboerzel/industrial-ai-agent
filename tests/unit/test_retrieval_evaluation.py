@@ -51,9 +51,9 @@ def test_load_eval_cases_parses_structured_ground_truth(tmp_path: Path) -> None:
         json.dumps(
             {
                 "case_id": "multiple",
-                "query": "E-STOP-17 at S04",
+                "query": "QUALITY-09 at S04",
                 "expected_relevant_chunk_ids": [
-                    "error_codes::chunk-002",
+                    "error_codes::chunk-003",
                     "station_s04::chunk-002",
                 ],
             }
@@ -65,7 +65,7 @@ def test_load_eval_cases_parses_structured_ground_truth(tmp_path: Path) -> None:
 
     assert cases[0].case_id == "multiple"
     assert cases[0].expected_relevant_chunk_ids == (
-        "error_codes::chunk-002",
+        "error_codes::chunk-003",
         "station_s04::chunk-002",
     )
 

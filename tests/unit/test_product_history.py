@@ -31,7 +31,7 @@ def test_get_product_history_returns_p4711() -> None:
     assert len(result.steps) == 3
     assert result.steps[-1].station_id == "S04"
     assert result.steps[-1].status is ProductionStepStatus.FAILED
-    assert result.steps[-1].error_code == "E-STOP-17"
+    assert result.steps[-1].error_code == "QUALITY-09"
 
 
 def test_get_product_history_returns_structured_not_found_result() -> None:

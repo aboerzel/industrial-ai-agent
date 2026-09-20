@@ -9,6 +9,10 @@ from uuid import UUID
 from sqlalchemy import select, update
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
+from industrial_ai_agent.agent.failure_origin import (
+    FailureOrigin,
+    failure_origin_for_error_code,
+)
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
@@ -99,6 +103,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 identifiers=[],
                 documents=[],
                 error_code=None,
+                failure_origin=None,
                 error_message=None,
                 tool_call_summary=[],
                 approval_payload=None,
@@ -121,6 +126,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             record = _require_record(session, run_id)
             record.status = _to_public_status(result).value
             record.error_code = recovery_failure_code(result)
+            record.failure_origin = None
             record.error_message = _safe_error_message(record.error_code)
             record.final_answer = result.final_answer
             record.recovery_outcome = (
@@ -145,14 +151,28 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             record.completed_at = datetime.now(UTC)
             return _stored(record)
 
-    async def fail(self, run_id: UUID, error_code: str) -> StoredAgentRun:
-        return await asyncio.to_thread(self._fail, run_id, error_code)
+    async def fail(
+        self,
+        run_id: UUID,
+        error_code: str,
+        *,
+        failure_origin: FailureOrigin | None = None,
+    ) -> StoredAgentRun:
+        return await asyncio.to_thread(self._fail, run_id, error_code, failure_origin)
 
-    def _fail(self, run_id: UUID, error_code: str) -> StoredAgentRun:
+    def _fail(
+        self,
+        run_id: UUID,
+        error_code: str,
+        failure_origin: FailureOrigin | None,
+    ) -> StoredAgentRun:
         with self._session_factory.session(self._security_context) as session:
             record = _require_record(session, run_id)
             record.status = RunStatus.FAILED.value
             record.error_code = error_code
+            record.failure_origin = failure_origin or failure_origin_for_error_code(
+                error_code
+            )
             record.error_message = _safe_error_message(error_code)
             record.approval_payload = None
             record.completed_at = datetime.now(UTC)
@@ -384,6 +404,11 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
         response_language=ResponseLanguage(record.response_language),
         result=result,
         error_code=record.error_code,
+        failure_origin=(
+            FailureOrigin(record.failure_origin)
+            if record.failure_origin is not None
+            else None
+        ),
         approval_request=record.approval_payload,
         approval_action=record.approval_action,
         approval_decision=record.approval_decision,
@@ -457,6 +482,11 @@ def _inspection(record: AgentRunRecord) -> RuntimeRunInspection:
         else 0,
         tool_names=_safe_tool_names(record.tool_call_summary),
         error_code=record.error_code,
+        failure_origin=(
+            FailureOrigin(record.failure_origin)
+            if record.failure_origin is not None
+            else None
+        ),
         approval_action=_safe_approval_action(record.approval_action)
         or _approval_action(record.approval_payload),
         approval_decision=_safe_approval_decision(record.approval_decision),

@@ -340,9 +340,7 @@ def _assert_factory_smoke_result(result: FactoryMcpSmokeResult) -> None:
     assert result.product_history is not None
     assert result.product_history["product_id"] == "P4711"
     assert result.product_history["found"] is True
-    expected_error_code = (
-        "QUALITY-09" if os.getenv("FACTORY_DATABASE_URL") else "E-STOP-17"
-    )
+    expected_error_code = "QUALITY-09"
     assert result.product_history["steps"][-1]["error_code"] == expected_error_code
     assert result.machine_status == {
         "station_id": "S04",

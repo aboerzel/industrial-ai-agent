@@ -9,6 +9,9 @@ from uuid import UUID
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from industrial_ai_agent.infrastructure.demo_factory_scenarios import (
+    S04_TROUBLESHOOTING_ERROR_CODE,
+)
 from industrial_ai_agent.infrastructure.persistence.models import (
     AlarmEventRecord,
     DocumentCatalogRecord,
@@ -108,7 +111,13 @@ def _seed_product_events(session: Session) -> None:
         ("P4711", "S01", "2026-01-15T08:00:00+00:00", "COMPLETED", None),
         ("P4711", "S02", "2026-01-15T08:04:00+00:00", "WARNING", "POSITION-ENC-02"),
         ("P4711", "S03", "2026-01-15T08:07:00+00:00", "COMPLETED", None),
-        ("P4711", "S04", "2026-01-15T08:09:00+00:00", "FAILED", "QUALITY-09"),
+        (
+            "P4711",
+            "S04",
+            "2026-01-15T08:09:00+00:00",
+            "FAILED",
+            S04_TROUBLESHOOTING_ERROR_CODE,
+        ),
         ("P4801", "S01", "2026-01-16T07:56:00+00:00", "COMPLETED", None),
         ("P4801", "S02", "2026-01-16T08:00:00+00:00", "WARNING", "POSITION-ENC-02"),
         ("P4801", "S03", "2026-01-16T08:05:00+00:00", "COMPLETED", None),
@@ -121,7 +130,13 @@ def _seed_product_events(session: Session) -> None:
         ("P4805", "S03", "2026-01-16T08:27:00+00:00", "COMPLETED", None),
         ("P4811", "S01", "2026-01-16T08:29:00+00:00", "COMPLETED", None),
         ("P4811", "S02", "2026-01-16T08:33:00+00:00", "WARNING", "POSITION-ENC-02"),
-        ("P4811", "S04", "2026-01-16T08:37:00+00:00", "FAILED", "QUALITY-09"),
+        (
+            "P4811",
+            "S04",
+            "2026-01-16T08:37:00+00:00",
+            "FAILED",
+            S04_TROUBLESHOOTING_ERROR_CODE,
+        ),
         ("P4900", "S01", "2026-01-20T08:00:00+00:00", "COMPLETED", None),
         ("P4900", "S02", "2026-01-20T08:04:00+00:00", "WARNING", "POSITION-ENC-02"),
         ("P4900", "S02", "2026-01-20T08:08:00+00:00", "COMPLETED", None),
@@ -167,7 +182,12 @@ def _seed_operational_records(session: Session) -> None:
         (
             ("S01", "2026-01-21T08:05:00+00:00", "RUNNING", None),
             ("S02", "2026-01-16T09:00:00+00:00", "FAULTED", "POSITION-ENC-02"),
-            ("S04", "2026-01-15T08:10:00+00:00", "FAULTED", "QUALITY-09"),
+            (
+                "S04",
+                "2026-01-15T08:10:00+00:00",
+                "FAULTED",
+                S04_TROUBLESHOOTING_ERROR_CODE,
+            ),
             ("S02", "2026-01-20T08:05:00+00:00", "RUNNING", None),
             ("S03", "2026-01-20T08:09:00+00:00", "RUNNING", None),
             ("S05", "2026-01-20T08:13:00+00:00", "RUNNING", None),
@@ -210,7 +230,7 @@ def _seed_operational_records(session: Session) -> None:
             station_id=_uuid(STATIONS["S04"]),
             inspected_at=datetime(2026, 1, 15, 8, 9, tzinfo=UTC),
             result="REJECTED",
-            defect_code="QUALITY-09",
+            defect_code=S04_TROUBLESHOOTING_ERROR_CODE,
             classification=2,
         )
     )
@@ -221,7 +241,7 @@ def _seed_operational_records(session: Session) -> None:
             station_id=_uuid(STATIONS["S04"]),
             inspected_at=datetime(2026, 1, 16, 8, 37, tzinfo=UTC),
             result="REJECTED",
-            defect_code="QUALITY-09",
+            defect_code=S04_TROUBLESHOOTING_ERROR_CODE,
             classification=2,
         )
     )
