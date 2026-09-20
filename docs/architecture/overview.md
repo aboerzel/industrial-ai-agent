@@ -189,6 +189,12 @@ physical closed-loop recovery demonstrator also targets S04, but concerns device
 reinterpret the general quality fault. `E-STOP-17` remains a generic safety condition and
 an S02 historical alarm in the demo data; it is not the default S04 troubleshooting fact.
 
+### Investigation Evidence Requirements
+
+The core Evidence Requirement model distinguishes a domain fact required for a grounded investigation from the capability currently used to observe it. `CURRENT_MACHINE_STATE` is not a synonym for `get_machine_status`: the present capability can produce trusted `MachineStateEvidence`, while a future equivalent authorized source may do so through another adapter. The immutable `EvidenceLedger` derives satisfaction only from typed trusted observations, preserves effective `DataClassification` monotonically, and keeps safe source correlations rather than raw result payloads.
+
+Requirements are proportional to trusted investigation type: station discovery requires none, station status requires `CURRENT_MACHINE_STATE`, and station troubleshooting requires `CURRENT_MACHINE_STATE`, `ACTIVE_FAULT`, and `RELEVANT_FAULT_DOCUMENTATION`. An active fault must come from a machine-state observation; fault documentation must carry an explicit trusted relevant-fault reference. Model prose, user identifiers, query text, and arbitrary retrieved content cannot mark a requirement complete. The Evidence Ledger is currently a core foundation only; bounded LangGraph completion integration is a later phase. Physical recovery continues to use its separate ADR-018 lifecycle invariants.
+
 ## Current Architecture
 
 ### Investigation History and PDF Export
