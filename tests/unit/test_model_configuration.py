@@ -89,13 +89,14 @@ def _model(model_id: str, zone: ExecutionZone) -> ModelDefinition:
     )
 
 
-def _service() -> ModelConfigurationService:
+def _service(*, model_is_statically_available=None) -> ModelConfigurationService:
     return ModelConfigurationService(
         catalog=Catalog(),
         assignments=Assignments(),
         supported_consumers=(AGENT_CONSUMER,),
         consumer_definitions=CURRENT_MODEL_CONSUMERS,
         authorizer=ModelExecutionAuthorizer(),
+        model_is_statically_available=model_is_statically_available,
     )
 
 
@@ -141,6 +142,7 @@ def test_configuration_api_uses_model_id_and_rejects_forbidden_assignment() -> N
     assert models.json()[0]["model_id"] == "local"
     assert "display_name" in models.json()[0]
     assert models.json()[0]["max_data_classification"] == "RESTRICTED"
+    assert models.json()[0]["runtime_available"] is True
     assert denied.status_code == 403
     assert denied.json()["detail"]["code"] == "model_assignment_egress_denied"
     assert allowed.status_code == 200
@@ -176,6 +178,31 @@ def test_configuration_api_lists_supported_consumers_with_display_names() -> Non
         "text",
         "tool_calling",
     }
+    requirements = {
+        item["call_type"]: set(item["required_capabilities"])
+        for item in response.json()[0]["call_requirements"]
+    }
+    assert requirements == {
+        "tool_decision": {"text", "tool_calling"},
+        "structured_response": {"text", "structured_output"},
+        "plain_text": {"text"},
+    }
+
+
+def test_catalog_api_keeps_statically_unavailable_models_visible() -> None:
+    app = create_app(
+        object(),
+        run_store=InMemoryAgentRunStore(),
+        model_configuration_service=_service(
+            model_is_statically_available=lambda _: False
+        ),
+    )
+
+    response = TestClient(app).get("/api/v1/models")
+
+    assert response.status_code == 200
+    assert [item["model_id"] for item in response.json()] == ["local", "public"]
+    assert all(item["runtime_available"] is False for item in response.json())
 
 
 def test_configuration_api_rejects_unknown_model_and_consumer() -> None:

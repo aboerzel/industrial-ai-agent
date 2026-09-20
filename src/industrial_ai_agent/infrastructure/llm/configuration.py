@@ -47,6 +47,7 @@ class ModelConfig(BaseModel):
     capabilities: frozenset[ModelCapability] = Field(min_length=1)
     quality_class: QualityClass
     cost_class: CostClass
+    incompatible_capability_combinations: tuple[frozenset[ModelCapability], ...] = ()
     supports_reasoning_effort: bool = False
     max_output_tokens: int | None = Field(default=None, ge=1, le=4096)
     api_cost_usd: Decimal | None = Field(default=None, ge=0)
@@ -72,6 +73,15 @@ class ModelConfig(BaseModel):
             raise ValueError(
                 "api_key_env must not be set when authentication is 'none'"
             )
+        for combination in self.incompatible_capability_combinations:
+            if len(combination) < 2:
+                raise ValueError(
+                    "Incompatible capability combinations require at least two capabilities"
+                )
+            if not combination <= self.capabilities:
+                raise ValueError(
+                    "Incompatible capability combinations must be supported individually"
+                )
         return self
 
     def definition(self) -> ModelDefinition:
@@ -85,6 +95,9 @@ class ModelConfig(BaseModel):
             capabilities=self.capabilities,
             quality_class=self.quality_class,
             cost_class=self.cost_class,
+            incompatible_capability_combinations=frozenset(
+                self.incompatible_capability_combinations
+            ),
         )
 
     @property

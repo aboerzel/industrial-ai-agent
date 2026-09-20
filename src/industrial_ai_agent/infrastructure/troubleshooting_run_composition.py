@@ -18,8 +18,10 @@ from industrial_ai_agent.agent.model_egress import (
     ModelExecutionAuthorizer,
 )
 from industrial_ai_agent.agent.model_selection import (
+    AGENT_CALL_REQUIREMENTS,
     AGENT_CONSUMER,
     AGENT_REQUIREMENTS,
+    CapabilityCheckedLLMClient,
     ModelCapability,
     ModelResolutionService,
 )
@@ -122,9 +124,15 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                 run_policy.data_classification,
                 authorizer=self._authorizer,
             )
+            capability_checked_client = CapabilityCheckedLLMClient(
+                checked_client,
+                self._configuration,
+                consumer_id=run_policy.model_consumer_id,
+                data_classification=run_policy.data_classification,
+            )
             llm_client = (
                 ObservedLLMClient(
-                    checked_client,
+                    capability_checked_client,
                     catalog=self._configuration,
                     data_classification=run_policy.data_classification,
                     telemetry=self._telemetry,
@@ -132,7 +140,7 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                     required_capabilities=AGENT_REQUIREMENTS,
                 )
                 if self._telemetry is not None
-                else checked_client
+                else capability_checked_client
             )
             yield LangGraphTroubleshootingAgent(
                 LLMClientChatModel(
@@ -186,7 +194,7 @@ def create_default_troubleshooting_run_service(
         catalog=configuration,
         assignments=assignments,
         authorizer=authorizer,
-        consumer_requirements={AGENT_CONSUMER: AGENT_REQUIREMENTS},
+        consumer_requirements={AGENT_CONSUMER: AGENT_CALL_REQUIREMENTS},
         observer=(
             TelemetryModelDecisionObserver(telemetry) if telemetry is not None else None
         ),

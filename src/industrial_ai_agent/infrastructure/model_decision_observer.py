@@ -30,6 +30,19 @@ class TelemetryModelDecisionObserver:
             attributes["run.id"] = str(decision.run_id)
         if decision.error_code is not None:
             attributes["error.code"] = decision.error_code
+        if decision.call_type is not None:
+            attributes["model.call_type"] = decision.call_type.value
+        if decision.missing_capabilities:
+            attributes["model.missing_capabilities"] = ",".join(
+                sorted(capability.value for capability in decision.missing_capabilities)
+            )
+        if decision.incompatible_capability_combination:
+            attributes["model.incompatible_capability_combination"] = ",".join(
+                sorted(
+                    capability.value
+                    for capability in decision.incompatible_capability_combination
+                )
+            )
         if decision.duration_ms is not None:
             attributes["operation.duration_ms"] = decision.duration_ms
         if decision.selection_policy is not None:
@@ -92,6 +105,24 @@ class TelemetryModelDecisionObserver:
                 if candidate.exclusion_reason is not None:
                     candidate_attributes["model.candidate_exclusion_reason"] = (
                         candidate.exclusion_reason
+                    )
+                if candidate.call_type is not None:
+                    candidate_attributes["model.call_type"] = candidate.call_type.value
+                if candidate.missing_capabilities:
+                    candidate_attributes["model.missing_capabilities"] = ",".join(
+                        sorted(
+                            capability.value
+                            for capability in candidate.missing_capabilities
+                        )
+                    )
+                if candidate.incompatible_capability_combination:
+                    candidate_attributes[
+                        "model.incompatible_capability_combination"
+                    ] = ",".join(
+                        sorted(
+                            capability.value
+                            for capability in candidate.incompatible_capability_combination
+                        )
                     )
                 with self._telemetry.span(
                     "model.selection.candidate", candidate_attributes

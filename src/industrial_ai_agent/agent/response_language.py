@@ -117,6 +117,9 @@ def user_facing_error_message(
             "The language model provider is temporarily unavailable. Please try "
             "again later."
         ),
+        "llm_provider_request_invalid": (
+            "The language model provider rejected this request. Please try again later."
+        ),
         "internal_error": "The agent run could not be completed.",
         "agent_execution_timeout": "The agent run exceeded its execution time limit.",
         "recovery_incomplete": "The requested recovery was not completed.",
@@ -145,6 +148,10 @@ def user_facing_error_message(
         ),
         "llm_provider_unavailable": (
             "Der Anbieter des Sprachmodells ist vorübergehend nicht verfügbar. Bitte "
+            "versuchen Sie es später erneut."
+        ),
+        "llm_provider_request_invalid": (
+            "Der Anbieter des Sprachmodells hat diese Anfrage abgelehnt. Bitte "
             "versuchen Sie es später erneut."
         ),
         "internal_error": "Der Agent-Run konnte nicht abgeschlossen werden.",

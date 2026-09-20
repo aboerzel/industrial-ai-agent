@@ -1,9 +1,18 @@
+import hashlib
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from typing import Any, Self
 
-from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 from pydantic import BaseModel
 
 from industrial_ai_agent.agent.llm import (
@@ -12,6 +21,7 @@ from industrial_ai_agent.agent.llm import (
     LLMProviderError,
     LLMProviderErrorCode,
     LLMRequest,
+    LLMRequestDiagnostics,
     LLMResponse,
     LLMToolCall,
     LLMUsage,
@@ -94,8 +104,9 @@ class OpenAICompatibleLLMClient:
         if request.response_format is not None:
             if "structured_output" not in profile_config.capabilities:
                 raise ValueError("Model does not support structured response output")
-            parameters["response_format"] = request.response_format.model_dump(
-                mode="json", by_alias=True
+            parameters["response_format"] = _provider_response_format(
+                request.response_format.model_dump(mode="json", by_alias=True),
+                provider=profile_config.provider,
             )
         if request.reasoning_effort is not None:
             if not profile_config.supports_reasoning_effort:
@@ -105,6 +116,8 @@ class OpenAICompatibleLLMClient:
             # ``extra_body`` leaves Qwen thinking enabled on this endpoint.
             parameters["reasoning_effort"] = request.reasoning_effort.value
 
+        request_diagnostics = _request_diagnostics(parameters)
+
         try:
             completion = client.chat.completions.create(**parameters)
         except Exception as error:
@@ -113,6 +126,11 @@ class OpenAICompatibleLLMClient:
                 raise LLMProviderError(
                     classified,
                     provider_error_type=type(error).__name__,
+                    provider_request_reason=_provider_request_rejection_reason(error),
+                    provider_http_status=_provider_http_status(error),
+                    provider_error_category=_provider_error_category(error),
+                    provider_request_id=_provider_request_id(error),
+                    request_diagnostics=request_diagnostics,
                 ) from error
             raise
         if not completion.choices:
@@ -133,6 +151,7 @@ class OpenAICompatibleLLMClient:
                 FinishReason.UNKNOWN,
             ),
             usage=_parse_usage(getattr(completion, "usage", None)),
+            request_diagnostics=request_diagnostics,
         )
 
     def close(self) -> None:
@@ -186,6 +205,84 @@ def _parse_tool_call(tool_call: Any) -> LLMToolCall:
         name=tool_call.function.name,
         arguments=arguments,
     )
+
+
+def _provider_response_format(
+    response_format: dict[str, object], *, provider: str
+) -> dict[str, object]:
+    """Adapt only documented provider schema constraints at the SDK boundary."""
+    if provider.casefold() != "groq":
+        return response_format
+
+    adapted = deepcopy(response_format)
+    json_schema = adapted.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return adapted
+    schema = json_schema.get("schema")
+    if isinstance(schema, dict):
+        _require_all_object_properties(schema)
+    return adapted
+
+
+def _request_diagnostics(parameters: Mapping[str, object]) -> LLMRequestDiagnostics:
+    """Summarize the exact JSON request without retaining any request content."""
+    serialized = json.dumps(
+        parameters,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    messages = parameters.get("messages")
+    tools = parameters.get("tools")
+    response_format = parameters.get("response_format")
+    return LLMRequestDiagnostics(
+        request_payload_bytes=len(serialized),
+        message_count=len(messages) if isinstance(messages, list) else 0,
+        tool_definition_count=len(tools) if isinstance(tools, list) else 0,
+        has_tools=bool(tools),
+        has_structured_output=isinstance(response_format, Mapping),
+        structured_schema_hash=_structured_schema_hash(response_format),
+    )
+
+
+def _structured_schema_hash(response_format: object) -> str | None:
+    if not isinstance(response_format, Mapping):
+        return None
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, Mapping):
+        return None
+    schema = json_schema.get("schema")
+    if not isinstance(schema, Mapping):
+        return None
+    canonical = json.dumps(
+        schema,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def _require_all_object_properties(schema: object) -> None:
+    """Make a JSON schema compatible with Groq strict structured-output rules."""
+    if isinstance(schema, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            existing_required = schema.get("required")
+            required = (
+                [value for value in existing_required if isinstance(value, str)]
+                if isinstance(existing_required, list)
+                else []
+            )
+            schema["required"] = [
+                *required,
+                *(name for name in properties if name not in required),
+            ]
+        for value in schema.values():
+            _require_all_object_properties(value)
+    elif isinstance(schema, list):
+        for value in schema:
+            _require_all_object_properties(value)
 
 
 def _resolve_configured_value(
@@ -271,12 +368,78 @@ def _classify_provider_error(error: Exception) -> LLMProviderErrorCode | None:
         return LLMProviderErrorCode.RATE_LIMIT
     if isinstance(error, APIConnectionError):
         return LLMProviderErrorCode.PROVIDER_UNAVAILABLE
+    if isinstance(error, BadRequestError):
+        return LLMProviderErrorCode.REQUEST_INVALID
     if (
         isinstance(error, APIStatusError)
         and error.status_code in _PROVIDER_UNAVAILABLE_STATUS_CODES
     ):
         return LLMProviderErrorCode.PROVIDER_UNAVAILABLE
     return None
+
+
+def _provider_request_rejection_reason(error: Exception) -> str | None:
+    """Classify a 400 request rejection without retaining provider response text."""
+    if not isinstance(error, BadRequestError):
+        return None
+    message = _provider_error_message(error).casefold()
+    if "json schema" in message and "response_format" in message:
+        return "invalid_response_schema"
+    if "response_format" in message:
+        return "unsupported_response_format"
+    if "tool" in message and any(
+        token in message for token in ("schema", "definition", "function")
+    ):
+        return "invalid_tool_definition"
+    if "parameter" in message or "unsupported" in message:
+        return "unsupported_provider_parameter"
+    if "message" in message or "content" in message:
+        return "invalid_message_contract"
+    return "provider_request_rejected"
+
+
+def _provider_http_status(error: Exception) -> int | None:
+    status_code = getattr(error, "status_code", None)
+    return (
+        status_code
+        if isinstance(status_code, int) and 100 <= status_code <= 599
+        else None
+    )
+
+
+def _provider_error_category(error: Exception) -> str | None:
+    """Expose only a bounded structured provider category, never response text."""
+    categories = sorted(_provider_error_codes(error))
+    for category in categories:
+        if re.fullmatch(r"[a-z0-9_]{1,80}", category):
+            return category
+    return None
+
+
+def _provider_request_id(error: Exception) -> str | None:
+    """Read a provider-issued correlation ID from documented SDK/header fields."""
+    candidates: list[object] = [getattr(error, "request_id", None)]
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if isinstance(headers, Mapping):
+        candidates.extend((headers.get("x-request-id"), headers.get("x-groq-id")))
+    for value in candidates:
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", value):
+            return value
+    return None
+
+
+def _provider_error_message(error: Exception) -> str:
+    """Read the response text transiently for classification only, never telemetry."""
+    body = getattr(error, "body", None)
+    if not isinstance(body, Mapping):
+        return ""
+    nested_error = body.get("error")
+    values = (
+        body.get("message"),
+        nested_error.get("message") if isinstance(nested_error, Mapping) else None,
+    )
+    return " ".join(value for value in values if isinstance(value, str))
 
 
 def _provider_error_codes(error: Exception) -> frozenset[str]:

@@ -6,11 +6,18 @@ from industrial_ai_agent.agent.llm import (
     LLMClient,
     LLMProviderError,
     LLMRequest,
+    LLMRequestDiagnostics,
     LLMResponse,
     ModelId,
 )
 from industrial_ai_agent.agent.model_egress import ModelEgressDeniedError
-from industrial_ai_agent.agent.model_selection import ModelCapability, ModelConsumerId
+from industrial_ai_agent.agent.model_selection import (
+    ModelCapability,
+    ModelConsumerId,
+    ModelDecisionOutcome,
+    ModelResolutionError,
+    call_requirement_for_request,
+)
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.llm.configuration import (
     ModelCatalogConfiguration,
@@ -48,6 +55,12 @@ class ObservedLLMClient:
     def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
         self._telemetry.clear_tool_parent()
         profile_config = self._catalog.get_model_config(model_id.value)
+        call_requirement = call_requirement_for_request(request)
+        required_capabilities = (
+            call_requirement.capabilities
+            if self._consumer_id is not None
+            else self._required_capabilities
+        )
         attributes = {
             "model.id": model_id.value,
             "model.display_name": profile_config.display_name,
@@ -55,6 +68,7 @@ class ObservedLLMClient:
             "model.provider": profile_config.provider,
             "execution.zone": profile_config.execution_zone.value,
             "data.classification": self._data_classification.name,
+            "model.call_type": call_requirement.call_type.value,
         }
         if self._operation_type is not None:
             attributes["operation.type"] = self._operation_type
@@ -64,12 +78,24 @@ class ObservedLLMClient:
         status = "success"
         try:
             with self._telemetry.span("llm.call", attributes) as span:
-                response = self._delegate.chat(model_id, request)
+                try:
+                    response = self._delegate.chat(model_id, request)
+                except LLMProviderError as error:
+                    self._telemetry.set_span_attributes(
+                        span,
+                        _provider_error_telemetry_attributes(error),
+                    )
+                    raise
                 self._telemetry.set_span_attributes(
                     span,
-                    _response_telemetry_attributes(
-                        response, profile_config.api_cost_usd
-                    ),
+                    {
+                        **_response_telemetry_attributes(
+                            response, profile_config.api_cost_usd
+                        ),
+                        **_request_diagnostics_telemetry_attributes(
+                            response.request_diagnostics
+                        ),
+                    },
                 )
                 self._telemetry.record_llm_usage(
                     attributes={**attributes, "operation.status": status},
@@ -127,8 +153,7 @@ class ObservedLLMClient:
                         "model.consumer_id": self._consumer_id.value,
                         "model.required_capabilities": ",".join(
                             sorted(
-                                capability.value
-                                for capability in self._required_capabilities
+                                capability.value for capability in required_capabilities
                             )
                         ),
                         "model.capability_decision": "ALLOW",
@@ -144,6 +169,45 @@ class ObservedLLMClient:
                         attributes=execution_decision_attributes
                     )
                 return response
+        except ModelResolutionError as error:
+            status = "failure"
+            if (
+                self._consumer_id is not None
+                and error.decision.outcome is ModelDecisionOutcome.CAPABILITY_MISMATCH
+            ):
+                decision_attributes = {
+                    **attributes,
+                    "operation.duration_ms": (perf_counter() - started) * 1000,
+                    "model.consumer_id": self._consumer_id.value,
+                    "model.required_capabilities": ",".join(
+                        sorted(capability.value for capability in required_capabilities)
+                    ),
+                    "model.call_type": call_requirement.call_type.value,
+                    "model.capability_decision": "DENY",
+                    "model.egress_decision": "NOT_EVALUATED",
+                    "model.decision_outcome": "CAPABILITY_MISMATCH",
+                    "error.code": error.code,
+                }
+                if error.decision.missing_capabilities:
+                    decision_attributes["model.missing_capabilities"] = ",".join(
+                        sorted(
+                            capability.value
+                            for capability in error.decision.missing_capabilities
+                        )
+                    )
+                if error.decision.incompatible_capability_combination:
+                    decision_attributes["model.incompatible_capability_combination"] = (
+                        ",".join(
+                            sorted(
+                                capability.value
+                                for capability in error.decision.incompatible_capability_combination
+                            )
+                        )
+                    )
+                with self._telemetry.span("model.decision", decision_attributes):
+                    pass
+                self._telemetry.record_model_decision(attributes=decision_attributes)
+            raise
         except ModelEgressDeniedError:
             status = "failure"
             attributes["error.code"] = "model_egress_denied"
@@ -153,10 +217,7 @@ class ObservedLLMClient:
                     "operation.duration_ms": (perf_counter() - started) * 1000,
                     "model.consumer_id": self._consumer_id.value,
                     "model.required_capabilities": ",".join(
-                        sorted(
-                            capability.value
-                            for capability in self._required_capabilities
-                        )
+                        sorted(capability.value for capability in required_capabilities)
                     ),
                     "model.capability_decision": "ALLOW",
                     "model.egress_decision": "DENY",
@@ -218,6 +279,41 @@ def _response_telemetry_attributes(
     if api_cost_usd is not None:
         attributes["cost.api_usd"] = float(api_cost_usd)
         attributes["telemetry.cost_status"] = "configured_api_cost"
+    return attributes
+
+
+def _provider_error_telemetry_attributes(error: LLMProviderError) -> dict[str, object]:
+    attributes: dict[str, object] = {
+        "error.code": error.code,
+        "error.stage": error.error_stage,
+        **_request_diagnostics_telemetry_attributes(error.request_diagnostics),
+    }
+    if error.provider_http_status is not None:
+        attributes["provider.http_status"] = error.provider_http_status
+    attributes["provider.error_type"] = error.provider_error_type
+    if error.provider_error_category is not None:
+        attributes["provider.error_category"] = error.provider_error_category
+    if error.provider_request_id is not None:
+        attributes["provider.request_id"] = error.provider_request_id
+    return attributes
+
+
+def _request_diagnostics_telemetry_attributes(
+    diagnostics: LLMRequestDiagnostics | None,
+) -> dict[str, object]:
+    if diagnostics is None:
+        return {}
+    attributes: dict[str, object] = {
+        "request.payload_bytes": diagnostics.request_payload_bytes,
+        "request.message_count": diagnostics.message_count,
+        "request.tool_definition_count": diagnostics.tool_definition_count,
+        "request.has_tools": diagnostics.has_tools,
+        "request.has_structured_output": diagnostics.has_structured_output,
+    }
+    if diagnostics.structured_schema_hash is not None:
+        attributes["request.structured_schema_hash"] = (
+            diagnostics.structured_schema_hash
+        )
     return attributes
 
 

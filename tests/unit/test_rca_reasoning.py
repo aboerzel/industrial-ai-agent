@@ -19,6 +19,7 @@ from industrial_ai_agent.agent.model_egress import (
     ModelExecutionAuthorizer,
 )
 from industrial_ai_agent.agent.model_selection import (
+    RCA_REASONING_CALL_REQUIREMENTS,
     RCA_REASONING_CONSUMER,
     RCA_REASONING_REQUIREMENTS,
     CostClass,
@@ -314,7 +315,7 @@ def _resolver(
             )
         ),
         authorizer=ModelExecutionAuthorizer(),
-        consumer_requirements={RCA_REASONING_CONSUMER: RCA_REASONING_REQUIREMENTS},
+        consumer_requirements={RCA_REASONING_CONSUMER: RCA_REASONING_CALL_REQUIREMENTS},
     )
 
 

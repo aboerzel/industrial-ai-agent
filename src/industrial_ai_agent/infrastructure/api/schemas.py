@@ -16,6 +16,7 @@ from pydantic import (
 from industrial_ai_agent.agent.model_egress import ExecutionZone
 from industrial_ai_agent.agent.model_selection import (
     CostClass,
+    ModelCallType,
     ModelCapability,
     ModelSelectionMode,
     ModelSelectionPolicy,
@@ -80,6 +81,8 @@ class ModelCatalogResponse(BaseModel):
     execution_zone: ExecutionZone
     max_data_classification: DataClassificationLabel
     capabilities: frozenset[ModelCapability]
+    incompatible_capability_combinations: tuple[frozenset[ModelCapability], ...] = ()
+    runtime_available: bool
     quality_class: QualityClass
     cost_class: CostClass
 
@@ -98,6 +101,13 @@ class ModelAssignmentResponse(BaseModel):
     updated_by: str | None = None
 
 
+class ModelCallRequirementResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    call_type: ModelCallType
+    required_capabilities: frozenset[ModelCapability]
+
+
 class ModelConsumerResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -106,6 +116,7 @@ class ModelConsumerResponse(BaseModel):
     ]
     display_name: Annotated[str, StringConstraints(min_length=1, max_length=200)]
     required_capabilities: frozenset[ModelCapability]
+    call_requirements: tuple[ModelCallRequirementResponse, ...] = ()
 
 
 class AssignModelRequest(BaseModel):

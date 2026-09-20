@@ -21,8 +21,10 @@ from industrial_ai_agent.agent.model_egress import (
     ModelExecutionAuthorizer,
 )
 from industrial_ai_agent.agent.model_selection import (
+    RCA_REASONING_CALL_REQUIREMENTS,
     RCA_REASONING_CONSUMER,
     RCA_REASONING_REQUIREMENTS,
+    CapabilityCheckedLLMClient,
     ModelResolutionService,
 )
 from industrial_ai_agent.application.mcp_access import McpPermission
@@ -410,7 +412,7 @@ def _create_rca_reasoner(
             session_factory, DEMO_RUNTIME_SECURITY_CONTEXT
         ),
         authorizer=authorizer,
-        consumer_requirements={RCA_REASONING_CONSUMER: RCA_REASONING_REQUIREMENTS},
+        consumer_requirements={RCA_REASONING_CONSUMER: RCA_REASONING_CALL_REQUIREMENTS},
         observer=(
             TelemetryModelDecisionObserver(telemetry) if telemetry is not None else None
         ),
@@ -445,10 +447,16 @@ def _reasoning_llm_client(
         classification,
         authorizer=ModelExecutionAuthorizer(),
     )
-    if telemetry is None:
-        return checked
-    return ObservedLLMClient(
+    capability_checked = CapabilityCheckedLLMClient(
         checked,
+        configuration,
+        consumer_id=RCA_REASONING_CONSUMER,
+        data_classification=classification,
+    )
+    if telemetry is None:
+        return capability_checked
+    return ObservedLLMClient(
+        capability_checked,
         catalog=configuration,
         data_classification=classification,
         telemetry=telemetry,

@@ -886,6 +886,10 @@ def test_restricted_cross_source_tool_calls_are_not_validated_as_final_output() 
     assert len(client.requests) == 5
     assert all(request.response_format is None for request in client.requests[:4])
     assert client.requests[-1].response_format is not None
+    assert all(
+        not (request.tools and request.response_format is not None)
+        for request in client.requests
+    )
 
 
 def test_bounded_information_run_skips_redundant_structured_finalizer() -> None:

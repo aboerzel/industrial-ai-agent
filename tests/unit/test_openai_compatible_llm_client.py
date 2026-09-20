@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 import pytest
-from openai import APIStatusError, RateLimitError
+from openai import APIStatusError, BadRequestError, RateLimitError
 
 from industrial_ai_agent.agent.llm import (
     FinishReason,
@@ -546,6 +546,126 @@ def test_nvidia_profile_uses_the_existing_structured_output_contract() -> None:
     assert fake_client.completions.parameters["max_tokens"] == 256
 
 
+def test_groq_strict_response_schema_requires_defaulted_object_properties() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content='{"status":"ok"}', tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    fake_client = FakeOpenAIClient(completion)
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_catalog.toml"
+    )
+    request = LLMRequest(
+        messages=(
+            LLMMessage(role=MessageRole.USER, content="Return structured output"),
+        ),
+        response_format=LLMResponseFormat(
+            json_schema=LLMJsonSchema(
+                name="provider_probe",
+                schema_definition={
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "format": {"type": "string", "default": "document"},
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            )
+        ),
+    )
+    client = OpenAICompatibleLLMClient(
+        configuration,
+        environment={"GROQ_API_KEY": "groq-test-key"},
+        client_factory=lambda **_: fake_client,
+    )
+
+    client.chat(GROQ_BENCHMARK_PROFILE, request)
+
+    assert fake_client.completions.parameters is not None
+    schema = fake_client.completions.parameters["response_format"]["json_schema"][
+        "schema"
+    ]
+    assert schema["required"] == ["name", "format"]
+    assert request.response_format.json_schema.schema_definition["required"] == ["name"]
+
+
+def test_groq_structured_output_records_content_free_request_diagnostics() -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content='{"status":"ok"}', tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    request = _structured_request("private prompt and tool result must not appear")
+    client = OpenAICompatibleLLMClient(
+        load_llm_configuration(PROJECT_ROOT / "config" / "model_catalog.toml"),
+        environment={"GROQ_API_KEY": "groq-test-key"},
+        client_factory=lambda **_: FakeOpenAIClient(completion),
+    )
+
+    response = client.chat(GROQ_BENCHMARK_PROFILE, request)
+
+    assert response.request_diagnostics is not None
+    diagnostics = response.request_diagnostics.model_dump()
+    assert diagnostics["request_payload_bytes"] > 0
+    assert diagnostics["message_count"] == 1
+    assert diagnostics["tool_definition_count"] == 0
+    assert diagnostics["has_tools"] is False
+    assert diagnostics["has_structured_output"] is True
+    assert diagnostics["structured_schema_hash"].startswith("sha256:")
+    assert "private prompt" not in str(diagnostics)
+    assert "tool result" not in str(diagnostics)
+
+
+def test_schema_fingerprint_is_stable_for_content_changes_and_changes_for_schema() -> (
+    None
+):
+    configuration = load_llm_configuration(
+        PROJECT_ROOT / "config" / "model_catalog.toml"
+    )
+
+    def request_hash(request: LLMRequest) -> str:
+        client = OpenAICompatibleLLMClient(
+            configuration,
+            environment={"GROQ_API_KEY": "groq-test-key"},
+            client_factory=lambda **_: FakeOpenAIClient(
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content='{"status":"ok"}', tool_calls=None
+                            ),
+                            finish_reason="stop",
+                        )
+                    ]
+                )
+            ),
+        )
+        response = client.chat(GROQ_BENCHMARK_PROFILE, request)
+        assert response.request_diagnostics is not None
+        assert response.request_diagnostics.structured_schema_hash is not None
+        return response.request_diagnostics.structured_schema_hash
+
+    first = request_hash(_structured_request("first private prompt"))
+    same_schema = request_hash(_structured_request("second private prompt"))
+    changed_schema = request_hash(
+        _structured_request(
+            "third private prompt",
+            schema={"type": "object", "properties": {"answer": {"type": "string"}}},
+        )
+    )
+
+    assert first == same_schema
+    assert first != changed_schema
+
+
 def test_maps_assistant_tool_call_and_tool_result_messages() -> None:
     completion = SimpleNamespace(
         choices=[
@@ -836,6 +956,41 @@ def test_classifies_openai_rate_limit_without_exposing_provider_message() -> Non
     assert "secret" not in str(raised.value)
 
 
+def test_classifies_bad_provider_request_without_exposing_provider_message() -> None:
+    provider_error = BadRequestError(
+        "provider protocol detail must remain private",
+        response=_provider_response(400, headers={"x-request-id": "groq-safe-123"}),
+        body={
+            "error": {
+                "code": "invalid_request_error",
+                "message": "invalid JSON schema for response_format: private",
+            }
+        },
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(supports_structured_output=True, provider="groq"),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(provider_error),
+    )
+
+    with pytest.raises(LLMProviderError) as raised:
+        client.chat(
+            LOCAL_QUALITY_PROFILE,
+            _structured_request("private prompt that must not be diagnosed"),
+        )
+
+    assert raised.value.code == LLMProviderErrorCode.REQUEST_INVALID.value
+    assert raised.value.provider_error_type == "BadRequestError"
+    assert raised.value.provider_request_reason == "invalid_response_schema"
+    assert raised.value.provider_http_status == 400
+    assert raised.value.provider_error_category == "invalid_request_error"
+    assert raised.value.provider_request_id == "groq-safe-123"
+    assert raised.value.request_diagnostics is not None
+    assert raised.value.request_diagnostics.request_payload_bytes > 0
+    assert raised.value.request_diagnostics.structured_schema_hash is not None
+    assert "private" not in str(raised.value)
+
+
 def test_classifies_known_quota_code_before_rate_limit() -> None:
     provider_error = RateLimitError(
         "quota detail must remain private",
@@ -920,8 +1075,32 @@ def test_closes_created_clients() -> None:
     assert fake_client.closed is True
 
 
-def _provider_response(status_code: int) -> httpx.Response:
+def _structured_request(
+    content: str,
+    *,
+    schema: dict[str, object] | None = None,
+) -> LLMRequest:
+    return LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content=content),),
+        response_format=LLMResponseFormat(
+            json_schema=LLMJsonSchema(
+                name="provider_probe",
+                schema_definition=schema
+                or {
+                    "type": "object",
+                    "properties": {"status": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            )
+        ),
+    )
+
+
+def _provider_response(
+    status_code: int, *, headers: dict[str, str] | None = None
+) -> httpx.Response:
     return httpx.Response(
         status_code,
         request=httpx.Request("POST", "https://provider.example.test/v1/chat"),
+        headers=headers,
     )

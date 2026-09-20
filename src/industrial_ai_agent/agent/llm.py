@@ -47,6 +47,7 @@ class LLMProviderErrorCode(StrEnum):
     RATE_LIMIT = "llm_rate_limit"
     QUOTA_EXCEEDED = "llm_quota_exceeded"
     PROVIDER_UNAVAILABLE = "llm_provider_unavailable"
+    REQUEST_INVALID = "llm_provider_request_invalid"
 
 
 class LLMProviderError(RuntimeError):
@@ -57,11 +58,21 @@ class LLMProviderError(RuntimeError):
         code: LLMProviderErrorCode,
         *,
         provider_error_type: str,
+        provider_request_reason: str | None = None,
+        provider_http_status: int | None = None,
+        provider_error_category: str | None = None,
+        provider_request_id: str | None = None,
+        request_diagnostics: "LLMRequestDiagnostics | None" = None,
     ) -> None:
         super().__init__("LLM provider request failed")
         self.code = code.value
         self.error_stage = "llm_provider"
         self.provider_error_type = provider_error_type
+        self.provider_request_reason = provider_request_reason
+        self.provider_http_status = provider_http_status
+        self.provider_error_category = provider_error_category
+        self.provider_request_id = provider_request_id
+        self.request_diagnostics = request_diagnostics
 
 
 class LLMToolCall(BaseModel):
@@ -151,6 +162,19 @@ class LLMRequest(BaseModel):
     reasoning_effort: LLMReasoningEffort | None = None
 
 
+class LLMRequestDiagnostics(BaseModel):
+    """Content-free structural metadata for correlating provider requests."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request_payload_bytes: int = Field(ge=0)
+    message_count: int = Field(ge=1)
+    tool_definition_count: int = Field(ge=0)
+    has_tools: bool
+    has_structured_output: bool
+    structured_schema_hash: str | None = None
+
+
 class LLMUsage(BaseModel):
     """Provider-reported token usage; omitted when the provider does not supply it."""
 
@@ -168,6 +192,7 @@ class LLMResponse(BaseModel):
     tool_calls: tuple[LLMToolCall, ...] = ()
     finish_reason: FinishReason
     usage: LLMUsage | None = None
+    request_diagnostics: LLMRequestDiagnostics | None = None
 
 
 class LLMClient(Protocol):

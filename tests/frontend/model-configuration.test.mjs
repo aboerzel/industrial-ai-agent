@@ -10,10 +10,18 @@ import {
 const CATALOG = [
   model("local_quality", "Local Qwen 3.5 9B", "LOCAL", "RESTRICTED", ["text", "tool_calling", "structured_output"]),
   model("nvidia_quality", "NVIDIA Nemotron", "PUBLIC_CLOUD", "CONFIDENTIAL", ["text", "tool_calling", "structured_output"]),
+  model("groq_benchmark", "Groq Llama", "PUBLIC_CLOUD", "CONFIDENTIAL", ["text", "tool_calling", "structured_output"], [["tool_calling", "structured_output"]]),
+  model("mistral_fast", "Mistral Small", "PUBLIC_CLOUD", "CONFIDENTIAL", ["text", "tool_calling"], [], false),
   model("public_text", "Public Text", "PUBLIC_CLOUD", "CONFIDENTIAL", ["text"]),
 ];
 const CONSUMERS = [
-  { consumer_id: "agent", display_name: "Agent", required_capabilities: ["text", "tool_calling", "structured_output"] },
+  {
+    consumer_id: "agent", display_name: "Agent", required_capabilities: ["text", "tool_calling", "structured_output"],
+    call_requirements: [
+      { call_type: "tool_decision", required_capabilities: ["text", "tool_calling"] },
+      { call_type: "structured_response", required_capabilities: ["text", "structured_output"] },
+    ],
+  },
   { consumer_id: "rca.reasoning", display_name: "Root Cause Analysis", required_capabilities: ["text", "structured_output"] },
 ];
 
@@ -36,7 +44,44 @@ test("keeps forbidden public models visible but disabled and shows capability wa
   const publicSelect = content.querySelector('[aria-label="Agent PUBLIC model"]');
   publicSelect.value = "public_text";
   publicSelect.dispatchEvent(new window.Event("change"));
-  assert.match(content.textContent, /Compatibility warning: missing Tool Calling, Structured Output/);
+  assert.match(content.textContent, /Compatibility warning: missing Tool Calling/);
+});
+
+test("does not mislabel Groq as missing structured output when calls are separate", () => {
+  const { content } = render([
+    { consumer_id: "agent", data_classification: "CONFIDENTIAL", model_id: "groq_benchmark" },
+  ]);
+
+  const confidential = content.querySelector('[aria-label="Agent CONFIDENTIAL model"]');
+  assert.equal(confidential.selectedOptions[0].textContent, "Groq Llama");
+  assert.doesNotMatch(content.textContent, /missing Structured Output/);
+  assert.doesNotMatch(content.textContent, /not together in the same model request/);
+});
+
+test("shows a combination warning only for a simultaneous call requirement", () => {
+  const { content } = render(
+    [{ consumer_id: "combined", data_classification: "CONFIDENTIAL", model_id: "groq_benchmark" }],
+    [{
+      consumer_id: "combined", display_name: "Combined request", required_capabilities: ["text", "tool_calling", "structured_output"],
+      call_requirements: [{
+        call_type: "tool_decision_structured",
+        required_capabilities: ["text", "tool_calling", "structured_output"],
+      }],
+    }],
+  );
+
+  assert.match(content.textContent, /supports Tool Calling and Structured Output individually, but not together in the same model request/);
+});
+
+test("keeps statically unavailable catalog models visible but disabled", () => {
+  const { content } = render();
+  const publicSelect = content.querySelector('[aria-label="Agent PUBLIC model"]');
+  const mistral = [...publicSelect.options].find((option) => option.value === "mistral_fast");
+
+  assert.equal(mistral.disabled, true);
+  assert.match(mistral.textContent, /Mistral Small/);
+  assert.match(mistral.textContent, /Not configured/);
+  assert.doesNotMatch(mistral.textContent, /mistral_fast/);
 });
 
 test("shows missing assignment and catalog references without choosing a fallback", () => {
@@ -125,12 +170,15 @@ test("opens, loads, closes, and reopens the production model configuration dialo
   }
 });
 
-function render(assignments = [{ consumer_id: "agent", data_classification: "RESTRICTED", model_id: "local_quality" }]) {
+function render(
+  assignments = [{ consumer_id: "agent", data_classification: "RESTRICTED", model_id: "local_quality" }],
+  consumers = CONSUMERS,
+) {
   const dom = new JSDOM("<main id='content'></main>");
   globalThis.window = dom.window;
   globalThis.document = dom.window.document;
   const content = document.querySelector("#content");
-  renderConfiguration(content, { catalog: CATALOG, consumers: CONSUMERS, assignments });
+  renderConfiguration(content, { catalog: CATALOG, consumers, assignments });
   return { content };
 }
 
@@ -139,6 +187,6 @@ async function waitForConfiguration() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function model(model_id, display_name, execution_zone, max_data_classification, capabilities) {
-  return { model_id, display_name, provider: "test", provider_model: "test/model", execution_zone, max_data_classification, capabilities, quality_class: "HIGH", cost_class: "LOW" };
+function model(model_id, display_name, execution_zone, max_data_classification, capabilities, incompatible_capability_combinations = [], runtime_available = true) {
+  return { model_id, display_name, provider: "test", provider_model: "test/model", execution_zone, max_data_classification, capabilities, incompatible_capability_combinations, runtime_available, quality_class: "HIGH", cost_class: "LOW" };
 }

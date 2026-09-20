@@ -77,9 +77,11 @@ function renderAssignmentRow(consumer, classification, catalog, assignment) {
   select.add(placeholder);
   for (const model of catalog) {
     const allowed = isAllowed(model, classification);
+    const staticallyAvailable = model.runtime_available !== false;
     const item = option(model.display_name, model.model_id, assignment?.model_id === model.model_id);
-    item.disabled = !allowed;
+    item.disabled = !allowed || !staticallyAvailable;
     if (!allowed) item.textContent = `${model.display_name} — Not allowed for ${classification} data`;
+    else if (!staticallyAvailable) item.textContent = `${model.display_name} — Not configured (provider credentials/runtime unavailable)`;
     select.add(item);
   }
   const meta = document.createElement("div");
@@ -101,10 +103,16 @@ function renderAssignmentRow(consumer, classification, catalog, assignment) {
     showModelDetails(
       meta,
       automatic ? null : catalog.find((model) => model.model_id === select.value),
-      consumer.required_capabilities,
+      consumer.call_requirements ?? [{
+        call_type: "workflow",
+        required_capabilities: consumer.required_capabilities,
+      }],
       classification,
       feedback,
-      automatic ? eligibleModels(catalog, consumer.required_capabilities, classification) : null,
+      automatic ? eligibleModels(catalog, consumer.call_requirements ?? [{
+        call_type: "workflow",
+        required_capabilities: consumer.required_capabilities,
+      }], classification) : null,
     );
   };
   update();
@@ -169,11 +177,11 @@ function setSelectedMode(control, value) {
   if (input) input.checked = true;
 }
 
-function showModelDetails(container, model, requiredCapabilities, classification, feedback, preview = null) {
+function showModelDetails(container, model, callRequirements, classification, feedback, preview = null) {
   container.replaceChildren();
   if (preview !== null) {
     const required = document.createElement("p");
-    required.textContent = `Required capabilities: ${requiredCapabilities.map((item) => CAPABILITY_LABELS[item] ?? item).join(", ")}`;
+    required.textContent = `Required capabilities: ${workflowCapabilities(callRequirements).map((item) => CAPABILITY_LABELS[item] ?? item).join(", ")}`;
     const eligible = document.createElement("p");
     eligible.textContent = preview.length
       ? `Currently eligible: ${preview.map((item) => item.display_name).join(", ")}`
@@ -193,18 +201,39 @@ function showModelDetails(container, model, requiredCapabilities, classification
   const capabilities = document.createElement("p");
   capabilities.textContent = `Capabilities: ${model.capabilities.map((item) => CAPABILITY_LABELS[item] ?? item).join(", ")}`;
   container.append(details, capabilities);
-  const missing = requiredCapabilities.filter((item) => !model.capabilities.includes(item));
-  if (missing.length) {
+  const compatibility = compatibilityForCallRequirements(model, callRequirements);
+  if (compatibility.missing.length) {
     const warning = document.createElement("p");
     warning.className = "model-capability-warning";
-    warning.textContent = `Compatibility warning: missing ${missing.map((item) => CAPABILITY_LABELS[item] ?? item).join(", ")}. Execution will fail with CAPABILITY_MISMATCH.`;
+    warning.textContent = `Compatibility warning: missing ${compatibility.missing.map((item) => CAPABILITY_LABELS[item] ?? item).join(", ")}. Execution will fail with CAPABILITY_MISMATCH.`;
+    container.append(warning);
+  }
+  if (compatibility.incompatibleCombination) {
+    const warning = document.createElement("p");
+    warning.className = "model-capability-warning";
+    warning.textContent = `Compatibility warning: this model supports ${compatibility.incompatibleCombination.map((item) => CAPABILITY_LABELS[item] ?? item).join(" and ")} individually, but not together in the same model request.`;
     container.append(warning);
   }
   if (!isAllowed(model, classification)) feedback.textContent = `Not allowed for ${classification} data.`;
 }
 
-function eligibleModels(catalog, requiredCapabilities, classification) {
-  return catalog.filter((model) => isAllowed(model, classification) && requiredCapabilities.every((item) => model.capabilities.includes(item)));
+function eligibleModels(catalog, callRequirements, classification) {
+  return catalog.filter((model) => isAllowed(model, classification) && model.runtime_available !== false && compatibilityForCallRequirements(model, callRequirements).compatible);
+}
+
+function workflowCapabilities(callRequirements) {
+  return [...new Set(callRequirements.flatMap((requirement) => requirement.required_capabilities))];
+}
+
+function compatibilityForCallRequirements(model, callRequirements) {
+  for (const requirement of callRequirements) {
+    const missing = requirement.required_capabilities.filter((item) => !model.capabilities.includes(item));
+    if (missing.length) return { compatible: false, missing, incompatibleCombination: null };
+    const incompatibleCombination = (model.incompatible_capability_combinations ?? [])
+      .find((combination) => combination.every((item) => requirement.required_capabilities.includes(item)));
+    if (incompatibleCombination) return { compatible: false, missing: [], incompatibleCombination };
+  }
+  return { compatible: true, missing: [], incompatibleCombination: null };
 }
 
 function isAllowed(model, classification) {

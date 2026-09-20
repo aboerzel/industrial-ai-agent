@@ -94,6 +94,7 @@ _PERSISTED_RUN_ERROR_CODES = frozenset(
     {
         "internal_error",
         "llm_provider_unavailable",
+        "llm_provider_request_invalid",
         "llm_quota_exceeded",
         "llm_rate_limit",
         "mcp_service_unavailable",
@@ -107,7 +108,7 @@ _PERSISTED_RUN_ERROR_CODES = frozenset(
     }
 )
 _SAFE_PROVIDER_ERROR_TYPES = frozenset(
-    {"APIConnectionError", "APIStatusError", "RateLimitError"}
+    {"APIConnectionError", "APIStatusError", "BadRequestError", "RateLimitError"}
 )
 
 
@@ -191,6 +192,10 @@ def create_app(
                     model.max_data_classification.name
                 ],
                 capabilities=model.capabilities,
+                incompatible_capability_combinations=(
+                    tuple(model.incompatible_capability_combinations)
+                ),
+                runtime_available=service.is_model_statically_available(model),
                 quality_class=model.quality_class,
                 cost_class=model.cost_class,
             )
@@ -223,6 +228,13 @@ def create_app(
                 consumer_id=consumer.consumer_id.value,
                 display_name=consumer.display_name,
                 required_capabilities=consumer.required_capabilities,
+                call_requirements=tuple(
+                    {
+                        "call_type": requirement.call_type,
+                        "required_capabilities": requirement.capabilities,
+                    }
+                    for requirement in consumer.call_requirements
+                ),
             )
             for consumer in _model_configuration_service(request).list_consumers()
         )
@@ -879,11 +891,14 @@ def _record_llm_provider_failure(
         if error.provider_error_type in _SAFE_PROVIDER_ERROR_TYPES
         else "ProviderError"
     )
+    request_reason = error.provider_request_reason or "not_applicable"
     _FAILURE_LOGGER.warning(
-        "agent.run.provider_failure run_id=%s error_code=%s error_type=%s",
+        "agent.run.provider_failure run_id=%s error_code=%s error_type=%s "
+        "request_reason=%s",
         run_id,
         error.code,
         error_type,
+        request_reason,
     )
     if telemetry is not None:
         telemetry.set_current_span_attributes(

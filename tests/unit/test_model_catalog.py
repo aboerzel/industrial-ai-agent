@@ -42,6 +42,46 @@ def test_catalog_display_name_is_not_a_lookup_identity() -> None:
         catalog.get_model(model.display_name)
 
 
+def test_groq_catalog_preserves_individual_capabilities_and_declares_only_combination_limit() -> (
+    None
+):
+    catalog = load_model_catalog(PROJECT_ROOT / "config" / "model_catalog.toml")
+
+    groq = catalog.get_model("groq_benchmark")
+
+    assert groq.capabilities == frozenset(
+        {
+            ModelCapability.TEXT,
+            ModelCapability.TOOL_CALLING,
+            ModelCapability.STRUCTURED_OUTPUT,
+        }
+    )
+    assert groq.incompatible_capability_combinations == frozenset(
+        {frozenset({ModelCapability.TOOL_CALLING, ModelCapability.STRUCTURED_OUTPUT})}
+    )
+
+
+def test_catalog_rejects_impossible_capability_combination_constraint() -> None:
+    model = {
+        "id": "external",
+        "display_name": "External",
+        "provider": "test",
+        "provider_model": "test/model",
+        "base_url": "https://example.test/v1",
+        "temperature": 0,
+        "authentication": "none",
+        "execution_zone": "LOCAL",
+        "max_data_classification": "RESTRICTED",
+        "capabilities": ["text"],
+        "incompatible_capability_combinations": [["text", "tool_calling"]],
+        "quality_class": "STANDARD",
+        "cost_class": "LOW",
+    }
+
+    with pytest.raises(ValueError, match="must be supported individually"):
+        ModelCatalogConfiguration.model_validate({"models": [model]})
+
+
 def test_docker_catalog_is_pure_and_uses_container_local_endpoint() -> None:
     path = PROJECT_ROOT / "config" / "model_catalog.docker.toml"
     catalog = load_model_catalog(path)
@@ -50,6 +90,7 @@ def test_docker_catalog_is_pure_and_uses_container_local_endpoint() -> None:
         "http://host.docker.internal:11434/v1"
     )
     assert "automatic_routing" not in path.read_text(encoding="utf-8")
+    assert catalog.get_model("mistral_fast").display_name == "Mistral Small"
 
 
 def test_catalog_rejects_routing_fields_and_embedded_credentials() -> None:

@@ -211,19 +211,32 @@ function isRunResponse(value) {
 
 function isModelCatalog(value) {
   return Array.isArray(value) && value.every((model) =>
-    isRecord(model) && hasOnlyKeys(model, ["model_id", "display_name", "provider", "provider_model", "execution_zone", "max_data_classification", "capabilities", "quality_class", "cost_class"]) &&
+    isRecord(model) && hasOnlyKeys(model, ["model_id", "display_name", "provider", "provider_model", "execution_zone", "max_data_classification", "capabilities", "incompatible_capability_combinations", "runtime_available", "quality_class", "cost_class"]) &&
     isBoundedString(model.model_id, 80, true) && isBoundedString(model.display_name, 200, true) &&
     ["LOCAL", "PUBLIC_CLOUD"].includes(model.execution_zone) &&
-    isClassification(model.max_data_classification) && Array.isArray(model.capabilities) &&
-    model.capabilities.every((capability) => isBoundedString(capability, 80, true))
+    isClassification(model.max_data_classification) && typeof model.runtime_available === "boolean" && Array.isArray(model.capabilities) &&
+    model.capabilities.every((capability) => isBoundedString(capability, 80, true)) &&
+    (model.incompatible_capability_combinations === undefined || (
+      Array.isArray(model.incompatible_capability_combinations) &&
+      model.incompatible_capability_combinations.every((combination) =>
+        Array.isArray(combination) && combination.length >= 2 &&
+        combination.every((capability) => model.capabilities.includes(capability)),
+      )
+    ))
   );
 }
 
 function isModelConsumers(value) {
   return Array.isArray(value) && value.every((consumer) =>
-    isRecord(consumer) && hasOnlyKeys(consumer, ["consumer_id", "display_name", "required_capabilities"]) &&
+    isRecord(consumer) && hasOnlyKeys(consumer, ["consumer_id", "display_name", "required_capabilities", "call_requirements"]) &&
     isBoundedString(consumer.consumer_id, 100, true) && isBoundedString(consumer.display_name, 200, true) &&
-    Array.isArray(consumer.required_capabilities)
+    Array.isArray(consumer.required_capabilities) &&
+    (consumer.call_requirements === undefined || (
+      Array.isArray(consumer.call_requirements) && consumer.call_requirements.every((requirement) =>
+        isRecord(requirement) && hasOnlyKeys(requirement, ["call_type", "required_capabilities"]) &&
+        isBoundedString(requirement.call_type, 80, true) && Array.isArray(requirement.required_capabilities),
+      )
+    ))
   );
 }
 

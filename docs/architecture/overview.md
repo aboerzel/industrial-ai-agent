@@ -142,6 +142,11 @@ recorded as `runtime_unavailable` candidate metadata and remains distinct from c
 and security exclusions. Timeouts, rate limits, connection errors, and provider outages
 occur after selection and never trigger reselection.
 
+The Model Configuration UI lists every catalog entry. A statically unavailable entry is
+shown as disabled with a configuration/runtime reason; it is not silently removed and is
+not reported as an egress denial. Security-forbidden entries remain separately disabled
+with their classification reason.
+
 ## Current Architecture
 
 ### Investigation History and PDF Export
@@ -542,8 +547,8 @@ transient service-start or restart race before a run receives a session; a persi
 outage remains a sanitized `mcp_service_unavailable` failure and never broadens tool
 exposure.
 
-The MCP path does not replace ADR-009: every graph model call still goes through
-`EgressCheckedLLMClient`. Local HTTP connections to factory and knowledge containers are
+The MCP path does not replace ADR-009: every graph model call still goes through the
+per-request `CapabilityCheckedLLMClient` and `EgressCheckedLLMClient`. Local HTTP connections to factory and knowledge containers are
 service transport, not permission to egress tool data to a public model. Knowledge MCP
 uses local Ollama embeddings and a local Hugging Face cache for reranking; queries,
 chunks, embeddings, and reranker inputs do not reach a public provider. The local Docker
@@ -610,13 +615,15 @@ flowchart LR
     M["Validated model catalog"] --> R
     S["ModelExecutionAuthorizer"] --> R
     R -->|"authorized model_id"| A
-    A -->|"model_id + LLMRequest"| G["EgressCheckedLLMClient"]
+    A -->|"model_id + LLMRequest"| V["CapabilityCheckedLLMClient"]
+    V --> G["EgressCheckedLLMClient"]
     P["LLMClient port"]
     G -.->|"implements"| P
     C["OpenAICompatibleLLMClient"] -.->|"implements"| P
     CL["Explicit DataClassification"] --> G
     S --> G
     TOML["config/model_catalog.toml<br/>model metadata + provider settings"] --> M
+    TOML --> V
     TOML --> G
     TOML --> C
     ENV["Environment variables<br/>API keys for authenticated profiles only"] -.-> C
@@ -627,6 +634,7 @@ flowchart LR
     subgraph Core["Application Core"]
         A
         P
+        V
         G
         CL
         R
@@ -658,6 +666,16 @@ capabilities; ADR-009 then authorizes the execution zone. The current policy sti
 all classifications locally, allows `PUBLIC`, `INTERNAL`, and `CONFIDENTIAL` in
 `PUBLIC_CLOUD`, and keeps `RESTRICTED` local. Missing assignments and unknown models,
 classifications, zones, or capabilities fail closed without an adapter call.
+
+The catalog records individual capabilities and may record an
+`incompatible_capability_combinations` constraint when a provider cannot use two
+otherwise supported capabilities in the *same* request. Requirements are therefore
+defined per concrete LLM call rather than as a flat workflow union. The agent's tool
+decision calls require `text` + `tool_calling`; its separate optional final-output
+normalization requires `text` + `structured_output`; a plain answer requires `text`.
+A model that supports Tool Calling and Structured Output individually but not together
+remains compatible with that sequence. The final capability guard repeats the same
+per-request validation immediately before provider execution.
 
 The implemented tool-calling flow is:
 
@@ -704,7 +722,8 @@ The LangGraph MCP path preserves that behavior in an explicit graph:
 ```mermaid
 flowchart LR
     CR["Composition Root"] --> Resolver["ModelResolutionService"]
-    Resolver -->|"authorized model_id"| Security["EgressCheckedLLMClient"]
+    Resolver -->|"authorized model_id"| Capability["CapabilityCheckedLLMClient<br/>per LLM request"]
+    Capability --> Security["EgressCheckedLLMClient"]
     Security --> Adapter["LLMClientChatModel<br/>LangChain message adapter"]
     Adapter --> Model["model node"]
     Model --> Route{"conditional route"}
@@ -720,9 +739,9 @@ flowchart LR
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    class CR,Router,Provider,Factory,Knowledge core
+    class CR,Resolver,Provider,Factory,Knowledge core
     class Adapter,Model,Route,Tool,Approval,Action,End framework
-    class Security security
+    class Capability,Security security
 ```
 
 `TroubleshootingGraphState` holds LangChain messages, the executed-tool count,
@@ -731,7 +750,7 @@ and minimal bound run context. A custom tool node adapts discovered MCP contract
 LangChain `StructuredTool` contracts. This keeps argument validation and sequential
 one-call dispatch explicit instead of adopting a framework default that could change
 ADR-004 behavior. The Graph does not select a model: the Composition Root injects an
-already routed profile and a client whose final ADR-009 egress check remains active.
+already routed profile and a client whose final capability and ADR-009 egress checks remain active.
 
 For the resumable write path, the graph is compiled with LangGraph's official
 `AsyncPostgresSaver` and invoked

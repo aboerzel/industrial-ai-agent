@@ -34,6 +34,7 @@ from industrial_ai_agent.agent.model_egress import (
     ModelExecutionAuthorizer,
 )
 from industrial_ai_agent.agent.model_selection import (
+    AGENT_CALL_REQUIREMENTS,
     AGENT_CONSUMER,
     AGENT_REQUIREMENTS,
     CostClass,
@@ -187,7 +188,7 @@ def _service(factory: SequentialAgentFactory) -> TroubleshootingRunService:
             catalog=_Catalog(),
             assignments=_Assignments(),
             authorizer=ModelExecutionAuthorizer(),
-            consumer_requirements={AGENT_CONSUMER: AGENT_REQUIREMENTS},
+            consumer_requirements={AGENT_CONSUMER: AGENT_CALL_REQUIREMENTS},
         ),
         agent_factory=factory,
         checkpointer_factory=PostgreSqlCheckpointerFactory(DATABASE_URL),

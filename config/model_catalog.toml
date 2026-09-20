@@ -45,7 +45,8 @@ execution_zone = "PUBLIC_CLOUD"
 max_data_classification = "CONFIDENTIAL"
 cost_class = "LOW"
 quality_class = "HIGH"
-capabilities = ["text", "tool_calling"]
+capabilities = ["text", "tool_calling", "structured_output"]
+incompatible_capability_combinations = [["tool_calling", "structured_output"]]
 
 [[models]]
 id = "mistral_fast"

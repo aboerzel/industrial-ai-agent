@@ -1151,6 +1151,11 @@ def test_mcp_unavailability_returns_a_persisted_failed_run() -> None:
                 "again later."
             ),
         ),
+        (
+            LLMProviderErrorCode.REQUEST_INVALID,
+            "EN",
+            "The language model provider rejected this request. Please try again later.",
+        ),
     ),
 )
 def test_llm_provider_limit_is_sanitized_persisted_and_available_in_history(

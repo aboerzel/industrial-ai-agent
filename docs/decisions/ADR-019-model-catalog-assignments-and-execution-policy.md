@@ -32,7 +32,8 @@ is the canonical identity in code, persistence, configuration references, API mu
 payloads, and telemetry correlation. `display_name` is mutable presentation metadata and
 is used only by user-facing UI and dashboards. The catalog records provider configuration,
 execution zone, the existing per-model maximum-classification security constraint,
-cost/quality classes, and an extensible capability set; it contains no
+cost/quality classes, an extensible individual capability set, and optional
+per-invocation incompatible-capability combinations; it contains no
 classification routing, task routing, priority, automatic-routing flag, or default.
 
 ### Consumers, assignments, and requirements
@@ -45,10 +46,20 @@ closed enum.
 PostgreSQL stores one assignment per `(consumer_id, data_classification)` and refers only
 to a catalog `model_id`. Assignment is configuration and never grants authorization.
 Consumer capability requirements are application policy separate from catalog metadata.
-The implemented `agent` workflow requires `text`, `tool_calling`, and
-`structured_output`. The already implemented MCP-side RCA explanation uses the
-specialized `rca.reasoning` consumer and requires `text` and `structured_output`. Future
-specialized requirements are added only with their workflow.
+They describe one concrete provider invocation, not the union of capabilities used
+somewhere in a workflow. The implemented `agent` uses `text` + `tool_calling` for each
+tool-decision call, `text` + `structured_output` for its separate optional final-output
+normalization call, and `text` for a plain-text call. The already implemented MCP-side
+RCA explanation uses the specialized `rca.reasoning` consumer and requires `text` +
+`structured_output` in its one structured invocation. Future specialized requirements
+are added only with their workflow.
+
+A catalog entry states whether a model/provider supports each individual capability.
+When an integration cannot use two otherwise supported capabilities in one request, it
+declares `incompatible_capability_combinations`. The constraint applies only to one
+provider invocation. For example, a model that supports Tool Calling and Structured
+Output individually but not together remains compatible with an agent run that performs
+one tool-decision request followed by one separate structured-output request.
 
 Migration seeds `agent` assignments only where the previous effective intent is unique:
 PUBLIC, INTERNAL, and CONFIDENTIAL use `nvidia_quality`. It does not seed RESTRICTED,
@@ -96,7 +107,7 @@ For `AUTO`, the resolver first filters the loaded runtime catalog by static avai
 an API-key-authenticated model is eligible only when its configured key environment
 variable is non-empty. Local catalog entries represent configured local runtime endpoints;
 the filter does not actively probe provider or model health. It then filters the remaining
-entries by all required capabilities and applies the authoritative ADR-009 security/egress
+entries by every call-level capability requirement and applies the authoritative ADR-009 security/egress
 authorization to every capable candidate.
 Security denial removes a candidate; it is never a weighted score or ranking penalty. If
 no capable candidate exists the outcome is `CAPABILITY_MISMATCH`; if capable candidates

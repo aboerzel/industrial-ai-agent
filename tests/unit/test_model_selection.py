@@ -8,6 +8,7 @@ from industrial_ai_agent.agent.llm import (
     LLMMessage,
     LLMRequest,
     LLMResponse,
+    LLMToolDefinition,
     MessageRole,
     ModelId,
 )
@@ -18,8 +19,11 @@ from industrial_ai_agent.agent.model_egress import (
     ModelExecutionAuthorizer,
 )
 from industrial_ai_agent.agent.model_selection import (
+    CapabilityCheckedLLMClient,
     CostClass,
     ModelAssignment,
+    ModelCallRequirement,
+    ModelCallType,
     ModelCapability,
     ModelConsumerId,
     ModelDecision,
@@ -31,6 +35,7 @@ from industrial_ai_agent.agent.model_selection import (
     ModelSelectionMode,
     ModelSelectionPolicy,
     QualityClass,
+    validate_model_capabilities,
 )
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.model_decision_observer import (
@@ -81,6 +86,7 @@ def _model(
     capabilities: frozenset[ModelCapability] = VISION_REQUIREMENTS,
     quality: QualityClass = QualityClass.STANDARD,
     cost: CostClass = CostClass.LOW,
+    incompatible_combinations: frozenset[frozenset[ModelCapability]] = frozenset(),
 ) -> ModelDefinition:
     return ModelDefinition(
         model_id=ModelId(model_id),
@@ -96,6 +102,7 @@ def _model(
         capabilities=capabilities,
         quality_class=quality,
         cost_class=cost,
+        incompatible_capability_combinations=incompatible_combinations,
     )
 
 
@@ -288,6 +295,169 @@ def test_auto_with_only_statically_unavailable_models_is_not_configured() -> Non
     assert captured.value.decision.error_code == "model_runtime_unavailable"
 
 
+GROQ_CAPABILITIES = frozenset(
+    {
+        ModelCapability.TEXT,
+        ModelCapability.TOOL_CALLING,
+        ModelCapability.STRUCTURED_OUTPUT,
+    }
+)
+GROQ_INCOMPATIBLE_COMBINATIONS = frozenset(
+    {
+        frozenset(
+            {
+                ModelCapability.TOOL_CALLING,
+                ModelCapability.STRUCTURED_OUTPUT,
+            }
+        )
+    }
+)
+
+
+def _groq_model() -> ModelDefinition:
+    return _model(
+        "groq_benchmark",
+        zone=ExecutionZone.PUBLIC_CLOUD,
+        capabilities=GROQ_CAPABILITIES,
+        incompatible_combinations=GROQ_INCOMPATIBLE_COMBINATIONS,
+    )
+
+
+@pytest.mark.parametrize(
+    ("call_type", "capabilities"),
+    [
+        (ModelCallType.PLAIN_TEXT, frozenset({ModelCapability.TEXT})),
+        (
+            ModelCallType.TOOL_DECISION,
+            frozenset({ModelCapability.TEXT, ModelCapability.TOOL_CALLING}),
+        ),
+        (
+            ModelCallType.STRUCTURED_RESPONSE,
+            frozenset({ModelCapability.TEXT, ModelCapability.STRUCTURED_OUTPUT}),
+        ),
+    ],
+)
+def test_groq_supports_each_supported_capability_combination_individually(
+    call_type: ModelCallType, capabilities: frozenset[ModelCapability]
+) -> None:
+    validation = validate_model_capabilities(
+        _groq_model(), (ModelCallRequirement(call_type, capabilities),)
+    )
+
+    assert validation.allowed is True
+
+
+def test_groq_denies_tools_and_structured_output_in_one_request() -> None:
+    validation = validate_model_capabilities(
+        _groq_model(),
+        (
+            ModelCallRequirement(
+                ModelCallType.TOOL_DECISION_STRUCTURED,
+                GROQ_CAPABILITIES,
+            ),
+        ),
+    )
+
+    assert validation.allowed is False
+    assert validation.missing_capabilities == frozenset()
+    assert validation.incompatible_combination == next(
+        iter(GROQ_INCOMPATIBLE_COMBINATIONS)
+    )
+
+
+def test_groq_accepts_tool_then_structured_calls_as_one_workflow() -> None:
+    validation = validate_model_capabilities(
+        _groq_model(),
+        (
+            ModelCallRequirement(
+                ModelCallType.TOOL_DECISION,
+                frozenset({ModelCapability.TEXT, ModelCapability.TOOL_CALLING}),
+            ),
+            ModelCallRequirement(
+                ModelCallType.STRUCTURED_RESPONSE,
+                frozenset({ModelCapability.TEXT, ModelCapability.STRUCTURED_OUTPUT}),
+            ),
+        ),
+    )
+
+    assert validation.allowed is True
+
+
+def test_auto_keeps_groq_when_workflow_calls_use_capabilities_separately() -> None:
+    assignment = ModelAssignment(
+        consumer_id=VISION_VLM,
+        data_classification=DataClassification.CONFIDENTIAL,
+        model_id=None,
+        selection_mode=ModelSelectionMode.AUTO,
+        selection_policy=ModelSelectionPolicy.QUALITY_FIRST,
+    )
+    resolver = ModelResolutionService(
+        catalog=Catalog(_groq_model()),
+        assignments=Assignments(assignment),
+        authorizer=ModelExecutionAuthorizer(),
+        consumer_requirements={
+            VISION_VLM: (
+                ModelCallRequirement(
+                    ModelCallType.TOOL_DECISION,
+                    frozenset({ModelCapability.TEXT, ModelCapability.TOOL_CALLING}),
+                ),
+                ModelCallRequirement(
+                    ModelCallType.STRUCTURED_RESPONSE,
+                    frozenset(
+                        {ModelCapability.TEXT, ModelCapability.STRUCTURED_OUTPUT}
+                    ),
+                ),
+            )
+        },
+    )
+
+    decision = resolver.resolve_model(VISION_VLM, DataClassification.CONFIDENTIAL)
+
+    assert decision.model == _groq_model()
+
+
+def test_final_capability_guard_blocks_only_the_incompatible_request() -> None:
+    delegate = CapturingClient()
+    catalog = Catalog(_groq_model())
+    checked = CapabilityCheckedLLMClient(
+        delegate,
+        catalog,
+        consumer_id=VISION_VLM,
+        data_classification=DataClassification.CONFIDENTIAL,
+    )
+    valid_request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="safe"),),
+        tools=(
+            LLMToolDefinition(
+                name="lookup", description="Lookup", parameters={"type": "object"}
+            ),
+        ),
+    )
+    incompatible_request = valid_request.model_copy(
+        update={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "Result",
+                    "schema": {"type": "object"},
+                    "strict": True,
+                },
+            }
+        }
+    )
+
+    checked.chat(ModelId("groq_benchmark"), valid_request)
+    with pytest.raises(ModelResolutionError) as captured:
+        checked.chat(ModelId("groq_benchmark"), incompatible_request)
+
+    assert delegate.called is True
+    assert delegate.call_count == 1
+    assert captured.value.decision.outcome is ModelDecisionOutcome.CAPABILITY_MISMATCH
+    assert captured.value.decision.incompatible_capability_combination == next(
+        iter(GROQ_INCOMPATIBLE_COMBINATIONS)
+    )
+
+
 def test_auto_without_policy_fails_closed_as_not_configured() -> None:
     resolver = _auto_resolver(
         _model("local_vision", zone=ExecutionZone.LOCAL), policy=None
@@ -311,9 +481,11 @@ class PublicZoneCatalog:
 
 class CapturingClient:
     called = False
+    call_count = 0
 
     def chat(self, model_id, request):
         self.called = True
+        self.call_count += 1
         return LLMResponse(text="unsafe", finish_reason=FinishReason.STOP)
 
 
@@ -446,6 +618,39 @@ def test_auto_candidate_trace_uses_safe_catalog_metadata_only() -> None:
     assert candidate_spans[1][1]["model.candidate_exclusion_reason"] == "egress_denied"
     assert "prompt" not in candidate_spans[0][1]
     assert "tool_result" not in candidate_spans[0][1]
+
+
+def test_capability_combination_trace_identifies_the_call_without_model_content() -> (
+    None
+):
+    telemetry = CapturingTelemetry()
+    groq = _groq_model()
+
+    TelemetryModelDecisionObserver(telemetry).record(  # type: ignore[arg-type]
+        ModelDecision(
+            consumer_id=VISION_VLM,
+            effective_data_classification=DataClassification.CONFIDENTIAL,
+            required_capabilities=GROQ_CAPABILITIES,
+            outcome=ModelDecisionOutcome.CAPABILITY_MISMATCH,
+            model=groq,
+            capability_allowed=False,
+            missing_capabilities=frozenset(),
+            incompatible_capability_combination=next(
+                iter(GROQ_INCOMPATIBLE_COMBINATIONS)
+            ),
+            call_type=ModelCallType.TOOL_DECISION_STRUCTURED,
+            egress_allowed=True,
+            error_code="model_capability_mismatch",
+        )
+    )
+
+    assert telemetry.attributes is not None
+    assert telemetry.attributes["model.call_type"] == "tool_decision_structured"
+    assert telemetry.attributes["model.incompatible_capability_combination"] == (
+        "structured_output,tool_calling"
+    )
+    assert "prompt" not in telemetry.attributes
+    assert "document_text" not in telemetry.attributes
 
 
 class CapturingTelemetry:
