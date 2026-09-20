@@ -84,8 +84,7 @@ S04_SCENARIO = QualityScenario(
     required_tools=("get_machine_status", "search_documentation"),
     allowed_tools=("get_machine_status", "search_documentation"),
     required_identifiers=("S04", "QUALITY-09"),
-    required_documents=("DOC-QUALITY-09",),
-    require_next_steps=True,
+    required_reference_fault_ids=("QUALITY-09",),
 )
 S04_REQUEST = (
     "Untersuche Station S04 genauer. Ermittle die Ursache des aktuellen Fehlers, "
@@ -189,6 +188,7 @@ async def _run(
                     tool_calls=state["executed_tool_calls"],
                     identifiers=state["identifiers"],
                     documents=state["documents"],
+                    trusted_reference_fault_ids=_trusted_reference_fault_ids(state),
                     next_steps=state["next_steps"],
                     duration_ms=(perf_counter() - started) * 1_000,
                 )
@@ -433,7 +433,24 @@ def _safe_evidence_state(state: dict[str, object]) -> dict[str, object]:
         "missing": [item.value for item in state["evidence_missing"]],
         "guard_interventions": state["evidence_guard_interventions"],
         "finalization_attempts": state["evidence_finalization_attempts"],
+        "trusted_reference_fault_ids": _trusted_reference_fault_ids(state),
     }
+
+
+def _trusted_reference_fault_ids(state: dict[str, object]) -> tuple[str, ...]:
+    """Expose only fault IDs from trusted documentation evidence to the evaluator."""
+    return tuple(
+        sorted(
+            {
+                fault_id.strip().upper()
+                for observation in state.get("evidence_observations", ())
+                if isinstance(observation, dict)
+                and observation.get("observation_type") == "documentation"
+                and isinstance((fault_id := observation.get("fault_id")), str)
+                and fault_id.strip()
+            }
+        )
+    )
 
 
 def _eval_mcp_servers(args: argparse.Namespace) -> tuple[McpServerConfiguration, ...]:

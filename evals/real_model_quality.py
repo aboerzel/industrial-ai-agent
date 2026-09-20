@@ -144,6 +144,7 @@ class QualityScenario(BaseModel):
     allowed_tools: tuple[str, ...] = ()
     required_identifiers: tuple[str, ...] = ()
     required_documents: tuple[str, ...] = ()
+    required_reference_fault_ids: tuple[str, ...] = ()
     forbidden_identifiers: tuple[str, ...] = ()
     require_next_steps: bool = False
 
@@ -162,6 +163,7 @@ class RealModelRunArtifact(BaseModel):
     tool_calls: tuple[ExecutedToolCall, ...] = ()
     identifiers: tuple[IdentifierReference, ...] = ()
     documents: tuple[DocumentReference, ...] = ()
+    trusted_reference_fault_ids: tuple[str, ...] = ()
     next_steps: tuple[str, ...] = ()
     duration_ms: float | None = Field(default=None, ge=0)
     input_tokens: int | None = Field(default=None, ge=0)
@@ -240,6 +242,11 @@ def evaluate_real_model_run(
     tool_names = tuple(call.tool for call in artifact.tool_calls)
     identifier_values = {identifier.value for identifier in artifact.identifiers}
     document_ids = {document.document_id for document in artifact.documents}
+    trusted_reference_fault_ids = {
+        fault_id.strip().upper()
+        for fault_id in artifact.trusted_reference_fault_ids
+        if fault_id.strip()
+    }
     missing_tools = set(scenario.required_tools) - set(tool_names)
     irrelevant_tools = (
         set(tool_names) - set(scenario.allowed_tools)
@@ -268,14 +275,21 @@ def evaluate_real_model_run(
         *(_reasons("missing identifiers", grounding_failures)),
         *(_reasons("forbidden identifiers", forbidden_identifiers)),
     )
+    missing_documents = set(scenario.required_documents) - document_ids
+    missing_reference_fault_ids = {
+        fault_id.strip().upper()
+        for fault_id in scenario.required_reference_fault_ids
+        if fault_id.strip()
+    } - trusted_reference_fault_ids
     references = _check(
-        not (set(scenario.required_documents) - document_ids),
+        not missing_documents and not missing_reference_fault_ids,
         *(
             _reasons(
                 "missing relevant documents",
-                set(scenario.required_documents) - document_ids,
+                missing_documents,
             )
         ),
+        *(_reasons("missing trusted reference fault IDs", missing_reference_fault_ids)),
     )
     causal = _check(
         not _UNSUPPORTED_CERTAINTY.search(answer)

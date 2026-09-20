@@ -12,7 +12,6 @@ from evals.real_model_quality import (
 )
 from industrial_ai_agent.agent.agent_run import (
     AgentRunStatus,
-    DocumentReference,
     ExecutedToolCall,
     IdentifierReference,
     IdentifierType,
@@ -24,8 +23,7 @@ S04 = QualityScenario(
     required_tools=("get_machine_status", "search_documentation"),
     allowed_tools=("get_machine_status", "search_documentation"),
     required_identifiers=("S04", "QUALITY-09"),
-    required_documents=("DOC-QUALITY-09",),
-    require_next_steps=True,
+    required_reference_fault_ids=("QUALITY-09",),
 )
 
 
@@ -47,11 +45,7 @@ def good_artifact(**changes: object) -> RealModelRunArtifact:
             IdentifierReference(value="S04", type=IdentifierType.STATION),
             IdentifierReference(value="QUALITY-09", type=IdentifierType.ERROR_CODE),
         ),
-        "documents": (
-            DocumentReference(
-                document_id="DOC-QUALITY-09", title="Quality", format="markdown"
-            ),
-        ),
+        "trusted_reference_fault_ids": ("QUALITY-09",),
         "next_steps": ("Prüfen Sie die Qualitätsmessung gemäß der Dokumentation.",),
     }
     values.update(changes)
@@ -74,6 +68,70 @@ def test_clean_s04_result_passes_deterministic_contract() -> None:
     assert result.reference_relevance.result is QualityCheck.PASS
     assert result.language_compliance.result is QualityCheck.PASS
     assert result.output_cleanliness.result is QualityCheck.PASS
+
+
+def test_trusted_fault_provenance_satisfies_reference_relevance() -> None:
+    result = evaluate_real_model_run(
+        S04, good_artifact(trusted_reference_fault_ids=("QUALITY-09",))
+    )
+
+    assert result.reference_relevance.result is QualityCheck.PASS
+
+
+def test_unrelated_fault_provenance_does_not_satisfy_reference_relevance() -> None:
+    result = evaluate_real_model_run(
+        S04, good_artifact(trusted_reference_fault_ids=("POSITION-02",))
+    )
+
+    assert result.reference_relevance.result is QualityCheck.FAIL
+
+
+def test_query_text_cannot_satisfy_reference_relevance() -> None:
+    result = evaluate_real_model_run(
+        S04,
+        good_artifact(
+            tool_calls=(
+                ExecutedToolCall(
+                    tool="get_machine_status", arguments={"station_id": "S04"}
+                ),
+                ExecutedToolCall(
+                    tool="search_documentation", arguments={"query": "QUALITY-09"}
+                ),
+            ),
+            trusted_reference_fault_ids=(),
+        ),
+    )
+
+    assert result.reference_relevance.result is QualityCheck.FAIL
+
+
+def test_document_body_text_cannot_satisfy_reference_relevance() -> None:
+    result = evaluate_real_model_run(
+        S04,
+        good_artifact(
+            final_answer="QUALITY-09 appears only in untrusted document body text.",
+            trusted_reference_fault_ids=(),
+        ),
+    )
+
+    assert result.reference_relevance.result is QualityCheck.FAIL
+
+
+def test_one_relevant_trusted_document_among_multiple_faults_is_sufficient() -> None:
+    result = evaluate_real_model_run(
+        S04,
+        good_artifact(
+            trusted_reference_fault_ids=("POSITION-02", "QUALITY-09"),
+        ),
+    )
+
+    assert result.reference_relevance.result is QualityCheck.PASS
+
+
+def test_optional_next_steps_do_not_fail_the_quality_contract() -> None:
+    result = evaluate_real_model_run(S04, good_artifact(next_steps=()))
+
+    assert result.next_step_usefulness.result is QualityCheck.PASS
 
 
 def test_missing_required_tool_is_incomplete() -> None:

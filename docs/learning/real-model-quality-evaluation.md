@@ -26,11 +26,18 @@ or security policy) is classified as `TECHNICAL_FAILURE`; every quality dimensio
 then `NOT_EVALUATED`. It can never become a language, grounding, or usefulness failure.
 
 The initial canonical scenario is German S04 troubleshooting: the agent must observe
-S04's `FAULTED` / `QUALITY-09` state and retrieve `DOC-QUALITY-09`. The evaluator checks
-required and irrelevant tools, structured identifiers and references, response language,
-obvious output-template/tool-protocol artifacts, and minimum causal-discipline
-violations. It does not use an LLM judge. A natural-language dimension without a stable
-deterministic rule is reported as `NOT_EVALUATED`.
+S04's `FAULTED` / `QUALITY-09` state and retrieve documentation whose trusted catalog
+metadata declares `QUALITY-09` in `fault_ids`. Reference relevance is therefore a
+trusted provenance check, not a hard-coded document ID, query match, or document-body
+match. Document IDs remain safe correlation information where available. The evaluator
+checks required and irrelevant tools, structured identifiers and references, response
+language, obvious output-template/tool-protocol artifacts, and minimum
+causal-discipline violations. It does not use an LLM judge. A natural-language dimension
+without a stable deterministic rule is reported as `NOT_EVALUATED`.
+
+`next_steps` is a bounded optional structured field. A non-empty list is evaluated for
+safe user-executable prompts when present, but an empty list is valid when no meaningful
+follow-up is warranted; it is not by itself a model-usefulness failure.
 
 Run the local Qwen 3.5 9B baseline after Ollama and the local MCP dependencies are
 available:
