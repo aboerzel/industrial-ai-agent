@@ -121,6 +121,11 @@ def create_default_app():
             supported_consumers=model_resolver.supported_consumers,
             consumer_definitions=CURRENT_MODEL_CONSUMERS,
             authorizer=authorizer,
+            model_is_statically_available=lambda model: (
+                model_catalog.is_model_available(
+                    model.model_id.value, environment=os.environ
+                )
+            ),
         ),
     )
 

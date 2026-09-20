@@ -1,5 +1,7 @@
 """Application service for model catalog and persistent assignment configuration."""
 
+from collections.abc import Callable
+
 from industrial_ai_agent.agent.llm import ModelId
 from industrial_ai_agent.agent.model_egress import ModelExecutionAuthorizer
 from industrial_ai_agent.agent.model_selection import (
@@ -28,6 +30,7 @@ class ModelConfigurationService:
         supported_consumers: tuple[ModelConsumerId, ...],
         consumer_definitions: tuple[ModelConsumerDefinition, ...] = (),
         authorizer: ModelExecutionAuthorizer,
+        model_is_statically_available: Callable[[ModelDefinition], bool] | None = None,
     ) -> None:
         self._catalog = catalog
         self._assignments = assignments
@@ -38,9 +41,17 @@ class ModelConfigurationService:
             if item.consumer_id in self._supported_consumers
         )
         self._authorizer = authorizer
+        self._model_is_statically_available = (
+            model_is_statically_available or _always_statically_available
+        )
 
     def list_models(self) -> tuple[ModelDefinition, ...]:
         return self._catalog.list_models()
+
+    def is_model_statically_available(self, model: ModelDefinition) -> bool:
+        """Expose configured-runtime availability without probing provider health."""
+
+        return self._model_is_statically_available(model)
 
     def list_assignments(self) -> tuple[ModelAssignment, ...]:
         return self._assignments.list()
@@ -103,3 +114,9 @@ class ModelConfigurationService:
                 updated_by=updated_by,
             )
         )
+
+
+def _always_statically_available(_: ModelDefinition) -> bool:
+    """Keep catalog-only application tests independent of deployment configuration."""
+
+    return True
