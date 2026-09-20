@@ -1,6 +1,7 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
@@ -9,9 +10,14 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from industrial_ai_agent.agent.llm import (
     FinishReason,
+    LLMJsonSchema,
     LLMMessage,
+    LLMProviderError,
+    LLMProviderErrorCode,
     LLMRequest,
+    LLMRequestDiagnostics,
     LLMResponse,
+    LLMResponseFormat,
     LLMToolCall,
     LLMToolDefinition,
     LLMUsage,
@@ -48,6 +54,43 @@ class _FixedResponseClient:
         return self._response
 
 
+class _ProviderErrorClient:
+    def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
+        del profile, request
+        raise LLMProviderError(
+            LLMProviderErrorCode.REQUEST_INVALID,
+            provider_error_type="BadRequestError",
+            provider_http_status=400,
+            provider_error_category="invalid_request_error",
+            provider_request_id="groq-safe-123",
+            request_diagnostics=LLMRequestDiagnostics(
+                request_payload_bytes=321,
+                message_count=1,
+                tool_definition_count=0,
+                has_tools=False,
+                has_structured_output=True,
+                structured_schema_hash="sha256:abc123",
+            ),
+        )
+
+
+class _DiagnosticResponseClient:
+    def chat(self, profile: ModelProfile, request: LLMRequest) -> LLMResponse:
+        del profile, request
+        return LLMResponse(
+            text="private model response",
+            finish_reason=FinishReason.STOP,
+            request_diagnostics=LLMRequestDiagnostics(
+                request_payload_bytes=222,
+                message_count=1,
+                tool_definition_count=0,
+                has_tools=False,
+                has_structured_output=True,
+                structured_schema_hash="sha256:success123",
+            ),
+        )
+
+
 def test_langfuse_generation_contains_only_allowlisted_metadata() -> None:
     telemetry, exporter = _recording_langfuse_telemetry()
     client = ObservedLLMClient(
@@ -80,6 +123,82 @@ def test_langfuse_generation_contains_only_allowlisted_metadata() -> None:
     assert generation_attributes["gen_ai.usage.total_tokens"] == 18
     assert generation_attributes["gen_ai.usage.cost"] == 0.0
     assert "private model response" not in str(generation_attributes)
+
+
+def test_successful_generation_records_safe_request_diagnostics() -> None:
+    telemetry, exporter = _recording_langfuse_telemetry()
+    client = ObservedLLMClient(
+        _DiagnosticResponseClient(),
+        configuration=_configuration(api_cost_usd=None),
+        data_classification=DataClassification.CONFIDENTIAL,
+        telemetry=telemetry,
+    )
+
+    with telemetry.span("agent.run", {"run.id": "run-123"}):
+        client.chat(
+            ModelProfile("local_quality"),
+            LLMRequest(
+                messages=(LLMMessage(role=MessageRole.USER, content="private prompt"),),
+                response_format=LLMResponseFormat(
+                    json_schema=LLMJsonSchema(
+                        name="private_result", schema_definition={"type": "object"}
+                    )
+                ),
+            ),
+        )
+
+    generation = next(
+        span for span in exporter.get_finished_spans() if span.name == "llm.call"
+    )
+    attributes = generation.attributes
+    assert attributes["model.call_type"] == "structured_response"
+    assert attributes["request.payload_bytes"] == 222
+    assert attributes["request.message_count"] == 1
+    assert attributes["request.has_structured_output"] is True
+    assert attributes["request.structured_schema_hash"] == "sha256:success123"
+    assert "private prompt" not in str(attributes)
+
+
+def test_provider_request_failure_records_only_safe_structural_diagnostics() -> None:
+    telemetry, exporter = _recording_langfuse_telemetry()
+    client = ObservedLLMClient(
+        _ProviderErrorClient(),
+        configuration=_configuration(api_cost_usd=None),
+        data_classification=DataClassification.CONFIDENTIAL,
+        telemetry=telemetry,
+    )
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="private prompt"),),
+        response_format=LLMResponseFormat(
+            json_schema=LLMJsonSchema(
+                name="private_result",
+                schema_definition={"type": "object"},
+            )
+        ),
+    )
+
+    with (
+        pytest.raises(LLMProviderError),
+        telemetry.span("agent.run", {"run.id": "run-123"}),
+    ):
+        client.chat(ModelProfile("local_quality"), request)
+
+    generation = next(
+        span for span in exporter.get_finished_spans() if span.name == "llm.call"
+    )
+    attributes = generation.attributes
+    assert attributes["run.id"] == "run-123"
+    assert attributes["model.call_type"] == "structured_response"
+    assert attributes["provider.http_status"] == 400
+    assert attributes["provider.error_type"] == "BadRequestError"
+    assert attributes["provider.error_category"] == "invalid_request_error"
+    assert attributes["provider.request_id"] == "groq-safe-123"
+    assert attributes["request.payload_bytes"] == 321
+    assert attributes["request.message_count"] == 1
+    assert attributes["request.has_structured_output"] is True
+    assert attributes["request.structured_schema_hash"] == "sha256:abc123"
+    assert "private prompt" not in str(attributes)
+    assert "provider response body" not in str(attributes)
 
 
 def test_rca_reasoning_generation_keeps_metadata_only_context() -> None:
