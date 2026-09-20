@@ -1278,6 +1278,30 @@ def test_pdf_exports_persisted_operational_failure_transcripts(
     assert b"Status:" in pdf.content
 
 
+def test_pdf_localizes_user_facing_labels_for_a_german_run() -> None:
+    client = TestClient(create_app(FakeRunService(result=_success_result())))
+
+    run = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Untersuche Station S04.",
+            "user_clearance": "CONFIDENTIAL",
+            "response_language": "DE",
+        },
+    ).json()
+    pdf = client.get(
+        f"/api/v1/investigations/{run['investigation_id']}/pdf?user_clearance=CONFIDENTIAL"
+    )
+
+    assert pdf.status_code == 200
+    assert b"Untersuchungsbericht" in pdf.content
+    assert b"Benutzer" in pdf.content
+    assert b"Ausgef" in pdf.content
+    assert b"Zusammenfassung" in pdf.content
+    assert b"Investigation Report" not in pdf.content
+    assert b"Executed tools" not in pdf.content
+
+
 @pytest.mark.parametrize(
     ("status", "error_code", "answer"),
     (

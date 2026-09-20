@@ -193,6 +193,7 @@ def _quality_contract(contract: ScenarioContract) -> QualityScenario:
         scenario_id=contract.scenario_id,
         requested_language="de",
         required_identifiers=contract.required_identifiers,
+        required_answer_facts=contract.required_answer_facts,
         required_documents=contract.required_documents,
         required_reference_fault_ids=contract.required_reference_fault_ids,
     )

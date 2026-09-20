@@ -124,9 +124,16 @@ def user_facing_error_message(
         "tool_execution_failed": "A required tool could not complete the request.",
         "internal_error": "The agent run could not be completed.",
         "agent_execution_timeout": "The agent run exceeded its execution time limit.",
+        "evidence_requirements_unsatisfied": (
+            "The investigation could not be completed because required evidence is still missing."
+        ),
+        "evidence_source_unavailable": (
+            "The investigation cannot continue because an authorized evidence source is unavailable."
+        ),
         "recovery_incomplete": "The requested recovery was not completed.",
         "recovery_blocked": "The requested recovery was blocked before execution.",
         "recovery_failed": "The requested recovery did not pass verification.",
+        "recovery_succeeded": "The requested recovery was completed and verified.",
     }
     german = {
         "requested_data_unavailable": "Die angeforderten Daten sind nicht verfügbar.",
@@ -160,9 +167,18 @@ def user_facing_error_message(
         "tool_execution_failed": "Ein erforderliches Werkzeug konnte die Anfrage nicht abschließen.",
         "internal_error": "Der Agent-Run konnte nicht abgeschlossen werden.",
         "agent_execution_timeout": "Der Agent-Run hat sein Ausfuehrungszeitlimit ueberschritten.",
+        "evidence_requirements_unsatisfied": (
+            "Die Untersuchung konnte nicht abgeschlossen werden, da erforderliche Evidenz fehlt."
+        ),
+        "evidence_source_unavailable": (
+            "Die Untersuchung kann nicht fortgesetzt werden, da eine autorisierte Evidenzquelle nicht verfügbar ist."
+        ),
         "recovery_incomplete": "Die angeforderte Recovery wurde nicht abgeschlossen.",
         "recovery_blocked": "Die angeforderte Recovery wurde vor der Ausführung blockiert.",
         "recovery_failed": "Die angeforderte Recovery hat die Verifikation nicht bestanden.",
+        "recovery_succeeded": (
+            "Die angeforderte Recovery wurde abgeschlossen und verifiziert."
+        ),
     }
     messages = german if response_language is ResponseLanguage.DE else english
     return messages.get(error_code, messages["internal_error"])

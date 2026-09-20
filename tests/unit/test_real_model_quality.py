@@ -23,6 +23,7 @@ S04 = QualityScenario(
     required_tools=("get_machine_status", "search_documentation"),
     allowed_tools=("get_machine_status", "search_documentation"),
     required_identifiers=("S04", "QUALITY-09"),
+    required_answer_facts=("S04", "FAULTED", "QUALITY-09"),
     required_reference_fault_ids=("QUALITY-09",),
 )
 
@@ -135,10 +136,10 @@ def test_one_relevant_trusted_document_among_multiple_faults_is_sufficient() -> 
     assert result.reference_relevance.result is QualityCheck.PASS
 
 
-def test_optional_next_steps_do_not_fail_the_quality_contract() -> None:
+def test_absent_optional_next_steps_are_not_called_useful() -> None:
     result = evaluate_real_model_run(S04, good_artifact(next_steps=()))
 
-    assert result.next_step_usefulness.result is QualityCheck.PASS
+    assert result.next_step_usefulness.result is QualityCheck.NOT_EVALUATED
 
 
 def test_missing_required_tool_is_incomplete() -> None:
@@ -206,6 +207,15 @@ def test_technical_identifiers_do_not_create_language_mismatch() -> None:
     )
 
 
+def test_german_technical_identifiers_and_tool_names_remain_german() -> None:
+    assert (
+        detect_output_language(
+            "Station S04 ist wegen QUALITY-09 fehlerhaft; get_machine_status bestätigt den Zustand."
+        )
+        is DetectedLanguage.GERMAN
+    )
+
+
 def test_unresolved_template_artifacts_fail_cleanliness() -> None:
     assert "python_mapping_placeholder" in detect_output_artifacts(
         "Status: {data['status']}"
@@ -214,6 +224,23 @@ def test_unresolved_template_artifacts_fail_cleanliness() -> None:
         S04, good_artifact(final_answer="Status: {data['status']}")
     )
     assert result.output_cleanliness.result is QualityCheck.FAIL
+
+
+def test_raw_json_and_schema_leaks_fail_cleanliness() -> None:
+    assert "raw_json" in detect_output_artifacts('{"final_answer": "S04"}')
+    assert "schema_leak" in detect_output_artifacts("FinalAgentOutput: S04")
+
+
+def test_s04_finding_must_contain_the_observed_fault_facts() -> None:
+    result = evaluate_real_model_run(
+        S04, good_artifact(final_answer="S04 ist FAULTED mit QUALITY-09.")
+    )
+    assert result.finding_usefulness.result is QualityCheck.PASS
+
+    missing_fault = evaluate_real_model_run(
+        S04, good_artifact(final_answer="S04 benötigt eine Prüfung.")
+    )
+    assert missing_fault.finding_usefulness.result is QualityCheck.FAIL
 
 
 def test_next_steps_cannot_claim_an_unauthorized_executed_action() -> None:

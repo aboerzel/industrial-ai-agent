@@ -7,6 +7,7 @@ from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
 from industrial_ai_agent.agent.response_language import (
     ResponseLanguage,
     detect_response_language,
+    user_facing_error_message,
 )
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
@@ -60,3 +61,30 @@ def test_run_store_preserves_response_language_across_approval_lifecycle() -> No
         assert completed.response_language is ResponseLanguage.DE
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    (
+        "llm_rate_limit",
+        "llm_provider_unavailable",
+        "llm_provider_request_invalid",
+        "model_capability_mismatch",
+        "model_not_configured",
+        "evidence_requirements_unsatisfied",
+        "evidence_source_unavailable",
+        "requested_data_unavailable",
+        "recovery_blocked",
+        "recovery_failed",
+        "recovery_succeeded",
+    ),
+)
+def test_public_error_messages_are_localized_for_both_supported_languages(
+    error_code: str,
+) -> None:
+    german = user_facing_error_message(error_code, ResponseLanguage.DE)
+    english = user_facing_error_message(error_code, ResponseLanguage.EN)
+
+    assert german != english
+    assert german.endswith(".")
+    assert english.endswith(".")

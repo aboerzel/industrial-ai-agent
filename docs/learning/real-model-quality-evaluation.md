@@ -1,13 +1,18 @@
 # Real-Model Quality Evaluation
 
-The project separates three reliability layers. They answer different questions and
+The completed reliability stack separates five layers. They answer different questions and
 must not be collapsed into a single score.
 
 1. Deterministic full-stack acceptance verifies application correctness using the
    scripted canonical S04 path.
 2. The Provider Contract Matrix verifies technical adapter/provider compatibility.
-3. Real-model quality evaluations measure actual model tool use and user-facing output
-   against deterministic scenario facts.
+3. Evidence Guard and Evidence Source Capabilities provide deterministic investigation
+   guarantees before finalization.
+4. Cross-scenario real-model reliability measures behavior across the established public,
+   internal, documentation, and S04 scenarios.
+5. Quality and Language Closure evaluates user-facing output: requested language,
+   deterministic grounding/reference facts, causal discipline, output cleanliness, and
+   localized terminal and report projections.
 
 ```mermaid
 flowchart TD
@@ -15,9 +20,11 @@ flowchart TD
     B -->|No| C[Application / code regression]
     B -->|Yes| D{Provider contract healthy?}
     D -->|No| E[Provider / adapter / quota issue]
-    D -->|Yes| F{Real-model quality checks pass?}
-    F -->|No| G[Model / prompt / output-quality issue]
-    F -->|Yes| H[End-to-end healthy]
+    D -->|Yes| F{Evidence guarantees healthy?}
+    F -->|No| G[Application / orchestration issue]
+    F -->|Yes| H{Cross-scenario and quality checks pass?}
+    H -->|No| I[Model / prompt / output-quality issue]
+    H -->|Yes| J[End-to-end healthy]
 ```
 
 `evals.real_model_quality` evaluates sanitized run projections only. A known technical
@@ -37,7 +44,14 @@ without a stable deterministic rule is reported as `NOT_EVALUATED`.
 
 `next_steps` is a bounded optional structured field. A non-empty list is evaluated for
 safe user-executable prompts when present, but an empty list is valid when no meaningful
-follow-up is warranted; it is not by itself a model-usefulness failure.
+follow-up is warranted. It is reported as `NOT_EVALUATED`, not as a useful step without
+content.
+
+The final language closure follows the persisted `response_language` from API request to
+run state, model iterations, finalization, public error projection, investigation history,
+and PDF report. Public terminal/error messages are deterministic translations; the model
+is not retried or post-processed to repair language. A technically healthy run without a
+final answer has language `NOT_EVALUATED`, not a language failure.
 
 Run the local Qwen 3.5 9B baseline after Ollama and the local MCP dependencies are
 available:

@@ -54,6 +54,7 @@ def _register_pdf_fonts() -> tuple[str, str]:
 def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
     """Render only the public history projection supplied by the API route."""
     body_font, code_font = _register_pdf_fonts()
+    labels = _pdf_labels(_investigation_response_language(investigation))
     buffer = BytesIO()
     document = SimpleDocTemplate(
         buffer,
@@ -63,7 +64,7 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
         topMargin=16 * mm,
         bottomMargin=16 * mm,
         pageCompression=0,
-        title="Industrial AI Agent Investigation Report",
+        title=labels["report_title"],
         author="Industrial AI Agent",
     )
     styles = getSampleStyleSheet()
@@ -82,24 +83,30 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
     text = ParagraphStyle("ReportText", parent=styles["BodyText"], leading=15)
     story = [
         Paragraph("Industrial AI Agent", styles["Heading3"]),
-        Paragraph("Investigation Report", title),
+        Paragraph(labels["report_title"], title),
         Spacer(1, 4 * mm),
-        Paragraph(f"Investigation ID: {investigation.investigation_id}", text),
-        Paragraph(f"Created: {investigation.created_at or 'Not recorded'}", text),
-        Paragraph(f"Status: {investigation.status}", text),
+        Paragraph(
+            f"{labels['investigation_id']}: {investigation.investigation_id}", text
+        ),
+        Paragraph(
+            f"{labels['created']}: {investigation.created_at or labels['not_recorded']}",
+            text,
+        ),
+        Paragraph(f"{labels['status']}: {investigation.status}", text),
         HRFlowable(
             width="100%", color=HexColor("#cbd6d1"), spaceBefore=5, spaceAfter=6
         ),
     ]
     for turn in investigation.turns:
+        labels = _pdf_labels(turn.response_language)
         story.extend(
             [
-                Paragraph(f"Turn {turn.sequence}", heading),
-                Paragraph("User", label),
+                Paragraph(f"{labels['turn']} {turn.sequence}", heading),
+                Paragraph(labels["user"], label),
                 *_markdown_flowables(turn.request, styles, code_font),
-                Paragraph("Agent", label),
+                Paragraph(labels["agent"], label),
                 *_markdown_flowables(
-                    turn.answer or "No final answer recorded.", styles, code_font
+                    turn.answer or labels["no_final_answer"], styles, code_font
                 ),
             ]
         )
@@ -175,17 +182,18 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
             )
         if turn.tool_calls:
             names = "<br/>".join(escape(call.tool) for call in turn.tool_calls)
-            story.extend([Paragraph("Executed tools", label), Paragraph(names, text)])
+            story.extend(
+                [Paragraph(labels["executed_tools"], label), Paragraph(names, text)]
+            )
         if turn.error is not None:
-            error_label = "Fehler" if turn.response_language == "DE" else "Error"
             story.extend(
                 [
-                    Paragraph(error_label, label),
+                    Paragraph(labels["error"], label),
                     Paragraph(escape(turn.error.code), text),
                     Paragraph(_inline_markup(turn.error.message, code_font), text),
                     *(
                         [
-                            Paragraph("Failure origin", label),
+                            Paragraph(labels["failure_origin"], label),
                             Paragraph(escape(turn.error.failure_origin.value), text),
                         ]
                         if turn.error.failure_origin is not None
@@ -227,11 +235,14 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
             )
         story.extend(
             [
-                Paragraph("Status", label),
+                Paragraph(labels["status"], label),
                 Paragraph(escape(turn.status.value), text),
-                Paragraph("Classification", label),
+                Paragraph(labels["classification"], label),
                 Paragraph(escape(turn.data_classification.value), text),
-                Paragraph(f"Created: {turn.created_at or 'Not recorded'}", text),
+                Paragraph(
+                    f"{labels['created']}: {turn.created_at or labels['not_recorded']}",
+                    text,
+                ),
                 HRFlowable(
                     width="100%", color=HexColor("#dde5e1"), spaceBefore=6, spaceAfter=4
                 ),
@@ -239,14 +250,63 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
         )
     story.extend(
         [
-            Paragraph("Summary", heading),
-            Paragraph(f"Runs: {investigation.run_count}", text),
-            Paragraph(f"Tools: {investigation.tool_call_count}", text),
-            Paragraph(f"Status: {investigation.status}", text),
+            Paragraph(labels["summary"], heading),
+            Paragraph(f"{labels['runs']}: {investigation.run_count}", text),
+            Paragraph(f"{labels['tools']}: {investigation.tool_call_count}", text),
+            Paragraph(f"{labels['status']}: {investigation.status}", text),
         ]
     )
     document.build(story)
     return buffer.getvalue()
+
+
+def _investigation_response_language(investigation: InvestigationResponse) -> str:
+    """Use German report chrome only when every visible turn requests German."""
+    if investigation.turns and all(
+        turn.response_language == "DE" for turn in investigation.turns
+    ):
+        return "DE"
+    return "EN"
+
+
+def _pdf_labels(response_language: str) -> dict[str, str]:
+    if response_language == "DE":
+        return {
+            "agent": "Agent",
+            "classification": "Klassifikation",
+            "created": "Erstellt",
+            "error": "Fehler",
+            "executed_tools": "Ausgeführte Werkzeuge",
+            "failure_origin": "Fehlerursprung",
+            "investigation_id": "Untersuchungs-ID",
+            "no_final_answer": "Keine finale Antwort aufgezeichnet.",
+            "not_recorded": "Nicht aufgezeichnet",
+            "report_title": "Untersuchungsbericht",
+            "runs": "Runs",
+            "status": "Status",
+            "summary": "Zusammenfassung",
+            "tools": "Werkzeuge",
+            "turn": "Durchlauf",
+            "user": "Benutzer",
+        }
+    return {
+        "agent": "Agent",
+        "classification": "Classification",
+        "created": "Created",
+        "error": "Error",
+        "executed_tools": "Executed tools",
+        "failure_origin": "Failure origin",
+        "investigation_id": "Investigation ID",
+        "no_final_answer": "No final answer recorded.",
+        "not_recorded": "Not recorded",
+        "report_title": "Investigation Report",
+        "runs": "Runs",
+        "status": "Status",
+        "summary": "Summary",
+        "tools": "Tools",
+        "turn": "Turn",
+        "user": "User",
+    }
 
 
 _HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$")

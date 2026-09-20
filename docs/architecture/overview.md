@@ -149,7 +149,7 @@ with their classification reason.
 
 ## Reliability Acceptance and Failure Attribution
 
-The project separates three independent reliability signals. Deterministic full-stack
+The completed reliability stack separates five independent layers. Deterministic full-stack
 acceptance injects a scripted `LLMClient` only at the provider port and still executes
 the FastAPI boundary, trusted classification, model resolution, final capability and
 egress guards, LangGraph, real MCP tool servers, persistence, and report projection.
@@ -161,9 +161,12 @@ automatic selection. The canonical German S04 acceptance trajectory reads machin
 retrieves QUALITY-09 documentation, and produces a structured final response ten times
 without external provider calls.
 
-Provider contract tests separately verify one adapter/provider request shape. Real-model
-evaluations separately assess reasoning and answer quality. A failure therefore has a
-useful interpretation without turning telemetry into an authorization input.
+Provider contract tests separately verify one adapter/provider request shape. Evidence Guard
+and Evidence Source Capabilities then enforce investigation completeness and eligible
+observation sources before finalization. Cross-scenario real-model evaluations assess the
+established model path, while Quality and Language Closure assesses deterministic
+user-facing language, presentation, grounding, and minimum causal discipline. A failure
+therefore has a useful interpretation without turning telemetry into an authorization input.
 
 | Deterministic acceptance | Provider contract | Real model | Interpretation |
 | --- | --- | --- | --- |

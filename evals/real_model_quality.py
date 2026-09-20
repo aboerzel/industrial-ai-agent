@@ -118,6 +118,8 @@ _ARTIFACT_PATTERNS: dict[str, re.Pattern[str]] = {
     "template_interpolation": re.compile(r"\$\{.+?\}", re.DOTALL),
     "python_mapping_placeholder": re.compile(r"\{\s*\w+\s*\[[^\]]+\]\s*\}"),
     "tool_protocol_leak": re.compile(r'"(?:tool_calls|tool_call_id|arguments)"\s*:'),
+    "raw_json": re.compile(r"^\s*[\[{]\s*\"[A-Za-z_]+\"\s*:", re.DOTALL),
+    "schema_leak": re.compile(r"\b(?:FinalAgentOutput|troubleshooting_final_output)\b"),
 }
 _UNSUPPORTED_CERTAINTY = re.compile(
     r"\b(?:confirmed root cause|root cause is|eindeutige ursache|ursache ist eindeutig)\b",
@@ -143,6 +145,7 @@ class QualityScenario(BaseModel):
     required_tools: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
     required_identifiers: tuple[str, ...] = ()
+    required_answer_facts: tuple[str, ...] = ()
     required_documents: tuple[str, ...] = ()
     required_reference_fault_ids: tuple[str, ...] = ()
     forbidden_identifiers: tuple[str, ...] = ()
@@ -302,20 +305,40 @@ def evaluate_real_model_run(
         causal = _not_evaluated(
             "no final answer available for causal-discipline evaluation"
         )
-    findings = _not_evaluated(
-        "natural-language usefulness requires broader scenario-specific rules"
+    missing_answer_facts = {
+        fact
+        for fact in scenario.required_answer_facts
+        if fact.upper() not in answer.upper()
+    }
+    findings = (
+        _not_evaluated("no final answer available for finding-usefulness evaluation")
+        if not answer.strip()
+        else _not_evaluated(
+            "no conservative scenario-specific answer-fact contract is defined"
+        )
+        if not scenario.required_answer_facts
+        else _check(
+            not missing_answer_facts,
+            *_reasons("missing required answer facts", missing_answer_facts),
+        )
     )
-    next_steps = _check(
-        (bool(artifact.next_steps) if scenario.require_next_steps else True)
-        and not any(
-            _UNAUTHORIZED_ACTION_CLAIM.search(step) for step in artifact.next_steps
-        ),
-        "no next steps returned"
-        if scenario.require_next_steps and not artifact.next_steps
-        else "",
-        "next steps claim an unauthorized or completed action"
-        if any(_UNAUTHORIZED_ACTION_CLAIM.search(step) for step in artifact.next_steps)
-        else "",
+    next_steps = (
+        _not_evaluated("next steps are optional and none were returned")
+        if not artifact.next_steps and not scenario.require_next_steps
+        else _check(
+            (bool(artifact.next_steps) if scenario.require_next_steps else True)
+            and not any(
+                _UNAUTHORIZED_ACTION_CLAIM.search(step) for step in artifact.next_steps
+            ),
+            "no next steps returned"
+            if scenario.require_next_steps and not artifact.next_steps
+            else "",
+            "next steps claim an unauthorized or completed action"
+            if any(
+                _UNAUTHORIZED_ACTION_CLAIM.search(step) for step in artifact.next_steps
+            )
+            else "",
+        )
     )
     language = (
         _not_evaluated("no final answer available for language evaluation")
