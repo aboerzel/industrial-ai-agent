@@ -61,6 +61,27 @@ failure origin, HTTP status/request ID when supplied, schema hash, payload byte 
 and timings. It never contains prompts, responses, request bodies, provider error text,
 or secrets.
 
+For a repeated local structured-output compatibility check, run:
+
+```powershell
+.venv\Scripts\python.exe scripts\diagnose_local_structured_output.py --model-id local_fast --model-id local_quality --repetitions 5 --output evals\results\phase5b-local-qwen-schema-ladder.json
+```
+
+The diagnostic exercises a flat required object, nullable and defaulted fields, a nested
+object, a list of nested objects, and the representative final-response contract. It
+records only request schema hashes, HTTP status, latency, JSON/Pydantic outcomes, and
+content-free validation paths. It uses `reasoning_effort="none"` for Qwen structured
+calls, matching the documented OpenAI-compatible local production request shape.
+
+## Phase-5B Local Evidence
+
+On 2026-09-20, Ollama 0.33.2 passed five out of five repetitions of every schema-ladder
+stage, including the representative final-response contract, for both `local_fast`
+(`qwen3.5:4b`) and `local_quality` (`qwen3.5:9b`). The standard contract runner also
+verified text, tool calling, structured output, and the separate tool-call then
+structured-output sequence for both models. This is compatibility evidence for the
+current local runtime and request shape, not a cross-version guarantee.
+
 External providers are protected by a fixed order: plain text first, then tools,
 structured output, and multi-step. The runner stops further requests for a model after
 rate limits, unavailable/connection failures, or authentication errors. It performs no

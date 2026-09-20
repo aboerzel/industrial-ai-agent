@@ -12,7 +12,7 @@ import os
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -25,6 +25,7 @@ from industrial_ai_agent.agent.llm import (
     LLMMessage,
     LLMProviderError,
     LLMProviderErrorCode,
+    LLMReasoningEffort,
     LLMRequest,
     LLMResponseFormat,
     LLMToolDefinition,
@@ -75,6 +76,26 @@ class ContractCallResult(BaseModel):
     failure_origin: FailureOrigin | None = None
     schema_hash: str | None = None
     request_payload_bytes: int | None = Field(default=None, ge=0)
+    response_contains_json: bool | None = None
+    json_parses_syntactically: bool | None = None
+    pydantic_validation_succeeds: bool | None = None
+    validation_failures: tuple[StructuredValidationFailure, ...] = ()
+
+
+class StructuredValidationFailure(BaseModel):
+    """Content-free description of one structured-output validation failure."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: tuple[str | int, ...]
+    category: Literal[
+        "missing_field",
+        "unexpected_field",
+        "wrong_primitive_or_container_type",
+        "enum_mismatch",
+        "other",
+    ]
+    validation_code: str
 
 
 class ProviderContractResult(BaseModel):
@@ -123,6 +144,19 @@ class _StructuredContractPayload(BaseModel):
     items: list[_NestedItem]
 
 
+class _StructuredOutputVerificationError(Exception):
+    def __init__(
+        self,
+        *,
+        response_contains_json: bool,
+        json_parses_syntactically: bool,
+        validation_failures: tuple[StructuredValidationFailure, ...],
+    ) -> None:
+        self.response_contains_json = response_contains_json
+        self.json_parses_syntactically = json_parses_syntactically
+        self.validation_failures = validation_failures
+
+
 _TEST_TOOL = LLMToolDefinition(
     name="get_test_value",
     description="Return one harmless synthetic test value.",
@@ -154,6 +188,10 @@ def _structured_request() -> LLMRequest:
                 schema_definition=schema,
             )
         ),
+        # Qwen otherwise emits reasoning instead of the visible JSON response.
+        # This exercises the same documented OpenAI-compatible request contract
+        # used by the local production path.
+        reasoning_effort=LLMReasoningEffort.NONE,
     )
 
 
@@ -370,6 +408,19 @@ class ProviderContractRunner:
         }
         try:
             verified = verifier(response)
+        except _StructuredOutputVerificationError as error:
+            return (
+                ContractCallResult(
+                    **metadata,
+                    normalized_error="model_output_invalid",
+                    failure_origin=failure_origin_for_error_code("model_output_invalid"),
+                    response_contains_json=error.response_contains_json,
+                    json_parses_syntactically=error.json_parses_syntactically,
+                    pydantic_validation_succeeds=False,
+                    validation_failures=error.validation_failures,
+                ),
+                ProviderLiveStatus.AVAILABLE,
+            )
         except (TypeError, ValueError, ValidationError, json.JSONDecodeError):
             return (
                 ContractCallResult(
@@ -381,8 +432,17 @@ class ProviderContractRunner:
                 ),
                 ProviderLiveStatus.AVAILABLE,
             )
+        structured_metadata = (
+            {
+                "response_contains_json": True,
+                "json_parses_syntactically": True,
+                "pydantic_validation_succeeds": True,
+            }
+            if request.response_format is not None
+            else {}
+        )
         return ContractCallResult(
-            verification=verified, **metadata
+            verification=verified, **metadata, **structured_metadata
         ), ProviderLiveStatus.AVAILABLE
 
     @staticmethod
@@ -418,9 +478,73 @@ def _verify_tool(response: Any) -> CapabilityVerification:
 
 def _verify_structured(response: Any) -> CapabilityVerification:
     if not isinstance(response.text, str):
-        raise TypeError("Expected structured response text")
-    _StructuredContractPayload.model_validate_json(response.text)
+        raise _StructuredOutputVerificationError(
+            response_contains_json=False,
+            json_parses_syntactically=False,
+            validation_failures=(),
+        )
+    raw_response = response.text.strip()
+    contains_json = raw_response.startswith(("{", "["))
+    try:
+        parsed = json.loads(raw_response)
+    except json.JSONDecodeError as error:
+        raise _StructuredOutputVerificationError(
+            response_contains_json=contains_json,
+            json_parses_syntactically=False,
+            validation_failures=(
+                StructuredValidationFailure(
+                    path=(), category="other", validation_code="invalid_json"
+                ),
+            ),
+        ) from error
+    try:
+        _StructuredContractPayload.model_validate(parsed)
+    except ValidationError as error:
+        raise _StructuredOutputVerificationError(
+            response_contains_json=contains_json,
+            json_parses_syntactically=True,
+            validation_failures=_safe_validation_failures(error),
+        ) from error
     return CapabilityVerification.VERIFIED
+
+
+def _safe_validation_failures(
+    error: ValidationError,
+) -> tuple[StructuredValidationFailure, ...]:
+    return tuple(
+        StructuredValidationFailure(
+            path=tuple(
+                part for part in issue["loc"] if isinstance(part, (str, int))
+            ),
+            category=_validation_category(str(issue["type"])),
+            validation_code=str(issue["type"]),
+        )
+        for issue in error.errors(include_url=False)
+    )
+
+
+def _validation_category(
+    validation_code: str,
+) -> Literal[
+    "missing_field",
+    "unexpected_field",
+    "wrong_primitive_or_container_type",
+    "enum_mismatch",
+    "other",
+]:
+    if validation_code == "missing":
+        return "missing_field"
+    if validation_code == "extra_forbidden":
+        return "unexpected_field"
+    if validation_code == "enum":
+        return "enum_mismatch"
+    if validation_code.endswith("_type") or validation_code in {
+        "list_type",
+        "dict_type",
+        "model_type",
+    }:
+        return "wrong_primitive_or_container_type"
+    return "other"
 
 
 def _provider_error_result(

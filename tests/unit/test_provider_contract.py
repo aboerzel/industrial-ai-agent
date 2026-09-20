@@ -163,9 +163,52 @@ def test_successful_structured_output_and_separate_multistep_are_verified() -> N
 
     assert result.structured_output.verification is CapabilityVerification.VERIFIED
     assert result.structured_output.schema_hash is not None
+    assert result.structured_output.response_contains_json is True
+    assert result.structured_output.json_parses_syntactically is True
+    assert result.structured_output.pydantic_validation_succeeds is True
     assert result.multi_step.verification is CapabilityVerification.VERIFIED
     assert result.live_status is ProviderLiveStatus.AVAILABLE
     assert client.model_ids == ["local_fast"] * 5
+    structured_requests = [
+        request for request in client.requests if request.response_format is not None
+    ]
+    assert all(request.reasoning_effort.value == "none" for request in structured_requests)
+
+
+def test_structured_validation_failure_is_content_free_and_path_specific() -> None:
+    tool_call = LLMToolCall(
+        id="call-contract",
+        name="get_test_value",
+        arguments={"name": "contract_value"},
+    )
+    client = FakeContractClient(
+        [
+            _response(),
+            _response(text=None, tool_calls=(tool_call,)),
+            _response(text='{"status":"OK"}', schema_hash="sha256:contract"),
+            _response(text=None, tool_calls=(tool_call,)),
+            _response(text='{"status":"OK"}', schema_hash="sha256:contract"),
+        ]
+    )
+
+    result = ProviderContractRunner(
+        _configuration(), environment={}, client=client
+    ).run_model("local_fast")
+
+    structured = result.structured_output
+    assert structured.response_contains_json is True
+    assert structured.json_parses_syntactically is True
+    assert structured.pydantic_validation_succeeds is False
+    assert {failure.path for failure in structured.validation_failures} == {
+        ("optional_note",),
+        ("severity",),
+        ("detail",),
+        ("items",),
+    }
+    assert {failure.category for failure in structured.validation_failures} == {
+        "missing_field"
+    }
+    assert "OK" not in structured.model_dump_json()
 
 
 def test_safe_json_contains_only_metadata() -> None:
