@@ -405,6 +405,7 @@ def _to_public_status(result: AgentRunResult) -> RunStatus:
 def recovery_failure_code(result: AgentRunResult) -> str | None:
     return {
         "EVIDENCE_REQUIREMENTS_UNSATISFIED": "evidence_requirements_unsatisfied",
+        "EVIDENCE_SOURCE_UNAVAILABLE": "evidence_source_unavailable",
         "RECOVERY_INCOMPLETE": "recovery_incomplete",
         "RECOVERY_BLOCKED": "recovery_blocked",
         "RECOVERY_FAILED": "recovery_failed",

@@ -9,13 +9,14 @@ from mcp.client.stdio import StdioServerParameters
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     LangGraphTroubleshootingAgent,
 )
-from industrial_ai_agent.agent.llm import ModelId
+from industrial_ai_agent.agent.llm import LLMReasoningEffort, ModelId
 from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     EgressCheckedLLMClient,
     ModelExecutionAuthorizer,
 )
 from industrial_ai_agent.agent.model_selection import AGENT_REQUIREMENTS
+from industrial_ai_agent.domain.investigation_evidence import InvestigationType
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     FactoryMcpTransport,
     StreamableHttpServerParameters,
@@ -40,10 +41,27 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config" / "model_catalog.toml"
 PUBLIC_PROMPT = "Reply exactly with LANGGRAPH_LLM_OK. Do not call a tool."
 CONFIDENTIAL_PROMPT = (
-    "P4711 failed during production. Investigate what happened and check the current "
-    "status of the relevant station. Then consult the local technical documentation "
-    "for the relevant fault and provide a final diagnosis."
+    "Investigate station S04. Establish the current machine state and active fault, "
+    "then retrieve the technical documentation relevant to that fault. Provide a final "
+    "diagnosis in German."
 )
+_LOCAL_BM25_KNOWLEDGE_SERVER_SOURCE = """
+import os
+from pathlib import Path
+
+from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
+    InMemoryBm25KnowledgeRetriever,
+    load_markdown_chunks,
+)
+from industrial_ai_agent.infrastructure.knowledge_mcp_server import create_knowledge_mcp_server
+from industrial_ai_agent.tools.documentation_search import DocumentationSearchCapability
+
+knowledge_root = Path(os.environ["KNOWLEDGE_ROOT"])
+retriever = InMemoryBm25KnowledgeRetriever(load_markdown_chunks(knowledge_root))
+create_knowledge_mcp_server(
+    documentation_search=DocumentationSearchCapability(retriever),
+).run(transport="stdio")
+"""
 
 
 def main() -> None:
@@ -71,8 +89,25 @@ def main() -> None:
             authorizer=authorizer,
         )
         agent = LangGraphTroubleshootingAgent(
-            LLMClientChatModel(checked_client, model_id),
+            LLMClientChatModel(
+                checked_client,
+                model_id,
+                supports_structured_output=args.confidential_troubleshooting,
+                reasoning_effort=(
+                    LLMReasoningEffort.NONE
+                    if args.confidential_troubleshooting
+                    else None
+                ),
+            ),
             mcp_tool_provider=McpLangChainToolProvider(_mcp_servers_from_args(args)),
+            run_classification=(
+                data_classification if args.confidential_troubleshooting else None
+            ),
+            investigation_type=(
+                InvestigationType.STATION_TROUBLESHOOTING
+                if args.confidential_troubleshooting
+                else None
+            ),
         )
         session_lines: list[str] = []
         result = asyncio.run(
@@ -101,14 +136,10 @@ def main() -> None:
         raise RuntimeError("Synthetic LangGraph response did not match expected text")
     if args.confidential_troubleshooting:
         actual_tools = [call.tool for call in result.executed_tool_calls]
-        expected_tools = [
-            "get_product_history",
-            "get_machine_status",
-            "search_documentation",
-        ]
-        if actual_tools != expected_tools:
+        if set(actual_tools) != {"get_machine_status", "search_documentation"}:
             raise RuntimeError(
-                f"MCP troubleshooting smoke expected {expected_tools}, got {actual_tools}"
+                "MCP troubleshooting smoke did not obtain the required S04 evidence: "
+                f"{actual_tools}"
             )
     print(f"model_id={model_id.value}")
     print(f"classification={data_classification.name}")
@@ -178,7 +209,8 @@ def _mcp_servers_from_args(
         )
         knowledge_transport = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "industrial_ai_agent.infrastructure.knowledge_mcp_server"],
+            args=["-c", _LOCAL_BM25_KNOWLEDGE_SERVER_SOURCE],
+            env={"KNOWLEDGE_ROOT": str(PROJECT_ROOT / "knowledge_base")},
         )
     return (
         McpServerConfiguration(

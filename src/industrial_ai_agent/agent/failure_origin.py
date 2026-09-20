@@ -36,6 +36,7 @@ _ERROR_ORIGINS: dict[str, FailureOrigin] = {
     "tool_execution_failed": FailureOrigin.TOOL_EXECUTION,
     "agent_execution_timeout": FailureOrigin.ORCHESTRATION,
     "evidence_requirements_unsatisfied": FailureOrigin.ORCHESTRATION,
+    "evidence_source_unavailable": FailureOrigin.ORCHESTRATION,
     "internal_error": FailureOrigin.ORCHESTRATION,
 }
 

@@ -56,6 +56,10 @@ from industrial_ai_agent.agent.response_language import (
 )
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
+from industrial_ai_agent.application.evidence_source_capabilities import (
+    evidence_source_for_tool,
+    resolve_eligible_evidence_tools,
+)
 from industrial_ai_agent.application.investigation_evidence_adapters import (
     documentation_evidence_from_metadata,
     machine_state_evidence_from_result,
@@ -250,6 +254,9 @@ class TroubleshootingGraphState(TypedDict):
     evidence_effective_classification: DataClassification | None
     evidence_finalization_attempts: int
     evidence_guard_interventions: int
+    evidence_eligible_source_capabilities: tuple[str, ...]
+    evidence_eligible_tool_count: int
+    evidence_selected_source_capability: str | None
 
 
 class CheckpointedTroubleshootingGraphState(TypedDict):
@@ -281,6 +288,9 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     evidence_effective_classification: int | None
     evidence_finalization_attempts: int
     evidence_guard_interventions: int
+    evidence_eligible_source_capabilities: tuple[str, ...]
+    evidence_eligible_tool_count: int
+    evidence_selected_source_capability: str | None
     evidence_target_station_id: str | None
     evidence_feedback_pending: bool
 
@@ -317,9 +327,17 @@ class LangGraphTroubleshootingAgent:
         async with self._open_mcp_session() as session:
             if session_observer is not None:
                 session_observer(session)
-            response = self._chat_model.bind_tools(
-                _read_only_tools(session.tools, session.tool_policies)
-            ).invoke(
+            tools = _read_only_tools(session.tools, session.tool_policies)
+            ledger = self._initial_evidence_ledger(user_request)
+            if ledger is not None and not ledger.complete:
+                eligible = resolve_eligible_evidence_tools(
+                    ledger,
+                    admitted_tool_names=frozenset(tool.name for tool in tools),
+                )
+                tools = tuple(
+                    tool for tool in tools if tool.name in eligible.tool_names
+                )
+            response = self._chat_model.bind_tools(tools).invoke(
                 self._initial_messages(
                     user_request,
                     system_content=self._system_message,
@@ -347,8 +365,9 @@ class LangGraphTroubleshootingAgent:
             tools = _read_only_tools(session.tools, session.tool_policies)
             tools_by_name = {tool.name: tool for tool in tools}
             tool_policies = {policy.name: policy for policy in session.tool_policies}
-            chat_model = self._chat_model.bind_tools(tools)
-            graph = self._build_async_graph(chat_model, tools_by_name, tool_policies)
+            graph = self._build_async_graph(
+                self._chat_model, tools, tools_by_name, tool_policies
+            )
             config: RunnableConfig = {"recursion_limit": 12}
             state = await graph.ainvoke(
                 self._initial_state(
@@ -407,7 +426,8 @@ class LangGraphTroubleshootingAgent:
             tool_policies = {policy.name: policy for policy in session.tool_policies}
             model_tools = _model_visible_tools(session.tools, session.tool_policies)
             graph = self._build_async_hitl_mcp_graph(
-                self._chat_model.bind_tools(model_tools),
+                self._chat_model,
+                model_tools,
                 {tool.name: tool for tool in session.tools},
                 tool_policies,
             )
@@ -437,7 +457,8 @@ class LangGraphTroubleshootingAgent:
             tool_policies = {policy.name: policy for policy in session.tool_policies}
             model_tools = _model_visible_tools(session.tools, session.tool_policies)
             graph = self._build_async_hitl_mcp_graph(
-                self._chat_model.bind_tools(model_tools),
+                self._chat_model,
+                model_tools,
                 {tool.name: tool for tool in session.tools},
                 tool_policies,
             )
@@ -461,6 +482,7 @@ class LangGraphTroubleshootingAgent:
     def _build_async_graph(
         self,
         chat_model: LangChainChatModel,
+        model_tools: tuple[BaseTool, ...],
         tools_by_name: dict[str, BaseTool],
         tool_policies: dict[str, ToolPolicy],
     ):
@@ -476,6 +498,7 @@ class LangGraphTroubleshootingAgent:
             "model",
             lambda state: self._model_node(
                 chat_model,
+                model_tools,
                 state,
                 normalize_structured_final_output=self._normalize_structured_final_output,
             ),
@@ -491,6 +514,7 @@ class LangGraphTroubleshootingAgent:
     def _build_async_hitl_mcp_graph(
         self,
         chat_model: LangChainChatModel,
+        model_tools: tuple[BaseTool, ...],
         tools_by_name: dict[str, BaseTool],
         tool_policies: dict[str, ToolPolicy],
     ):
@@ -519,6 +543,7 @@ class LangGraphTroubleshootingAgent:
             "model",
             lambda state: self._model_node(
                 chat_model,
+                model_tools,
                 state,
                 normalize_structured_final_output=self._normalize_structured_final_output,
             ),
@@ -555,14 +580,36 @@ class LangGraphTroubleshootingAgent:
         builder.add_edge("cancel_action", END)
         return builder.compile(checkpointer=self._checkpointer)
 
-    @staticmethod
     def _model_node(
+        self,
         chat_model: LangChainChatModel,
+        model_tools: tuple[BaseTool, ...],
         state: CheckpointedTroubleshootingGraphState,
         *,
         normalize_structured_final_output: bool,
     ) -> dict[str, object]:
-        message = chat_model.invoke(state["messages"])
+        ledger = _evidence_ledger_from_state(state)
+        visible_tools = model_tools
+        evidence_trace: dict[str, object] = {}
+        if ledger is not None and not ledger.complete:
+            eligible = resolve_eligible_evidence_tools(
+                ledger,
+                admitted_tool_names=frozenset(tool.name for tool in model_tools),
+            )
+            evidence_trace = {
+                "evidence_eligible_source_capabilities": tuple(
+                    item.value for item in eligible.source_capabilities
+                ),
+                "evidence_eligible_tool_count": len(eligible.tool_names),
+                "evidence_selected_source_capability": None,
+            }
+            if not eligible.tool_names:
+                return _evidence_source_unavailable_update(state, messages=[])
+            eligible_names = frozenset(eligible.tool_names)
+            visible_tools = tuple(
+                tool for tool in model_tools if tool.name in eligible_names
+            )
+        message = chat_model.bind_tools(visible_tools).invoke(state["messages"])
         response = to_llm_response(message)
         if len(response.tool_calls) > 1:
             # Some OpenAI-compatible local providers ignore parallel_tool_calls.
@@ -585,7 +632,6 @@ class LangGraphTroubleshootingAgent:
                     status=AgentRunStatus.RECOVERY_INCOMPLETE,
                     error_code="recovery_incomplete",
                 )
-            ledger = _evidence_ledger_from_state(state)
             if ledger is not None and not ledger.complete:
                 attempts = state["evidence_finalization_attempts"] + 1
                 if attempts >= MAX_TOOL_CALLS:
@@ -615,6 +661,7 @@ class LangGraphTroubleshootingAgent:
                     )
                     + 1,
                     "evidence_feedback_pending": True,
+                    **evidence_trace,
                 }
             final_messages: list[AIMessage] = [message]
             if response.text is None:
@@ -675,7 +722,6 @@ class LangGraphTroubleshootingAgent:
                 "documents": tuple(reference.model_dump() for reference in documents),
             }
         if state["executed_tool_count"] == MAX_TOOL_CALLS:
-            ledger = _evidence_ledger_from_state(state)
             if ledger is not None and not ledger.complete:
                 return _evidence_requirements_unsatisfied_update(
                     state,
@@ -688,7 +734,11 @@ class LangGraphTroubleshootingAgent:
                 "run_status": AgentRunStatus.LIMIT_REACHED.value,
                 "final_answer": None,
             }
-        return {"messages": [message], "evidence_feedback_pending": False}
+        return {
+            "messages": [message],
+            "evidence_feedback_pending": False,
+            **evidence_trace,
+        }
 
     @staticmethod
     def _route_after_model(
@@ -836,8 +886,14 @@ class LangGraphTroubleshootingAgent:
                 f"Invalid arguments for {tool_name}"
             ) from error
         effective_classification = self._observe_result_classification(state, result)
+        ledger = _evidence_ledger_from_state(state)
         evidence_update = self._record_evidence_observation(
             state, result=result, source_reference=tool_call_id
+        )
+        selected_source = (
+            evidence_source_for_tool(tool_name)
+            if ledger is not None and not ledger.complete
+            else None
         )
         executed_call = {
             "tool": tool_name,
@@ -856,6 +912,9 @@ class LangGraphTroubleshootingAgent:
             "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
             "effective_classification": effective_classification,
             **evidence_update,
+            "evidence_selected_source_capability": (
+                selected_source.value if selected_source is not None else None
+            ),
         }
 
     async def _aprepare_reference_calibration_node(
@@ -1376,6 +1435,15 @@ class LangGraphTroubleshootingAgent:
             "evidence_guard_interventions": state.get(
                 "evidence_guard_interventions", 0
             ),
+            "evidence_eligible_source_capabilities": tuple(
+                state.get("evidence_eligible_source_capabilities", ())
+            ),
+            "evidence_eligible_tool_count": state.get(
+                "evidence_eligible_tool_count", 0
+            ),
+            "evidence_selected_source_capability": state.get(
+                "evidence_selected_source_capability"
+            ),
         }
 
     def _observe_result_classification(
@@ -1438,6 +1506,12 @@ class LangGraphTroubleshootingAgent:
         update["evidence_guard_interventions"] = state.get(
             "evidence_guard_interventions", 0
         )
+        update["evidence_eligible_source_capabilities"] = tuple(
+            state.get("evidence_eligible_source_capabilities", ())
+        )
+        update["evidence_eligible_tool_count"] = state.get(
+            "evidence_eligible_tool_count", 0
+        )
         return update
 
     @staticmethod
@@ -1462,6 +1536,9 @@ def _evidence_state_update(ledger: EvidenceLedger | None) -> dict[str, object]:
             "evidence_effective_classification": None,
             "evidence_finalization_attempts": 0,
             "evidence_guard_interventions": 0,
+            "evidence_eligible_source_capabilities": (),
+            "evidence_eligible_tool_count": 0,
+            "evidence_selected_source_capability": None,
             "evidence_target_station_id": None,
             "evidence_feedback_pending": False,
         }
@@ -1477,6 +1554,9 @@ def _evidence_state_update(ledger: EvidenceLedger | None) -> dict[str, object]:
         "evidence_effective_classification": int(ledger.effective_data_classification),
         "evidence_finalization_attempts": 0,
         "evidence_guard_interventions": 0,
+        "evidence_eligible_source_capabilities": (),
+        "evidence_eligible_tool_count": 0,
+        "evidence_selected_source_capability": None,
         "evidence_target_station_id": ledger.station_id,
         "evidence_feedback_pending": False,
     }
@@ -1713,6 +1793,36 @@ def _evidence_requirements_unsatisfied_update(
         "evidence_finalization_attempts": attempts,
         "evidence_guard_interventions": state.get("evidence_guard_interventions", 0)
         + int(guard_intervention),
+        "evidence_feedback_pending": False,
+    }
+
+
+def _evidence_source_unavailable_update(
+    state: CheckpointedTroubleshootingGraphState,
+    *,
+    messages: list[AnyMessage],
+) -> dict[str, object]:
+    """Terminate when no admitted source can progress missing evidence."""
+    ledger = _evidence_ledger_from_state(state)
+    if ledger is None or ledger.complete:
+        raise RuntimeError("Evidence source terminal state requires missing evidence")
+    response_language = ResponseLanguage(state["response_language"])
+    missing = ", ".join(item.value for item in ledger.missing)
+    answer = (
+        "Die Untersuchung kann nicht fortgesetzt werden, da keine autorisierte "
+        f"Evidenzquelle für Folgendes verfügbar ist: {missing}."
+        if response_language is ResponseLanguage.DE
+        else "The investigation cannot continue because no authorized evidence source "
+        f"is available for: {missing}."
+    )
+    return {
+        "messages": messages,
+        "run_status": AgentRunStatus.EVIDENCE_SOURCE_UNAVAILABLE.value,
+        "final_answer": answer,
+        "evidence_satisfied": tuple(
+            item.requirement.value for item in ledger.satisfied
+        ),
+        "evidence_missing": tuple(item.value for item in ledger.missing),
         "evidence_feedback_pending": False,
     }
 

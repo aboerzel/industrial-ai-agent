@@ -18,6 +18,7 @@ from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunSto
         ("llm_provider_unavailable", FailureOrigin.PROVIDER_CONNECTION),
         ("llm_provider_request_invalid", FailureOrigin.PROVIDER_REQUEST),
         ("mcp_service_unavailable", FailureOrigin.MCP),
+        ("evidence_source_unavailable", FailureOrigin.ORCHESTRATION),
         ("model_output_invalid", FailureOrigin.MODEL_OUTPUT_VALIDATION),
     ),
 )

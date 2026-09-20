@@ -93,7 +93,7 @@ def create_knowledge_mcp_server(
         return {
             "query": result.query,
             "results": [
-                {"rank": rank, **item.model_dump(mode="json")}
+                {"rank": rank, **item.model_dump(mode="json", exclude={"rank"})}
                 for rank, item in enumerate(result.results, start=1)
             ],
         }

@@ -69,6 +69,7 @@ class EvidenceMcpToolProvider:
                     "query": query,
                     "results": [
                         {
+                            "rank": 1,
                             "content": "not retained by evidence state",
                             "document_id": "doc-quality-procedure",
                             "source": "quality.md",
@@ -127,6 +128,14 @@ def test_premature_finalization_is_blocked_and_missing_evidence_reaches_model() 
     assert "RELEVANT_FAULT_DOCUMENTATION" in feedback
     second_feedback = client.requests[3].messages[-1].content
     assert "RELEVANT_FAULT_DOCUMENTATION" in second_feedback
+    assert [tool.name for tool in client.requests[0].tools] == ["get_machine_status"]
+    assert [tool.name for tool in client.requests[2].tools] == ["search_documentation"]
+    assert state["evidence_eligible_source_capabilities"] == (
+        "fault_documentation_retrieval",
+    )
+    assert (
+        state["evidence_selected_source_capability"] == "fault_documentation_retrieval"
+    )
 
 
 def test_machine_state_without_documentation_blocks_finalization() -> None:
@@ -282,6 +291,39 @@ def test_station_list_and_status_only_requirements_remain_proportional() -> None
     assert status_state["run_status"] is AgentRunStatus.SUCCESS
     assert status_state["evidence_required"] == (
         EvidenceRequirementId.CURRENT_MACHINE_STATE,
+    )
+
+
+def test_no_authorized_evidence_source_has_distinct_terminal_outcome() -> None:
+    client = FakeLLMClient([])
+    provider = EvidenceMcpToolProvider()
+    provider.open_session = _documentation_only_session  # type: ignore[method-assign]
+
+    state = _run(client, provider)
+
+    assert state["run_status"] is AgentRunStatus.EVIDENCE_SOURCE_UNAVAILABLE
+    assert state["executed_tool_count"] == 0
+
+
+@asynccontextmanager
+async def _documentation_only_session() -> AsyncIterator[McpToolSession]:
+    async def documentation(query: str) -> str:
+        del query
+        return json.dumps({"query": "QUALITY-09", "results": []})
+
+    yield McpToolSession(
+        tools=(
+            StructuredTool.from_function(
+                coroutine=documentation,
+                name="search_documentation",
+                description="Read technical documentation.",
+            ),
+        ),
+        discovered_tool_names=("search_documentation",),
+        server_name="evidence-test",
+        server_version="test",
+        protocol_version="test",
+        tool_policies=(ToolPolicy("search_documentation", ToolOperation.READ),),
     )
 
 

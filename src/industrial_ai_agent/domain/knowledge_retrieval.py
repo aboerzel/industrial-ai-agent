@@ -12,6 +12,7 @@ class KnowledgeRetrievalResult(BaseModel):
     document_id: str
     source: str
     chunk_id: str
+    rank: int | None = Field(default=None, ge=1)
     relevance_score: float | None = Field(default=None, ge=0)
     classification: DataClassification = DataClassification.PUBLIC
     metadata: dict[str, Any] = Field(default_factory=dict)

@@ -37,7 +37,7 @@ class Retriever:
             source="error_codes.md",
             chunk_id="error_codes::chunk-002",
             relevance_score=0.9,
-            metadata={"title": "E-STOP-17"},
+            metadata={"title": "E-STOP-17", "fault_ids": ("E-STOP-17",)},
         ),)[:limit]
 
 server = create_knowledge_mcp_server(
@@ -92,7 +92,7 @@ def test_knowledge_mcp_handler_delegates_and_preserves_structured_provenance() -
             "chunk_id": "error_codes::chunk-002",
             "relevance_score": 0.9,
             "classification": 0,
-            "metadata": {"title": "E-STOP-17"},
+            "metadata": {"title": "E-STOP-17", "fault_ids": ["E-STOP-17"]},
         }
     ]
 
@@ -207,5 +207,5 @@ def _result():
         source="error_codes.md",
         chunk_id="error_codes::chunk-002",
         relevance_score=0.9,
-        metadata={"title": "E-STOP-17"},
+        metadata={"title": "E-STOP-17", "fault_ids": ("E-STOP-17",)},
     )

@@ -118,6 +118,7 @@ def test_loaded_chunk_preserves_content_and_provenance() -> None:
         "fault_ids": ("QUALITY-09",),
     }
     assert chunk.relevance_score is None
+    assert chunk.rank is None
 
 
 def test_runtime_search_uses_prebuilt_chunks_without_rereading_documents(

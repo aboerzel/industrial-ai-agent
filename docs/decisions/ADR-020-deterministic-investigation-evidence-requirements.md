@@ -35,7 +35,23 @@ flowchart TD
 
 Phase 5C.2a implemented requirements, typed observations, adapters, and the ledger. Phase 5C.2b integrates its serializer-safe projection into the existing checkpointable LangGraph state. Before structured finalization, the graph reconstructs the ledger and blocks a draft while required evidence is missing. It appends compact, response-language-aware system runtime context describing the missing observations and retaining their canonical IDs, then returns to the existing model-decision node. This does not prescribe a tool name or tool order.
 
-The existing bounded tool limit remains authoritative. A model that exhausts the tool budget with incomplete evidence, or repeatedly attempts unsupported finalization without acquiring evidence, terminates as `EVIDENCE_REQUIREMENTS_UNSATISFIED` with `failure_origin=ORCHESTRATION`; it is neither a success nor a provider, capability, or MCP failure. The terminal user-facing message is sanitized and response-language aware. Recovery remains exempt through its separate ADR-018 lifecycle.
+Phase 5C.2c adds declarative Evidence Source Capabilities. An Evidence Requirement, an Evidence Source Capability, and a Tool are distinct: a requirement is a required domain fact, a source capability describes which requirements it can produce and which evidence prerequisites it needs, and a tool is one currently admitted implementation of a source. The application registers `get_machine_status` as the present provider of `machine_state_observation`, and `search_documentation` as the present provider of `fault_documentation_retrieval`. Future admitted tools can register the same source capability without changing the ledger or requirement IDs.
+
+While mandatory evidence is incomplete, the graph resolves source capabilities that can produce missing requirements whose prerequisites are already satisfied, then intersects their registered tools with the model's existing authorized/admitted tools. The model receives only this eligible set and chooses one tool itself. Source metadata never grants admission. For canonical RCA, `fault_documentation_retrieval` requires `ACTIVE_FAULT`, so it is unavailable until trusted machine-state evidence establishes the fault. A tool invocation does not satisfy a requirement by itself; the existing trusted-result adapters and ledger remain the sole satisfaction authority. Once the ledger is complete, normal authorized tool visibility resumes.
+
+```mermaid
+flowchart TD
+    A[Missing Evidence] --> B[Resolve Eligible Evidence Source Capabilities]
+    B --> C[Intersect with Authorized Tools]
+    C --> D[LLM Chooses Source]
+    D --> E[Trusted Observation]
+    E --> F[Evidence Ledger]
+    F --> A
+```
+
+`CURRENT_MACHINE_STATE -> machine_state_observation -> get_machine_status today`; other admitted sources may provide the same capability later.
+
+The existing bounded tool limit remains authoritative. A model that exhausts the tool budget with incomplete evidence, or repeatedly attempts unsupported finalization without acquiring evidence, terminates as `EVIDENCE_REQUIREMENTS_UNSATISFIED` with `failure_origin=ORCHESTRATION`; it is neither a success nor a provider, capability, or MCP failure. If evidence is missing but no authorized, prerequisite-ready source exists, the graph instead terminates as `EVIDENCE_SOURCE_UNAVAILABLE` with `error_code=evidence_source_unavailable` and the same stable failure origin. The terminal user-facing message is sanitized and response-language aware. Recovery remains exempt through its separate ADR-018 lifecycle.
 
 ```mermaid
 flowchart TD
