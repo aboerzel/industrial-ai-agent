@@ -61,6 +61,13 @@ def test_technical_failure_is_excluded_from_quality_metrics() -> None:
     assert result.language_compliance.result is QualityCheck.NOT_EVALUATED
 
 
+def test_missing_final_answer_does_not_count_as_language_failure() -> None:
+    result = evaluate_real_model_run(S04, good_artifact(final_answer=""))
+
+    assert result.infrastructure_health is TechnicalHealth.HEALTHY
+    assert result.language_compliance.result is QualityCheck.NOT_EVALUATED
+
+
 def test_clean_s04_result_passes_deterministic_contract() -> None:
     result = evaluate_real_model_run(S04, good_artifact())
     assert result.tool_trajectory is ToolTrajectoryQuality.COMPLETE

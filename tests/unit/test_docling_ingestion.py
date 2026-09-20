@@ -106,7 +106,7 @@ def test_ingestion_preserves_catalog_classification_and_stable_provenance() -> N
         station_code="S02",
         version="1.0",
         valid_from="2026-01-01",
-        tags=("POSITION-ENC-02",),
+        tags=("CALIBRATION-17", "POSITION-ENC-02", "QUALITY-09", "S02"),
         file_path="documents/public/Factory_Overview.pdf",
         checksum=hashlib.sha256(sample_path.read_bytes()).hexdigest(),
     )
@@ -121,6 +121,11 @@ def test_ingestion_preserves_catalog_classification_and_stable_provenance() -> N
     assert chunks[0].classification is DataClassification.CONFIDENTIAL
     assert chunks[0].document_id == "doc-test"
     assert chunks[0].metadata["station_code"] == "S02"
+    assert chunks[0].metadata["fault_ids"] == (
+        "CALIBRATION-17",
+        "POSITION-ENC-02",
+        "QUALITY-09",
+    )
 
 
 def test_catalog_json_has_no_unclassified_records() -> None:

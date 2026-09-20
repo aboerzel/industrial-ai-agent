@@ -1,6 +1,7 @@
 """Local Docling ingestion with explicit catalog classification propagation."""
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Protocol
@@ -15,6 +16,10 @@ from docling.document_converter import (
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
+
+_FAULT_IDENTIFIER_PATTERN = re.compile(
+    r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,10 +126,24 @@ def _chunk_document(
                 "version": document.version,
                 "valid_from": document.valid_from,
                 "tags": document.tags,
+                "fault_ids": _fault_ids_from_catalog_tags(document.tags),
                 "checksum": document.checksum,
             },
         )
         for position, (title, content) in enumerate(sections, start=1)
+    )
+
+
+def _fault_ids_from_catalog_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
+    """Expose cataloged technical fault identifiers as trusted chunk provenance."""
+    return tuple(
+        sorted(
+            {
+                match.group(0).upper()
+                for tag in tags
+                for match in _FAULT_IDENTIFIER_PATTERN.finditer(tag)
+            }
+        )
     )
 
 
