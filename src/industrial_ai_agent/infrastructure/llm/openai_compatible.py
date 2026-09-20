@@ -9,6 +9,7 @@ from typing import Any, Self
 from openai import (
     APIConnectionError,
     APIStatusError,
+    APITimeoutError,
     BadRequestError,
     OpenAI,
     RateLimitError,
@@ -268,6 +269,9 @@ def _require_all_object_properties(schema: object) -> None:
     if isinstance(schema, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):
+            # Groq strict schemas require every object, including Pydantic $defs,
+            # to reject unspecified properties.
+            schema["additionalProperties"] = False
             existing_required = schema.get("required")
             required = (
                 [value for value in existing_required if isinstance(value, str)]
@@ -366,7 +370,7 @@ def _classify_provider_error(error: Exception) -> LLMProviderErrorCode | None:
         return LLMProviderErrorCode.RATE_LIMIT
     if codes & _RATE_LIMIT_CODES:
         return LLMProviderErrorCode.RATE_LIMIT
-    if isinstance(error, APIConnectionError):
+    if isinstance(error, (APIConnectionError, APITimeoutError)):
         return LLMProviderErrorCode.PROVIDER_UNAVAILABLE
     if isinstance(error, BadRequestError):
         return LLMProviderErrorCode.REQUEST_INVALID

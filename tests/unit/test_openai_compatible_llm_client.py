@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 import pytest
-from openai import APIStatusError, BadRequestError, RateLimitError
+from openai import APIStatusError, APITimeoutError, BadRequestError, RateLimitError
 
 from industrial_ai_agent.agent.llm import (
     FinishReason,
@@ -571,6 +571,10 @@ def test_groq_strict_response_schema_requires_defaulted_object_properties() -> N
                     "properties": {
                         "name": {"type": "string"},
                         "format": {"type": "string", "default": "document"},
+                        "nested": {
+                            "type": "object",
+                            "properties": {"code": {"type": "string"}},
+                        },
                     },
                     "required": ["name"],
                     "additionalProperties": False,
@@ -590,7 +594,10 @@ def test_groq_strict_response_schema_requires_defaulted_object_properties() -> N
     schema = fake_client.completions.parameters["response_format"]["json_schema"][
         "schema"
     ]
-    assert schema["required"] == ["name", "format"]
+    assert schema["required"] == ["name", "format", "nested"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["nested"]["required"] == ["code"]
+    assert schema["properties"]["nested"]["additionalProperties"] is False
     assert request.response_format.json_schema.schema_definition["required"] == ["name"]
 
 
@@ -1036,6 +1043,25 @@ def test_classifies_known_provider_maintenance_status_as_unavailable() -> None:
         "provider maintenance details",
         response=_provider_response(503),
         body=None,
+    )
+    client = OpenAICompatibleLLMClient(
+        create_configuration(),
+        environment={},
+        client_factory=lambda **_: FakeOpenAIClient(provider_error),
+    )
+
+    with pytest.raises(LLMProviderError) as raised:
+        client.chat(
+            LOCAL_QUALITY_PROFILE,
+            LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
+        )
+
+    assert raised.value.code == LLMProviderErrorCode.PROVIDER_UNAVAILABLE.value
+
+
+def test_classifies_provider_timeout_as_unavailable() -> None:
+    provider_error = APITimeoutError(
+        request=httpx.Request("POST", "https://llm.example.com")
     )
     client = OpenAICompatibleLLMClient(
         create_configuration(),
