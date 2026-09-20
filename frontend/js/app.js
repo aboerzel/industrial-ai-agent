@@ -36,7 +36,6 @@ let visibleTranscript = [];
 if (modelConfigurationButton && modelConfigurationDialog) {
   mountModelConfiguration({ button: modelConfigurationButton, dialog: modelConfigurationDialog });
 }
-
 composerForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await submitRequest();

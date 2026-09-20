@@ -741,7 +741,8 @@ test("renders a single-composer investigation workspace", async (t) => {
 test("keeps a full-width workspace and responsive toolbar contract in CSS", async () => {
   const css = await readFile(new URL("../../frontend/css/app.css", import.meta.url), "utf8");
 
-  assert.doesNotMatch(css, /grid-template-columns/);
+  assert.match(css, /model-assignment-grid-header/);
+  assert.match(css, /grid-template-columns:/);
   assert.match(css, /\.toolbar-controls/);
   assert.match(css, /overflow-y: auto/);
   assert.match(css, /@media \(max-width: 520px\)/);
@@ -776,6 +777,14 @@ test("uses one workspace heading and accessible compact actions in the shipped p
   assert.match(index, /class="toolbar-selectors"/);
   assert.match(index, /class="toolbar-actions"/);
   assert.match(index, /id="composer-button" type="submit" aria-label="Send message" title="Send message"/);
+  assert.match(index, /id="model-configuration-button"[^>]*aria-label="Model configuration"/);
+  assert.match(index, /id="model-configuration-button"[\s\S]*?<svg class="settings-icon"[^>]*width="18" height="18"[^>]*fill="none"/);
+  assert.doesNotMatch(index, /id="model-configuration-button"[^>]*>\s*Settings\s*</);
+  assert.match(index, /<details class="monitoring-menu">[\s\S]*<summary[^>]*>[\s\S]*Monitoring[\s\S]*<\/summary>/);
+  assert.doesNotMatch(index, /id="monitoring-dialog"|monitoring\.js|showModal/);
+  assert.doesNotMatch(index, /id="grafana-dashboard-link"/);
+  assert.doesNotMatch(index, /<p class="eyebrow">SETTINGS<\/p>/);
+  assert.match(index, /class="model-configuration-title-group"/);
 });
 
 async function loadApp(fetchImplementation = null, activeInvestigation = null) {

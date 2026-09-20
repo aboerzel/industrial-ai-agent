@@ -47,9 +47,21 @@
             <div class="toolbar-actions">
               <span class="status-badge" data-status="idle" id="run-status" hidden></span>
               <button class="secondary-button icon-button" id="model-configuration-button" type="button" title="Model configuration" aria-label="Model configuration">
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.12 2.12-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V20h-3v-.08A1.7 1.7 0 0 0 10.68 18.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.12-2.12.06-.06A1.7 1.7 0 0 0 7.02 14.7 1.7 1.7 0 0 0 5.46 13.67H5.4v-3h.08A1.7 1.7 0 0 0 7.04 9.64a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.12-2.12.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.56V4.4h3v.08a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.12 2.12-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.56 1.03h.08v3h-.08A1.7 1.7 0 0 0 19.4 15Z" /></svg>
+                <svg class="settings-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.75v2M12 19.25v2M2.75 12h2M19.25 12h2M5.46 5.46l1.42 1.42M17.12 17.12l1.42 1.42M18.54 5.46l-1.42 1.42M6.88 17.12l-1.42 1.42"/></svg>
                 <span class="visually-hidden">Model configuration</span>
               </button>
+              <details class="monitoring-menu">
+                <summary title="Open monitoring dashboards">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 15v2M12 11v6M17 7v10"/></svg>
+                  <span>Monitoring</span>
+                </summary>
+                <nav class="monitoring-menu-panel" aria-label="Monitoring dashboards">
+                  <a href="http://localhost:3000/d/industrial-ai-agent-system-overview" target="_blank" rel="noopener noreferrer">System Overview</a>
+                  <a href="http://localhost:3000/d/industrial-ai-agent-usage-analytics" target="_blank" rel="noopener noreferrer">Usage Analytics</a>
+                  <a href="http://localhost:3000/d/industrial-ai-agent-cost-analytics" target="_blank" rel="noopener noreferrer">LLM Usage Analytics</a>
+                  <a href="http://localhost:3000/d/industrial-ai-agent-failure-analytics" target="_blank" rel="noopener noreferrer">Failure Analytics</a>
+                </nav>
+              </details>
               <button class="compact-button" id="export-pdf-button" type="button" disabled title="Export investigation as PDF">
                 <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6zM14 2v5h5M12 11v7m-3-3 3 3 3-3" /></svg>
                 <span>PDF</span>
@@ -85,7 +97,11 @@
     </main>
     <dialog class="model-configuration-dialog" id="model-configuration-dialog" aria-labelledby="model-configuration-title">
       <header class="model-configuration-header">
-        <div><p class="eyebrow">SETTINGS</p><h2 id="model-configuration-title">Model Configuration</h2></div>
+        <div class="model-configuration-title-group">
+          <svg class="settings-icon dialog-title-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.75v2M12 19.25v2M2.75 12h2M19.25 12h2M5.46 5.46l1.42 1.42M17.12 17.12l1.42 1.42M18.54 5.46l-1.42 1.42M6.88 17.12l-1.42 1.42"/></svg>
+          <h2 id="model-configuration-title">Model Configuration</h2>
+        </div>
+        <p class="model-configuration-save-status" id="model-configuration-save-status" role="status" aria-live="polite"></p>
         <button class="secondary-button icon-button" id="model-configuration-close" type="button" aria-label="Close model configuration" title="Close">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg>
         </button>
