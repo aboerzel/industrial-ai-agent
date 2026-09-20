@@ -68,7 +68,10 @@ def create_knowledge_mcp_server(
 
     @server.tool(
         name="search_documentation",
-        description="Search local technical documentation with preserved chunk provenance.",
+        description=(
+            "Search local technical documentation for fault or error identifiers and "
+            "troubleshooting guidance with preserved chunk provenance."
+        ),
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )

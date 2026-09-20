@@ -8,6 +8,9 @@ from pathlib import Path
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*", re.IGNORECASE)
+_FAULT_IDENTIFIER_PATTERN = re.compile(
+    r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b", re.IGNORECASE
+)
 DEFAULT_BM25_K1 = 1.5
 DEFAULT_BM25_B = 0.75
 
@@ -201,7 +204,11 @@ def load_markdown_chunks(directory: Path) -> tuple[KnowledgeRetrievalResult, ...
                     document_id=document_id,
                     source=path.relative_to(directory).as_posix(),
                     chunk_id=f"{document_id}::chunk-{position:03d}",
-                    metadata={"title": title, "format": "markdown"},
+                    metadata={
+                        "title": title,
+                        "format": "markdown",
+                        "fault_ids": _fault_ids_from_title(title),
+                    },
                 )
             )
 
@@ -229,6 +236,18 @@ def _split_markdown_sections(document: str) -> tuple[tuple[str, str], ...]:
         sections.append((current_title, "\n".join(current_lines).strip()))
 
     return tuple(sections)
+
+
+def _fault_ids_from_title(title: str) -> tuple[str, ...]:
+    """Preserve explicit technical fault references as trusted chunk metadata."""
+    return tuple(
+        sorted(
+            {
+                match.group(0).upper()
+                for match in _FAULT_IDENTIFIER_PATTERN.finditer(title)
+            }
+        )
+    )
 
 
 def _normalize_document(document: str) -> str:

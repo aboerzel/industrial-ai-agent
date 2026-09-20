@@ -56,11 +56,27 @@ from industrial_ai_agent.agent.response_language import (
 )
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
+from industrial_ai_agent.application.investigation_evidence_adapters import (
+    documentation_evidence_from_metadata,
+    machine_state_evidence_from_result,
+)
 from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
+from industrial_ai_agent.domain.investigation_evidence import (
+    DocumentationEvidence,
+    EvidenceLedger,
+    EvidenceRequirementId,
+    EvidenceSource,
+    EvidenceSourceType,
+    InvestigationType,
+    MachineStateEvidence,
+)
+from industrial_ai_agent.domain.machine_status import MachineState
 from industrial_ai_agent.domain.maintenance_ticket import (
     MAINTENANCE_TICKET_ID_PATTERN,
 )
 from industrial_ai_agent.domain.security import effective_data_classification
+from industrial_ai_agent.tools.documentation_search import DocumentationSearchResult
+from industrial_ai_agent.tools.machine_status import MachineStatusResult
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketProposalArguments,
     ReferenceCalibrationProposalArguments,
@@ -227,6 +243,13 @@ class TroubleshootingGraphState(TypedDict):
     requires_verified_recovery: bool
     recovery_execution_verified: bool
     recovery_outcome: RecoveryOutcome | None
+    evidence_required: tuple[EvidenceRequirementId, ...]
+    evidence_satisfied: tuple[EvidenceRequirementId, ...]
+    evidence_missing: tuple[EvidenceRequirementId, ...]
+    evidence_observations: tuple[dict[str, object], ...]
+    evidence_effective_classification: DataClassification | None
+    evidence_finalization_attempts: int
+    evidence_guard_interventions: int
 
 
 class CheckpointedTroubleshootingGraphState(TypedDict):
@@ -251,6 +274,15 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     requires_verified_recovery: bool
     recovery_execution_verified: bool
     recovery_outcome: str | None
+    evidence_required: tuple[str, ...]
+    evidence_satisfied: tuple[str, ...]
+    evidence_missing: tuple[str, ...]
+    evidence_observations: tuple[dict[str, object], ...]
+    evidence_effective_classification: int | None
+    evidence_finalization_attempts: int
+    evidence_guard_interventions: int
+    evidence_target_station_id: str | None
+    evidence_feedback_pending: bool
 
 
 class LangGraphTroubleshootingAgent:
@@ -264,6 +296,7 @@ class LangGraphTroubleshootingAgent:
         system_message: str = MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
         normalize_structured_final_output: bool = True,
         requires_verified_recovery: bool = False,
+        investigation_type: InvestigationType | None = None,
     ) -> None:
         self._checkpointer = checkpointer
         self._run_classification = run_classification
@@ -272,6 +305,7 @@ class LangGraphTroubleshootingAgent:
         self._system_message = system_message
         self._normalize_structured_final_output = normalize_structured_final_output
         self._requires_verified_recovery = requires_verified_recovery
+        self._investigation_type = investigation_type
 
     async def request_tool_selection_via_mcp(
         self,
@@ -551,6 +585,37 @@ class LangGraphTroubleshootingAgent:
                     status=AgentRunStatus.RECOVERY_INCOMPLETE,
                     error_code="recovery_incomplete",
                 )
+            ledger = _evidence_ledger_from_state(state)
+            if ledger is not None and not ledger.complete:
+                attempts = state["evidence_finalization_attempts"] + 1
+                if attempts >= MAX_TOOL_CALLS:
+                    return _evidence_requirements_unsatisfied_update(
+                        state,
+                        messages=[message],
+                        attempts=attempts,
+                        guard_intervention=True,
+                    )
+                return {
+                    "messages": [
+                        message,
+                        SystemMessage(
+                            content=_missing_evidence_instruction(
+                                ledger,
+                                ResponseLanguage(state["response_language"]),
+                            )
+                        ),
+                    ],
+                    "evidence_satisfied": tuple(
+                        item.requirement.value for item in ledger.satisfied
+                    ),
+                    "evidence_missing": tuple(item.value for item in ledger.missing),
+                    "evidence_finalization_attempts": attempts,
+                    "evidence_guard_interventions": state.get(
+                        "evidence_guard_interventions", 0
+                    )
+                    + 1,
+                    "evidence_feedback_pending": True,
+                }
             final_messages: list[AIMessage] = [message]
             if response.text is None:
                 raise MissingLLMResponseTextError("LLM response did not contain text")
@@ -610,20 +675,30 @@ class LangGraphTroubleshootingAgent:
                 "documents": tuple(reference.model_dump() for reference in documents),
             }
         if state["executed_tool_count"] == MAX_TOOL_CALLS:
+            ledger = _evidence_ledger_from_state(state)
+            if ledger is not None and not ledger.complete:
+                return _evidence_requirements_unsatisfied_update(
+                    state,
+                    messages=[message],
+                    attempts=state["evidence_finalization_attempts"],
+                    guard_intervention=False,
+                )
             return {
                 "messages": [message],
                 "run_status": AgentRunStatus.LIMIT_REACHED.value,
                 "final_answer": None,
             }
-        return {"messages": [message]}
+        return {"messages": [message], "evidence_feedback_pending": False}
 
     @staticmethod
     def _route_after_model(
         state: CheckpointedTroubleshootingGraphState,
         tool_policies: dict[str, ToolPolicy],
-    ) -> Literal["tool", "prepare_action", "__end__"]:
+    ) -> Literal["model", "tool", "prepare_action", "__end__"]:
         if state["run_status"] is not None:
             return END
+        if state["evidence_feedback_pending"]:
+            return "model"
         message = state["messages"][-1]
         if not isinstance(message, AIMessage) or len(message.tool_calls) != 1:
             raise RuntimeError("Model route requires exactly one AI tool call")
@@ -642,9 +717,11 @@ class LangGraphTroubleshootingAgent:
     @staticmethod
     def _route_after_read_only_model(
         state: CheckpointedTroubleshootingGraphState,
-    ) -> Literal["tool", "__end__"]:
+    ) -> Literal["model", "tool", "__end__"]:
         if state["run_status"] is not None:
             return END
+        if state["evidence_feedback_pending"]:
+            return "model"
         message = state["messages"][-1]
         if not isinstance(message, AIMessage) or len(message.tool_calls) != 1:
             raise RuntimeError("Model route requires exactly one AI tool call")
@@ -759,6 +836,9 @@ class LangGraphTroubleshootingAgent:
                 f"Invalid arguments for {tool_name}"
             ) from error
         effective_classification = self._observe_result_classification(state, result)
+        evidence_update = self._record_evidence_observation(
+            state, result=result, source_reference=tool_call_id
+        )
         executed_call = {
             "tool": tool_name,
             "arguments": arguments,
@@ -775,6 +855,7 @@ class LangGraphTroubleshootingAgent:
             "executed_tool_count": state["executed_tool_count"] + 1,
             "executed_tool_calls": (*state["executed_tool_calls"], executed_call),
             "effective_classification": effective_classification,
+            **evidence_update,
         }
 
     async def _aprepare_reference_calibration_node(
@@ -1124,6 +1205,7 @@ class LangGraphTroubleshootingAgent:
         resolved_response_language = response_language or detect_response_language(
             user_request
         )
+        evidence_ledger = self._initial_evidence_ledger(user_request)
         return {
             "messages": self._initial_messages(
                 user_request,
@@ -1157,6 +1239,7 @@ class LangGraphTroubleshootingAgent:
             "requires_verified_recovery": self._requires_verified_recovery,
             "recovery_execution_verified": False,
             "recovery_outcome": None,
+            **_evidence_state_update(evidence_ledger),
         }
 
     @staticmethod
@@ -1269,6 +1352,30 @@ class LangGraphTroubleshootingAgent:
             "recovery_outcome": RecoveryOutcome(state["recovery_outcome"])
             if state.get("recovery_outcome") is not None
             else None,
+            "evidence_required": tuple(
+                EvidenceRequirementId(item)
+                for item in state.get("evidence_required", ())
+            ),
+            "evidence_satisfied": tuple(
+                EvidenceRequirementId(item)
+                for item in state.get("evidence_satisfied", ())
+            ),
+            "evidence_missing": tuple(
+                EvidenceRequirementId(item)
+                for item in state.get("evidence_missing", ())
+            ),
+            "evidence_observations": tuple(state.get("evidence_observations", ())),
+            "evidence_effective_classification": (
+                DataClassification(state["evidence_effective_classification"])
+                if state.get("evidence_effective_classification") is not None
+                else None
+            ),
+            "evidence_finalization_attempts": state.get(
+                "evidence_finalization_attempts", 0
+            ),
+            "evidence_guard_interventions": state.get(
+                "evidence_guard_interventions", 0
+            ),
         }
 
     def _observe_result_classification(
@@ -1295,6 +1402,44 @@ class LangGraphTroubleshootingAgent:
         self._chat_model.raise_data_classification(effective)
         return int(effective)
 
+    def _initial_evidence_ledger(self, user_request: str) -> EvidenceLedger | None:
+        """Initialize only a trusted, proportional station-investigation contract."""
+        if self._investigation_type is None or self._run_classification is None:
+            return None
+        station_id = _trusted_station_id_from_request(user_request)
+        if station_id is None:
+            return None
+        return EvidenceLedger.for_investigation(
+            self._investigation_type,
+            station_id=station_id,
+            effective_data_classification=self._run_classification,
+        )
+
+    @staticmethod
+    def _record_evidence_observation(
+        state: CheckpointedTroubleshootingGraphState,
+        *,
+        result: object,
+        source_reference: str,
+    ) -> dict[str, object]:
+        ledger = _evidence_ledger_from_state(state)
+        if ledger is None:
+            return {}
+        for observation in _trusted_evidence_observations_from_result(
+            result, source_reference=source_reference
+        ):
+            if (
+                isinstance(observation, MachineStateEvidence)
+                and observation.station_id != ledger.station_id
+            ):
+                continue
+            ledger = ledger.record(observation)
+        update = _evidence_state_update(ledger)
+        update["evidence_guard_interventions"] = state.get(
+            "evidence_guard_interventions", 0
+        )
+        return update
+
     @staticmethod
     def _checkpoint_config(thread_id: str) -> RunnableConfig:
         normalized_thread_id = thread_id.strip()
@@ -1304,6 +1449,281 @@ class LangGraphTroubleshootingAgent:
             "recursion_limit": 20,
             "configurable": {"thread_id": normalized_thread_id},
         }
+
+
+def _evidence_state_update(ledger: EvidenceLedger | None) -> dict[str, object]:
+    """Serialize only safe evidence correlations into checkpoint state."""
+    if ledger is None:
+        return {
+            "evidence_required": (),
+            "evidence_satisfied": (),
+            "evidence_missing": (),
+            "evidence_observations": (),
+            "evidence_effective_classification": None,
+            "evidence_finalization_attempts": 0,
+            "evidence_guard_interventions": 0,
+            "evidence_target_station_id": None,
+            "evidence_feedback_pending": False,
+        }
+    return {
+        "evidence_required": tuple(item.value for item in ledger.required),
+        "evidence_satisfied": tuple(
+            item.requirement.value for item in ledger.satisfied
+        ),
+        "evidence_missing": tuple(item.value for item in ledger.missing),
+        "evidence_observations": tuple(
+            _serialize_evidence_observation(item) for item in ledger.observations
+        ),
+        "evidence_effective_classification": int(ledger.effective_data_classification),
+        "evidence_finalization_attempts": 0,
+        "evidence_guard_interventions": 0,
+        "evidence_target_station_id": ledger.station_id,
+        "evidence_feedback_pending": False,
+    }
+
+
+def _evidence_ledger_from_state(
+    state: CheckpointedTroubleshootingGraphState,
+) -> EvidenceLedger | None:
+    """Restore the immutable ledger from serializer-safe checkpoint fields."""
+    raw_required = state.get("evidence_required", ())
+    if not raw_required:
+        return None
+    raw_classification = state.get("evidence_effective_classification")
+    station_id = state.get("evidence_target_station_id")
+    if raw_classification is None or not isinstance(station_id, str):
+        raise RuntimeError("Evidence checkpoint state is incomplete")
+    try:
+        ledger = EvidenceLedger(
+            required=tuple(EvidenceRequirementId(item) for item in raw_required),
+            station_id=station_id,
+            effective_data_classification=DataClassification(raw_classification),
+        )
+        for serialized in state.get("evidence_observations", ()):
+            ledger = ledger.record(_deserialize_evidence_observation(serialized))
+        return ledger
+    except (TypeError, ValueError, KeyError) as error:
+        raise RuntimeError("Evidence checkpoint state is invalid") from error
+
+
+def _serialize_evidence_observation(
+    observation: MachineStateEvidence | DocumentationEvidence,
+) -> dict[str, object]:
+    base = {
+        "source_type": observation.source.source_type.value,
+        "source_reference": observation.source.source_reference,
+        "data_classification": int(observation.data_classification),
+    }
+    if isinstance(observation, MachineStateEvidence):
+        return {
+            **base,
+            "observation_type": "machine_state",
+            "station_id": observation.station_id,
+            "state": observation.state.value,
+            "active_fault_id": observation.active_fault_id,
+        }
+    return {
+        **base,
+        "observation_type": "documentation",
+        "fault_id": observation.fault_id,
+        "document_ids": observation.document_ids,
+    }
+
+
+def _deserialize_evidence_observation(
+    serialized: object,
+) -> MachineStateEvidence | DocumentationEvidence:
+    if not isinstance(serialized, dict):
+        raise TypeError("Evidence observation must be an object")
+    source = EvidenceSource(
+        EvidenceSourceType(serialized["source_type"]),
+        str(serialized["source_reference"]),
+    )
+    classification = DataClassification(serialized["data_classification"])
+    observation_type = serialized.get("observation_type")
+    if observation_type == "machine_state":
+        return MachineStateEvidence(
+            station_id=str(serialized["station_id"]),
+            state=MachineState(str(serialized["state"])),
+            active_fault_id=(
+                str(serialized["active_fault_id"])
+                if serialized.get("active_fault_id") is not None
+                else None
+            ),
+            source=source,
+            data_classification=classification,
+        )
+    if observation_type == "documentation":
+        document_ids = serialized.get("document_ids")
+        if not isinstance(document_ids, tuple | list):
+            raise TypeError("Documentation evidence requires document IDs")
+        return DocumentationEvidence(
+            fault_id=str(serialized["fault_id"]),
+            document_ids=tuple(str(item) for item in document_ids),
+            source=source,
+            data_classification=classification,
+        )
+    raise ValueError("Unknown evidence observation type")
+
+
+def _trusted_evidence_observations_from_result(
+    result: object,
+    *,
+    source_reference: str,
+) -> tuple[MachineStateEvidence | DocumentationEvidence, ...]:
+    """Adapt only recognized trusted capability result shapes, never model messages."""
+    payload = _normalize_tool_result_classifications(_structured_tool_result(result))
+    observations: list[MachineStateEvidence | DocumentationEvidence] = []
+    try:
+        machine_result = MachineStatusResult.model_validate(payload)
+    except ValidationError:
+        machine_result = None
+    if machine_result is not None:
+        observation = machine_state_evidence_from_result(
+            machine_result,
+            source=EvidenceSource(EvidenceSourceType.MACHINE_STATE, source_reference),
+        )
+        if observation is not None:
+            observations.append(observation)
+    try:
+        documentation_result = DocumentationSearchResult.model_validate(payload)
+    except ValidationError:
+        documentation_result = None
+    if documentation_result is not None:
+        observations.extend(
+            documentation_evidence_from_metadata(
+                documentation_result,
+                source=EvidenceSource(
+                    EvidenceSourceType.DOCUMENTATION, source_reference
+                ),
+            )
+        )
+    return tuple(observations)
+
+
+def _normalize_tool_result_classifications(
+    payload: dict[str, object],
+) -> dict[str, object]:
+    """Translate the MCP's safe label projection to the core IntEnum boundary."""
+    normalized: dict[str, object] = {}
+    for key, value in payload.items():
+        if key == "classification" and isinstance(value, str):
+            normalized[key] = (
+                int(DataClassification[value])
+                if value in DataClassification.__members__
+                else value
+            )
+        elif isinstance(value, list):
+            normalized[key] = tuple(
+                _normalize_tool_result_classifications(item)
+                if isinstance(item, dict)
+                else item
+                for item in value
+            )
+        elif isinstance(value, dict):
+            normalized[key] = _normalize_tool_result_classifications(value)
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def _missing_evidence_instruction(
+    ledger: EvidenceLedger,
+    response_language: ResponseLanguage,
+) -> str:
+    """Bounded runtime context, not user input and not a tool-routing instruction."""
+    active_fault_ids = tuple(
+        sorted(
+            {
+                observation.active_fault_id
+                for observation in ledger.observations
+                if isinstance(observation, MachineStateEvidence)
+                and observation.active_fault_id is not None
+            }
+        )
+    )
+    active_faults = ", ".join(active_fault_ids)
+    descriptions = {
+        ResponseLanguage.DE: {
+            EvidenceRequirementId.CURRENT_MACHINE_STATE: (
+                "aktueller Maschinenzustand der Zielstation"
+            ),
+            EvidenceRequirementId.ACTIVE_FAULT: ("aktiver Fehler der Zielstation"),
+            EvidenceRequirementId.RELEVANT_FAULT_DOCUMENTATION: (
+                "technische Dokumentation zum bestätigten aktiven Fehler"
+                + (f" {active_faults}" if active_faults else "")
+            ),
+        },
+        ResponseLanguage.EN: {
+            EvidenceRequirementId.CURRENT_MACHINE_STATE: (
+                "current machine state for the target station"
+            ),
+            EvidenceRequirementId.ACTIVE_FAULT: "active fault for the target station",
+            EvidenceRequirementId.RELEVANT_FAULT_DOCUMENTATION: (
+                "technical documentation relevant to the confirmed active fault"
+                + (f" {active_faults}" if active_faults else "")
+            ),
+        },
+    }[response_language]
+    missing = "\n".join(
+        f"- {descriptions[item]} ({item.value})" for item in ledger.missing
+    )
+    if response_language is ResponseLanguage.DE:
+        return (
+            "Die Untersuchung ist noch nicht vollständig belegt. Der vorherige Entwurf "
+            "wurde nicht finalisiert. Beschaffe vor einer Antwort mit einer geeigneten "
+            "autorisierten Fähigkeit die noch fehlenden Beobachtungen. Behaupte nicht, "
+            "dass fehlende Beobachtungen vorliegen.\n\nNoch erforderlich:\n" + missing
+        )
+    return (
+        "Investigation evidence is incomplete. The prior draft was not finalized. "
+        "Obtain the remaining observations with an appropriate authorized capability "
+        "before answering. Do not claim missing observations are available.\n\n"
+        "Still required:\n" + missing
+    )
+
+
+def _evidence_requirements_unsatisfied_update(
+    state: CheckpointedTroubleshootingGraphState,
+    *,
+    messages: list[AnyMessage],
+    attempts: int,
+    guard_intervention: bool,
+) -> dict[str, object]:
+    ledger = _evidence_ledger_from_state(state)
+    if ledger is None or ledger.complete:
+        raise RuntimeError("Evidence terminal state requires incomplete evidence")
+    response_language = ResponseLanguage(state["response_language"])
+    missing = ", ".join(item.value for item in ledger.missing)
+    answer = (
+        "Die Untersuchung konnte nicht abgeschlossen werden, da noch erforderliche "
+        f"Evidenz fehlt: {missing}."
+        if response_language is ResponseLanguage.DE
+        else "The investigation could not be completed because required evidence is "
+        f"still missing: {missing}."
+    )
+    return {
+        "messages": messages,
+        "run_status": AgentRunStatus.EVIDENCE_REQUIREMENTS_UNSATISFIED.value,
+        "final_answer": answer,
+        "evidence_satisfied": tuple(
+            item.requirement.value for item in ledger.satisfied
+        ),
+        "evidence_missing": tuple(item.value for item in ledger.missing),
+        "evidence_finalization_attempts": attempts,
+        "evidence_guard_interventions": state.get("evidence_guard_interventions", 0)
+        + int(guard_intervention),
+        "evidence_feedback_pending": False,
+    }
+
+
+def _trusted_station_id_from_request(user_request: str) -> str | None:
+    """Extract one canonical station identifier from the server-owned request context."""
+    matches = {
+        match.group(0).upper()
+        for match in _STATION_IDENTIFIER_PATTERN.finditer(user_request)
+    }
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def _require_tool_call_id(tool_call_id: object | None) -> str:

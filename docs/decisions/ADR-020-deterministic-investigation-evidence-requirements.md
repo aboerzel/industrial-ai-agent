@@ -33,7 +33,26 @@ flowchart TD
     F -->|Yes| G[Allow Grounded Finalization]
 ```
 
-Phase 5C.2a implements only requirements, typed observations, adapters, and the ledger. It does not alter LangGraph transitions, tool budgets, prompts, finalization guards, persistence, UI, or PDF output. A later bounded orchestration phase may use the ledger to prevent completion while requirements are missing.
+Phase 5C.2a implemented requirements, typed observations, adapters, and the ledger. Phase 5C.2b integrates its serializer-safe projection into the existing checkpointable LangGraph state. Before structured finalization, the graph reconstructs the ledger and blocks a draft while required evidence is missing. It appends compact, response-language-aware system runtime context describing the missing observations and retaining their canonical IDs, then returns to the existing model-decision node. This does not prescribe a tool name or tool order.
+
+The existing bounded tool limit remains authoritative. A model that exhausts the tool budget with incomplete evidence, or repeatedly attempts unsupported finalization without acquiring evidence, terminates as `EVIDENCE_REQUIREMENTS_UNSATISFIED` with `failure_origin=ORCHESTRATION`; it is neither a success nor a provider, capability, or MCP failure. The terminal user-facing message is sanitized and response-language aware. Recovery remains exempt through its separate ADR-018 lifecycle.
+
+```mermaid
+flowchart TD
+    A[Request] --> B[Requirements]
+    B --> C[Model Decision]
+    C --> D[Tool]
+    D --> E[Trusted Observation]
+    E --> F[Evidence Ledger]
+    F --> C
+    C --> G[Completion Attempt]
+    G --> H{Evidence Complete?}
+    H -->|No| I[Missing Evidence Context]
+    I --> C
+    H -->|Yes| J[Structured Finalization]
+    C --> K{Bound Reached?}
+    K -->|Yes and evidence missing| L[EVIDENCE_REQUIREMENTS_UNSATISFIED]
+```
 
 ## Consequences
 

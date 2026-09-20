@@ -115,6 +115,7 @@ def test_loaded_chunk_preserves_content_and_provenance() -> None:
     assert chunk.metadata == {
         "title": "Fault state and QUALITY-09",
         "format": "markdown",
+        "fault_ids": ("QUALITY-09",),
     }
     assert chunk.relevance_score is None
 

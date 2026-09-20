@@ -67,6 +67,31 @@ def documentation_evidence_from_result(
     )
 
 
+def documentation_evidence_from_metadata(
+    result: DocumentationSearchResult,
+    *,
+    source: EvidenceSource,
+) -> tuple[DocumentationEvidence, ...]:
+    """Project every explicit catalog fault reference without using query or body text."""
+    fault_ids = sorted(
+        {
+            fault_id
+            for item in result.results
+            for fault_id in _trusted_fault_ids(item.metadata.get("fault_ids"))
+        }
+    )
+    return tuple(
+        evidence
+        for fault_id in fault_ids
+        if (
+            evidence := documentation_evidence_from_result(
+                result, fault_id=fault_id, source=source
+            )
+        )
+        is not None
+    )
+
+
 def _trusted_fault_ids(value: object) -> frozenset[str]:
     """Accept only the explicit catalog metadata shape used by trusted retrieval."""
     if not isinstance(value, Iterable) or isinstance(value, str | bytes):

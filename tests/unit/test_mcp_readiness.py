@@ -150,3 +150,81 @@ def test_later_run_recovers_after_an_mcp_restart_without_agent_restart() -> None
 
     asyncio.run(open_twice())
     assert provider.attempts == 3
+
+
+class _ClosableMcpSession:
+    async def initialize(self):
+        return SimpleNamespace(
+            server_info=SimpleNamespace(name="factory", version="1"),
+            protocol_version="2025-06-18",
+        )
+
+    async def list_tools(self):
+        return SimpleNamespace(
+            tools=(
+                SimpleNamespace(
+                    name="get_machine_status",
+                    description="Get machine status.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "station_id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 32,
+                            }
+                        },
+                        "required": ["station_id"],
+                        "additionalProperties": False,
+                    },
+                ),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "consumer_error",
+    (None, RuntimeError("model execution failed"), asyncio.CancelledError()),
+)
+def test_mcp_provider_closes_eval_owned_sessions_after_success_exception_and_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    consumer_error: BaseException | None,
+) -> None:
+    closed: list[bool] = []
+
+    @asynccontextmanager
+    async def open_closable_session(_transport, *, telemetry=None):
+        del telemetry
+        try:
+            yield _ClosableMcpSession()
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(
+        "industrial_ai_agent.infrastructure.mcp_langchain_tool_provider.open_mcp_session",
+        open_closable_session,
+    )
+    provider = McpLangChainToolProvider(
+        StreamableHttpServerParameters(url="http://factory.invalid/mcp"),
+        allowed_tool_names=frozenset({"get_machine_status"}),
+    )
+
+    async def consume_session() -> None:
+        async with provider.open_session():
+            if consumer_error is not None:
+                raise consumer_error
+
+    if consumer_error is not None:
+        error_type = type(consumer_error)
+        if error_type is RuntimeError:
+            with pytest.raises(RuntimeError, match="model execution failed"):
+                asyncio.run(consume_session())
+        elif error_type is asyncio.CancelledError:
+            with pytest.raises(asyncio.CancelledError):
+                asyncio.run(consume_session())
+        else:
+            raise AssertionError("Unexpected test error type")
+    else:
+        asyncio.run(consume_session())
+
+    assert closed == [True]

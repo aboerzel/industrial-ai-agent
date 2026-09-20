@@ -34,6 +34,7 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     RoutedTroubleshootingAgentFactory,
     TroubleshootingRunService,
 )
+from industrial_ai_agent.domain.investigation_evidence import InvestigationType
 from industrial_ai_agent.domain.security import DEMO_RUNTIME_SECURITY_CONTEXT
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     McpTransport,
@@ -165,6 +166,7 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                 requires_verified_recovery=(
                     run_policy.run_profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
                 ),
+                investigation_type=_investigation_type_for(run_policy),
             )
 
 
@@ -271,6 +273,20 @@ def _system_message_for(run_policy: ResolvedRunPolicy) -> str:
     if run_policy.run_profile is AgentRunProfile.RESTRICTED_INFORMATION:
         return _RESTRICTED_INFORMATION_SYSTEM_MESSAGE
     return MCP_TROUBLESHOOTING_SYSTEM_MESSAGE
+
+
+def _investigation_type_for(
+    run_policy: ResolvedRunPolicy,
+) -> InvestigationType | None:
+    """Map server-owned execution semantics to proportional evidence contracts."""
+    return {
+        AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING: InvestigationType.STATION_TROUBLESHOOTING,
+        AgentRunProfile.RESTRICTED_TROUBLESHOOTING: InvestigationType.STATION_TROUBLESHOOTING,
+        AgentRunProfile.INTERNAL_DIAGNOSTIC: InvestigationType.STATION_STATUS,
+        AgentRunProfile.RESTRICTED_INFORMATION: InvestigationType.STATION_STATUS,
+        AgentRunProfile.PUBLIC_INFORMATION: InvestigationType.STATION_LIST,
+        AgentRunProfile.CONFIDENTIAL_RECOVERY: InvestigationType.PHYSICAL_RECOVERY,
+    }[run_policy.run_profile]
 
 
 def _mcp_server_configurations(

@@ -136,7 +136,8 @@ def create_factory_mcp_server(
         name="get_station_overview",
         description=(
             "Get a bounded overview of one visible station, including recent visible "
-            "products and their latest processing status."
+            "products and their latest processing status. It does not provide the "
+            "station's current operating state or active faults."
         ),
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
@@ -193,7 +194,10 @@ def create_factory_mcp_server(
 
     @server.tool(
         name="get_product_overview",
-        description="Get a bounded overview of one visible product.",
+        description=(
+            "Get a bounded overview of one visible product. It does not provide a "
+            "station's current operating state or active faults."
+        ),
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
@@ -251,7 +255,10 @@ def create_factory_mcp_server(
 
     @server.tool(
         name="get_machine_status",
-        description="Get the current operating state of a station ID.",
+        description=(
+            "Get the current operating state of a station ID, including its active "
+            "fault or error when one is present."
+        ),
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
