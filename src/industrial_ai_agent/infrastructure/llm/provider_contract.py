@@ -413,7 +413,9 @@ class ProviderContractRunner:
                 ContractCallResult(
                     **metadata,
                     normalized_error="model_output_invalid",
-                    failure_origin=failure_origin_for_error_code("model_output_invalid"),
+                    failure_origin=failure_origin_for_error_code(
+                        "model_output_invalid"
+                    ),
                     response_contains_json=error.response_contains_json,
                     json_parses_syntactically=error.json_parses_syntactically,
                     pydantic_validation_succeeds=False,
@@ -513,9 +515,7 @@ def _safe_validation_failures(
 ) -> tuple[StructuredValidationFailure, ...]:
     return tuple(
         StructuredValidationFailure(
-            path=tuple(
-                part for part in issue["loc"] if isinstance(part, (str, int))
-            ),
+            path=tuple(part for part in issue["loc"] if isinstance(part, (str, int))),
             category=_validation_category(str(issue["type"])),
             validation_code=str(issue["type"]),
         )

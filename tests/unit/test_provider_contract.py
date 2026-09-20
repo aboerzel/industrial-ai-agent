@@ -172,7 +172,9 @@ def test_successful_structured_output_and_separate_multistep_are_verified() -> N
     structured_requests = [
         request for request in client.requests if request.response_format is not None
     ]
-    assert all(request.reasoning_effort.value == "none" for request in structured_requests)
+    assert all(
+        request.reasoning_effort.value == "none" for request in structured_requests
+    )
 
 
 def test_structured_validation_failure_is_content_free_and_path_specific() -> None:
