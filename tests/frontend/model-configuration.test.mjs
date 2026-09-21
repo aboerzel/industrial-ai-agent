@@ -41,16 +41,22 @@ test("renders display names, all classifications, dynamic specialized consumers,
   assert.equal(content.querySelectorAll(".model-assignment-row button").length, 0);
 });
 
-test("keeps forbidden public models visible but disabled and shows capability warnings", () => {
-  const { content } = render();
-  const restricted = content.querySelector('[aria-label="Agent RESTRICTED configuration"]');
-  const forbidden = [...restricted.options].find((option) => option.value === "nvidia_quality");
-  assert.equal(forbidden.disabled, true);
-  assert.match(forbidden.textContent, /Not allowed for RESTRICTED data/);
-  const publicSelect = content.querySelector('[aria-label="Agent PUBLIC configuration"]');
-  publicSelect.value = "public_text";
-  publicSelect.dispatchEvent(new window.Event("change"));
-  assert.match(content.textContent, /Compatibility warning: missing Tools/);
+test("keeps forbidden public models visible but disabled and shows capability warnings", async () => {
+  const { content, bodies, restoreFetch } = renderWithSave((body) => body);
+  try {
+    const restricted = content.querySelector('[aria-label="Agent RESTRICTED configuration"]');
+    const forbidden = [...restricted.options].find((option) => option.value === "nvidia_quality");
+    assert.equal(forbidden.disabled, true);
+    assert.match(forbidden.textContent, /Not allowed for RESTRICTED data/);
+    const publicSelect = content.querySelector('[aria-label="Agent PUBLIC configuration"]');
+    publicSelect.value = "public_text";
+    publicSelect.dispatchEvent(new window.Event("change"));
+    await settle();
+    assert.match(content.textContent, /Compatibility warning: missing Tools/);
+    assert.equal(bodies.length, 1);
+  } finally {
+    restoreFetch();
+  }
 });
 
 test("does not mislabel Groq as missing structured output when calls are separate", () => {
@@ -115,15 +121,27 @@ test("renders automatic mode, policy, required capabilities, and eligible displa
   assert.doesNotMatch(content.textContent, /local_quality/);
 });
 
-test("keeps the same row grid when switching between manual and automatic modes", () => {
-  const { content } = render();
-  const row = content.querySelector('.model-assignment-row[data-consumer-id="agent"][data-classification="RESTRICTED"]');
-  const childrenBefore = [...row.children].map((node) => node.className || node.tagName);
-  const auto = row.querySelector('input[value="AUTO"]');
-  auto.checked = true;
-  auto.dispatchEvent(new window.Event("change", { bubbles: true }));
-  assert.deepEqual([...row.children].map((node) => node.className || node.tagName), childrenBefore);
-  assert.equal(row.querySelectorAll('[aria-label="Agent RESTRICTED configuration"]').length, 1);
+test("keeps the same row grid when switching between manual and automatic modes", async () => {
+  const { content, bodies, restoreFetch } = renderWithSave((body) => body);
+  try {
+    const row = content.querySelector('.model-assignment-row[data-consumer-id="agent"][data-classification="RESTRICTED"]');
+    const childrenBefore = [...row.children].map((node) => node.className || node.tagName);
+    const auto = row.querySelector('input[value="AUTO"]');
+    auto.checked = true;
+    auto.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await settle();
+    assert.deepEqual([...row.children].map((node) => node.className || node.tagName), childrenBefore);
+    assert.equal(row.querySelectorAll('[aria-label="Agent RESTRICTED configuration"]').length, 1);
+    assert.deepEqual(bodies, [{
+      consumer_id: "agent",
+      data_classification: "RESTRICTED",
+      selection_mode: "AUTO",
+      model_id: null,
+      selection_policy: "QUALITY_FIRST",
+    }]);
+  } finally {
+    restoreFetch();
+  }
 });
 
 test("auto-saves a manual model change with one global confirmation", async () => {
@@ -265,6 +283,7 @@ test("opens, loads, closes, and reopens the production model configuration dialo
       { method: "GET", path: "/api/v1/model-consumers" },
       { method: "GET", path: "/api/v1/models" },
     ]);
+    assert.ok(requests.every((request) => request.method === "GET"));
 
     document.querySelector("#model-configuration-close").click();
     assert.equal(dialog.open, false);

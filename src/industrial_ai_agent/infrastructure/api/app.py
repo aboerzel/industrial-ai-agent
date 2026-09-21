@@ -96,7 +96,9 @@ from industrial_ai_agent.infrastructure.telemetry import Telemetry, instrument_f
 
 API_PREFIX = "/api/v1"
 _FAILURE_LOGGER = logging.getLogger("industrial_ai_agent.api.failure_diagnostics")
-_MODEL_ASSIGNMENT_LOGGER = logging.getLogger("industrial_ai_agent.api.model_assignment")
+# Uvicorn owns the configured production stderr handler. Use it so safe assignment
+# audit records are retained by the configured log collector.
+_MODEL_ASSIGNMENT_LOGGER = logging.getLogger("uvicorn.error")
 _PERSISTED_RUN_ERROR_CODES = frozenset(
     {
         "internal_error",
@@ -703,6 +705,7 @@ def _model_assignment_audit(
         "remote_scope": "loopback"
         if client_host in {"127.0.0.1", "::1"}
         else "non_loopback",
+        "client_instance_id": request.headers.get("x-client-instance-id"),
     }
 
 
