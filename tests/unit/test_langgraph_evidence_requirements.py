@@ -45,6 +45,8 @@ class FakeLLMClient:
 @dataclass
 class EvidenceMcpToolProvider:
     machine_station_id: str = "S04"
+    machine_state: str = "FAULTED"
+    active_error_code: str | None = "QUALITY-09"
     documentation_fault_id: str = "QUALITY-09"
     calls: list[str] = field(default_factory=list)
 
@@ -56,8 +58,8 @@ class EvidenceMcpToolProvider:
                 {
                     "station_id": self.machine_station_id,
                     "found": True,
-                    "state": "FAULTED",
-                    "active_error_code": "QUALITY-09",
+                    "state": self.machine_state,
+                    "active_error_code": self.active_error_code,
                     "classification": "CONFIDENTIAL",
                 }
             )
@@ -156,6 +158,38 @@ def test_machine_state_without_documentation_blocks_finalization() -> None:
         EvidenceRequirementId.RELEVANT_FAULT_DOCUMENTATION,
     )
     assert "erforderliche Evidenz fehlt" in (state["final_answer"] or "")
+
+
+def test_healthy_s01_and_s05_complete_without_fault_documentation() -> None:
+    for station_id in ("S01", "S05"):
+        client = FakeLLMClient(
+            [
+                _tool(
+                    "get_machine_status",
+                    {"station_id": station_id},
+                    f"{station_id.lower()}-machine",
+                ),
+                _final(
+                    f"Station {station_id} ist im Zustand RUNNING und hat keinen aktiven Fehler."
+                ),
+            ]
+        )
+        provider = EvidenceMcpToolProvider(
+            machine_station_id=station_id,
+            machine_state="RUNNING",
+            active_error_code=None,
+        )
+
+        state = _run(
+            client,
+            provider,
+            user_request=f"Untersuche Station {station_id} genauer.",
+        )
+
+        assert state["run_status"] is AgentRunStatus.SUCCESS
+        assert state["evidence_missing"] == ()
+        assert provider.calls == ["machine"]
+        assert "keinen aktiven Fehler" in (state["final_answer"] or "")
 
 
 def test_documentation_without_machine_state_does_not_satisfy_rca_contract() -> None:
@@ -332,10 +366,11 @@ def _run(
     provider: EvidenceMcpToolProvider,
     *,
     investigation_type: InvestigationType = InvestigationType.STATION_TROUBLESHOOTING,
+    user_request: str = "Untersuche Station S04 genauer.",
 ):
     return asyncio.run(
         _agent(client, provider, investigation_type=investigation_type).ainvoke_via_mcp(
-            "Untersuche Station S04 genauer."
+            user_request
         )
     )
 

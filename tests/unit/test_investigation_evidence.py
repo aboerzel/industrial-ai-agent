@@ -51,6 +51,32 @@ def test_trusted_s04_machine_observation_satisfies_state_and_active_fault() -> N
     assert ledger.missing == (EvidenceRequirementId.RELEVANT_FAULT_DOCUMENTATION,)
 
 
+def test_running_station_without_an_active_fault_completes_without_documentation() -> (
+    None
+):
+    ledger = EvidenceLedger.for_investigation(
+        InvestigationType.STATION_TROUBLESHOOTING,
+        station_id="S01",
+        effective_data_classification=DataClassification.CONFIDENTIAL,
+    ).record(
+        MachineStateEvidence(
+            station_id="S01",
+            state=MachineState.RUNNING,
+            active_fault_id=None,
+            source=MACHINE_SOURCE,
+            data_classification=DataClassification.CONFIDENTIAL,
+        )
+    )
+
+    assert tuple(item.requirement for item in ledger.satisfied) == (
+        EvidenceRequirementId.CURRENT_MACHINE_STATE,
+        EvidenceRequirementId.ACTIVE_FAULT,
+        EvidenceRequirementId.RELEVANT_FAULT_DOCUMENTATION,
+    )
+    assert ledger.missing == ()
+    assert ledger.complete is True
+
+
 def test_llm_text_cannot_be_recorded_as_evidence() -> None:
     with pytest.raises(TypeError, match="trusted observations only"):
         _troubleshooting_ledger().record("I checked the machine and documentation")  # type: ignore[arg-type]

@@ -227,6 +227,14 @@ class EvidenceLedger:
             for item in machine_observations
             if item.active_fault_id is not None
         }
+        healthy_machine_observation = next(
+            (
+                item
+                for item in machine_observations
+                if item.state is MachineState.RUNNING and item.active_fault_id is None
+            ),
+            None,
+        )
         satisfactions: list[EvidenceSatisfaction] = []
         for requirement in self.required:
             if (
@@ -245,6 +253,15 @@ class EvidenceLedger:
                 satisfactions.append(
                     EvidenceSatisfaction(requirement, observation.source)
                 )
+            elif (
+                requirement is EvidenceRequirementId.ACTIVE_FAULT
+                and healthy_machine_observation is not None
+            ):
+                satisfactions.append(
+                    EvidenceSatisfaction(
+                        requirement, healthy_machine_observation.source
+                    )
+                )
             elif requirement is EvidenceRequirementId.RELEVANT_FAULT_DOCUMENTATION:
                 observation = next(
                     (
@@ -257,6 +274,13 @@ class EvidenceLedger:
                 if observation is not None:
                     satisfactions.append(
                         EvidenceSatisfaction(requirement, observation.source)
+                    )
+                elif healthy_machine_observation is not None:
+                    satisfactions.append(
+                        EvidenceSatisfaction(
+                            requirement,
+                            healthy_machine_observation.source,
+                        )
                     )
         return tuple(satisfactions)
 
