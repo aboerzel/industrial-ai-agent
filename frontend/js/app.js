@@ -31,6 +31,7 @@ let hasExportableConversation = false;
 let isSubmitting = false;
 let pendingAgentTurn = null;
 let pendingTranscriptTurn = null;
+let latestSubmissionId = 0;
 let visibleTranscript = [];
 
 if (modelConfigurationButton && modelConfigurationDialog) {
@@ -107,27 +108,93 @@ async function submitRequest(message = composerMessage.value.trim()) {
   if (isSubmitting) return;
 
   const isNewInvestigation = currentInvestigationId === null;
+  const submission = {
+    id: ++latestSubmissionId,
+    investigationId: currentInvestigationId,
+    clearance: userClearance.value,
+    language: responseLanguage.value,
+  };
   renderPendingConversation(requestMessage, { replace: isNewInvestigation });
   setSubmitting();
   try {
     const result = await createRun(
       requestMessage,
-      userClearance.value,
-      responseLanguage.value,
-      currentInvestigationId,
+      submission.clearance,
+      submission.language,
+      submission.investigationId,
     );
+    if (submission.id !== latestSubmissionId) return;
     currentInvestigationId = result.investigation_id;
     composerMessage.value = "";
-    await reloadInvestigation();
+    if (isTerminalRunStatus(result.status) && userClearance.value === submission.clearance) {
+      renderTerminalRun(result, requestMessage, submission);
+      void refreshTerminalInvestigation(result, submission);
+    } else {
+      await reloadInvestigation();
+    }
   } catch (error) {
+    if (submission.id !== latestSubmissionId) return;
     if (error?.investigationId) {
       currentInvestigationId = error.investigationId;
       persistActiveInvestigation(currentInvestigationId);
     }
-    renderPendingFailure(error, responseLanguage.value);
+    renderPendingFailure(error, submission.language);
   } finally {
     isSubmitting = false;
     syncControls();
+  }
+}
+
+function isTerminalRunStatus(status) {
+  return ["success", "failed", "limit_reached"].includes(status);
+}
+
+function renderTerminalRun(result, request, submission) {
+  if (
+    submission.id !== latestSubmissionId ||
+    currentInvestigationId !== result.investigation_id ||
+    userClearance.value !== submission.clearance
+  ) return;
+  const turn = {
+    ...result,
+    request,
+    response_language: submission.language,
+  };
+  const rendered = renderAgentTurn(turn);
+  if (pendingAgentTurn?.isConnected) pendingAgentTurn.replaceWith(rendered);
+  else history.append(renderUserTurn(turn), rendered);
+  pendingAgentTurn = null;
+  if (pendingTranscriptTurn) {
+    pendingTranscriptTurn.answer = result.answer ?? null;
+    pendingTranscriptTurn.error = result.error
+      ? transcriptError(result.error.code, result.error.message)
+      : null;
+  }
+  pendingTranscriptTurn = null;
+  persistActiveInvestigation(currentInvestigationId);
+  syncExportableConversation();
+  setStatus(result.status, submission.language);
+  scrollHistoryToLatest();
+}
+
+async function refreshTerminalInvestigation(result, submission) {
+  if (userClearance.value !== submission.clearance) return;
+  try {
+    const investigation = await getInvestigation(
+      result.investigation_id,
+      submission.clearance,
+    );
+    const persistedRun = investigation.turns.find((turn) => turn.run_id === result.run_id);
+    if (
+      submission.id === latestSubmissionId &&
+      currentInvestigationId === result.investigation_id &&
+      userClearance.value === submission.clearance &&
+      persistedRun
+    ) {
+      renderInvestigation(investigation);
+    }
+  } catch {
+    // The terminal POST response is already rendered. A later navigation can reload persistence.
   }
 }
 
@@ -291,7 +358,7 @@ function renderAgentTurn(turn) {
     return article;
   }
 
-  if (turn.status === "failed") {
+  if (turn.status === "failed" || turn.status === "limit_reached") {
     const providerLimited = isProviderLimitError(turn.error?.code);
     article.classList.add(providerLimited ? "is-limit" : "is-error");
     article.append(

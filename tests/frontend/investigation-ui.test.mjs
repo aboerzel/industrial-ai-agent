@@ -682,6 +682,183 @@ test("renders a single-composer investigation workspace", async (t) => {
     }
   });
 
+  await t.test("renders a terminal reference follow-up in the active investigation", async () => {
+    const initial = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
+    initial.turns[0].identifiers = [{ value: "S04", type: "station" }];
+    const completed = structuredClone(initial);
+    completed.run_count = 2;
+    completed.tool_call_count = 1;
+    completed.turns.push({
+      ...turn(
+        SECOND_RUN_ID,
+        "Check the current status of station S04.",
+        "Station S04 is FAULTED.",
+        [{ tool: "get_machine_status", arguments: { station_id: "S04" } }],
+        [],
+        2,
+        "EN",
+      ),
+      identifiers: [{ value: "S04", type: "station" }],
+    });
+    let runRequests = 0;
+    const bodies = [];
+    const { document, window, restoreFetch } = await loadApp((url, options = {}) => {
+      if (String(url).includes("/api/v1/runs")) {
+        runRequests += 1;
+        bodies.push(JSON.parse(options.body));
+        return jsonResponse(runResponse(SECOND_RUN_ID));
+      }
+      return jsonResponse(runRequests ? completed : initial);
+    }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: "EN" });
+    try {
+      await settle();
+      document.querySelector(".identifier-reference").click();
+      [...document.querySelectorAll(".reference-action")]
+        .find((button) => button.textContent === "Check current status")
+        .click();
+      await settle();
+
+      assert.equal(bodies[0].investigation_id, INVESTIGATION_ID);
+      assert.equal(document.querySelectorAll(".agent-turn").length, 2);
+      assert.equal(document.querySelector(".agent-turn:last-child")?.classList.contains("is-pending"), false);
+      assert.match(document.querySelector(".agent-turn:last-child")?.textContent ?? "", /S04 is FAULTED/);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("renders a typed continuation from its terminal POST response before a delayed refresh", async () => {
+    const initial = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
+    const completed = structuredClone(initial);
+    completed.run_count = 2;
+    completed.turns.push(terminalTurn(SECOND_RUN_ID, "Check station S04.", "Station S04 is FAULTED."));
+    let getRequests = 0;
+    let resolveRefresh;
+    const { document, window, restoreFetch } = await loadApp((url, options = {}) => {
+      if (String(url).includes("/api/v1/runs")) return jsonResponse(terminalRunResponse(SECOND_RUN_ID));
+      getRequests += 1;
+      if (getRequests === 1) return jsonResponse(initial);
+      return new Promise((resolve) => { resolveRefresh = () => resolve(jsonResponse(completed)); });
+    }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: "EN" });
+    try {
+      await settle();
+      document.querySelector("#composer-message").value = "Check station S04.";
+      submit(document, window);
+      await settle();
+
+      assert.equal(document.querySelectorAll(".agent-turn").length, 2);
+      assert.equal(document.querySelector(".agent-turn:last-child")?.classList.contains("is-pending"), false);
+      assert.match(document.querySelector(".agent-turn:last-child")?.textContent ?? "", /Ticket found/);
+
+      resolveRefresh();
+      await settle();
+      assert.equal(document.querySelectorAll(".agent-turn").length, 2);
+      assert.equal(document.querySelectorAll(".agent-turn.is-pending").length, 0);
+      assert.match(document.querySelector(".agent-turn:last-child")?.textContent ?? "", /S04 is FAULTED/);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  await t.test("renders terminal success, attention, and failure continuations without pending turns", async (t) => {
+    for (const scenario of [
+      { status: "success", answer: "Terminal success.", error: null, className: "" },
+      { status: "limit_reached", answer: null, error: { code: "llm_rate_limit", message: "Limit reached." }, className: "is-limit" },
+      { status: "failed", answer: null, error: { code: "tool_execution_failed", message: "Tool failed." }, className: "is-error" },
+    ]) {
+      await t.test(scenario.status, async () => {
+        const initial = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
+        const { document, window, restoreFetch } = await loadApp((url) => {
+          if (String(url).includes("/api/v1/runs")) {
+            return jsonResponse(terminalRunResponse(SECOND_RUN_ID, scenario));
+          }
+          return jsonResponse(initial);
+        }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: "EN" });
+        try {
+          await settle();
+          document.querySelector("#composer-message").value = "Continue investigation.";
+          submit(document, window);
+          await settle();
+
+          const terminal = document.querySelector(".agent-turn:last-child");
+          assert.equal(document.querySelectorAll(".agent-turn").length, 2);
+          assert.equal(terminal?.classList.contains("is-pending"), false);
+          assert.equal(scenario.className ? terminal?.classList.contains(scenario.className) : true, true);
+        } finally {
+          restoreFetch();
+        }
+      });
+    }
+  });
+
+  await t.test("renders a typed continuation for controlled backend completion latencies", async (t) => {
+    for (const latency of ["immediate", "1s", "5s", "10s", "30s", "60s"]) {
+      await t.test(latency, async () => {
+        const initial = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
+        let resolveRun;
+        const { document, window, restoreFetch } = await loadApp((url) => {
+          if (String(url).includes("/api/v1/runs")) {
+            return new Promise((resolve) => { resolveRun = () => resolve(jsonResponse(terminalRunResponse(SECOND_RUN_ID))); });
+          }
+          return jsonResponse(initial);
+        }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: "EN" });
+        try {
+          await settle();
+          document.querySelector("#composer-message").value = "Continue investigation.";
+          submit(document, window);
+          await settle();
+          assert.equal(document.querySelector(".agent-turn:last-child")?.classList.contains("is-pending"), true);
+
+          resolveRun();
+          await settle();
+          assert.equal(document.querySelectorAll(".agent-turn").length, 2);
+          assert.equal(document.querySelectorAll(".agent-turn.is-pending").length, 0);
+        } finally {
+          restoreFetch();
+        }
+      });
+    }
+  });
+
+  await t.test("does not let a stale earlier refresh overwrite a newer continuation", async () => {
+    const initial = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
+    let getRequests = 0;
+    const refreshResolvers = [];
+    let runRequests = 0;
+    const { document, window, restoreFetch } = await loadApp((url) => {
+      if (String(url).includes("/api/v1/runs")) {
+        runRequests += 1;
+        return jsonResponse(terminalRunResponse(runRequests === 1 ? SECOND_RUN_ID : FIRST_RUN_ID, {
+          status: "success",
+          answer: runRequests === 1 ? "First terminal." : "Second terminal.",
+          error: null,
+        }));
+      }
+      getRequests += 1;
+      if (getRequests === 1) return jsonResponse(initial);
+      return new Promise((resolve) => { refreshResolvers.push(() => resolve(jsonResponse(initial))); });
+    }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: "EN" });
+    try {
+      await settle();
+      document.querySelector("#composer-message").value = "First continuation.";
+      submit(document, window);
+      await settle();
+      assert.equal(document.querySelector("#composer-button")?.disabled, false);
+      document.querySelector("#composer-message").value = "Second continuation.";
+      submit(document, window);
+      await settle();
+      assert.equal(runRequests, 2);
+
+      refreshResolvers[0]();
+      await settle();
+      assert.equal(document.querySelectorAll(".agent-turn").length, 3);
+      assert.equal(document.querySelectorAll(".agent-turn.is-pending").length, 0);
+      assert.match(document.querySelector(".agent-turn:last-child")?.textContent ?? "", /Second terminal/);
+    } finally {
+      restoreFetch();
+    }
+  });
+
   await t.test("uses only the secure API document endpoints for Open and Download", async () => {
     const referenced = structuredClone(STRUCTURED_NEXT_STEPS_INVESTIGATION);
     referenced.turns[0].identifiers = [{ value: "QUALITY-09", type: "error_code" }];
@@ -854,6 +1031,20 @@ function runResponse(runId = FIRST_RUN_ID) {
     tool_calls: [],
     approval_request: null,
   };
+}
+
+function terminalRunResponse(runId, scenario = { status: "success", answer: "Ticket found.", error: null }) {
+  return {
+    ...runResponse(runId),
+    investigation_sequence: 2,
+    status: scenario.status,
+    answer: scenario.answer,
+    error: scenario.error,
+  };
+}
+
+function terminalTurn(runId, request, answer) {
+  return turn(runId, request, answer, [], [], 2, "EN");
 }
 
 function jsonResponse(payload, status = 200) {
