@@ -11,6 +11,7 @@ from industrial_ai_agent.agent.run_classification_policy import (
     RESTRICTED_INFORMATION_TOOLS,
     AgentRunClassificationPolicy,
     AgentRunProfile,
+    resolve_contextual_demo_run_profile,
     resolve_demo_run_profile,
 )
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
@@ -84,6 +85,56 @@ def test_discovery_uses_server_resolved_user_clearance_without_broadening_named_
 def test_unknown_free_text_is_conservatively_restricted(message: str) -> None:
     assert (
         resolve_demo_run_profile(message) is AgentRunProfile.RESTRICTED_TROUBLESHOOTING
+    )
+
+
+def test_public_contextual_follow_up_inherits_public_server_context() -> None:
+    assert (
+        resolve_contextual_demo_run_profile(
+            "What is its current operating status?",
+            trusted_context_classification=DataClassification.PUBLIC,
+        )
+        is AgentRunProfile.PUBLIC_INFORMATION
+    )
+
+
+def test_confidential_contextual_follow_up_never_downgrades() -> None:
+    assert (
+        resolve_contextual_demo_run_profile(
+            "What does the active fault mean?",
+            trusted_context_classification=DataClassification.CONFIDENTIAL,
+        )
+        is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    )
+
+
+def test_explicit_target_escalates_above_public_context() -> None:
+    assert (
+        resolve_contextual_demo_run_profile(
+            "Investigate P4711.",
+            trusted_context_classification=DataClassification.PUBLIC,
+        )
+        is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    )
+
+
+def test_explicit_public_target_does_not_downgrade_confidential_context() -> None:
+    assert (
+        resolve_contextual_demo_run_profile(
+            "Show product P4101.",
+            trusted_context_classification=DataClassification.CONFIDENTIAL,
+        )
+        is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    )
+
+
+def test_untrusted_or_non_contextual_follow_up_keeps_restricted_fallback() -> None:
+    assert (
+        resolve_contextual_demo_run_profile(
+            "Please export the customer production plan.",
+            trusted_context_classification=DataClassification.PUBLIC,
+        )
+        is AgentRunProfile.RESTRICTED_TROUBLESHOOTING
     )
 
 

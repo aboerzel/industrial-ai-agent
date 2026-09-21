@@ -37,7 +37,7 @@ from industrial_ai_agent.agent.run_classification_policy import (
     InternalDiagnosticTarget,
     ResolvedRunPolicy,
     RunClearanceDeniedError,
-    resolve_demo_run_profile,
+    resolve_contextual_demo_run_profile,
 )
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
@@ -340,10 +340,19 @@ def create_app(
         security_context = _demo_security_context(request).resolve(
             payload.user_clearance
         )
+        previous_runs = (
+            await _run_store(request).list_investigation(payload.investigation_id)
+            if payload.investigation_id is not None
+            else ()
+        )
         try:
             policy = _classification_policy(request).resolve(
-                resolve_demo_run_profile(
-                    payload.message, security_context=security_context
+                resolve_contextual_demo_run_profile(
+                    payload.message,
+                    security_context=security_context,
+                    trusted_context_classification=_trusted_context_classification(
+                        previous_runs, security_context
+                    ),
                 ),
                 security_context=security_context,
             )
@@ -361,6 +370,7 @@ def create_app(
             policy=policy,
             response_language=response_language,
             investigation_id=payload.investigation_id,
+            previous_runs=previous_runs,
             document_security_context=security_context,
         )
 
@@ -836,14 +846,19 @@ async def _start_run(
     policy: ResolvedRunPolicy,
     response_language: ResponseLanguage,
     investigation_id: UUID | None = None,
+    previous_runs: tuple[StoredAgentRun, ...] | None = None,
     document_security_context: SecurityContext,
 ) -> RunResponse:
     store = _run_store(request)
     run_id = uuid4()
-    previous_runs = (
-        await store.list_investigation(investigation_id)
-        if investigation_id is not None
-        else ()
+    resolved_previous_runs = (
+        previous_runs
+        if previous_runs is not None
+        else (
+            await store.list_investigation(investigation_id)
+            if investigation_id is not None
+            else ()
+        )
     )
     await store.create(
         run_id,
@@ -854,7 +869,7 @@ async def _start_run(
         response_language=response_language,
     )
     service = _run_service(request)
-    conversation_context = _conversation_context(previous_runs, policy)
+    conversation_context = _conversation_context(resolved_previous_runs, policy)
     try:
         if _persistent_hitl_enabled(service):
             profile, execution = await asyncio.wait_for(
@@ -1155,6 +1170,24 @@ def _conversation_context(
         )
         for record in eligible[-4:]
     )
+
+
+def _trusted_context_classification(
+    records: tuple[StoredAgentRun, ...], security_context: SecurityContext
+) -> DataClassification | None:
+    """Return the highest terminal, caller-visible server classification only."""
+    terminal_records = tuple(
+        record
+        for record in records
+        if record.status
+        in {RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.LIMIT_REACHED}
+    )
+    if not terminal_records or any(
+        record.data_classification > security_context.clearance
+        for record in terminal_records
+    ):
+        return None
+    return max(record.data_classification for record in terminal_records)
 
 
 def _investigation_status(records: tuple[StoredAgentRun, ...]) -> str:

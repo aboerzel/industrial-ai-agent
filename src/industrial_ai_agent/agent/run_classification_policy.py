@@ -106,6 +106,23 @@ _DEMO_ENTITY_PROFILES = {
     "S03": AgentRunProfile.INTERNAL_DIAGNOSTIC,
 }
 
+_EXPLICIT_TARGET_PATTERN = re.compile(
+    r"\b(?:P\d{4}|S\d{2,3}|MT-[A-Z0-9-]+|[A-Z][A-Z0-9]*-[A-Z0-9]+)\b"
+)
+_CONTEXTUAL_FOLLOW_UP_PATTERNS = (
+    re.compile(
+        r"^(?:what does (?:that|it|the active fault) mean|what is (?:its|the) "
+        r"current operating status|why is that relevant|what should i check next)\??$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:was bedeutet (?:das|der aktive fehler)|wie ist (?:sein|der) "
+        r"aktueller betriebsstatus|warum ist das relevant|was soll ich als nächstes "
+        r"prüfen)\??$",
+        re.IGNORECASE,
+    ),
+)
+
 
 class RunClearanceDeniedError(PermissionError):
     """The authenticated demo user cannot access the server-resolved run scope."""
@@ -268,6 +285,55 @@ def resolve_demo_run_profile(
         }[security_context.clearance]
     # Unknown sensitivity must not authorize public-cloud model processing.
     return AgentRunProfile.RESTRICTED_TROUBLESHOOTING
+
+
+def resolve_contextual_demo_run_profile(
+    message: str,
+    *,
+    trusted_context_classification: DataClassification | None,
+    security_context: SecurityContext | None = None,
+) -> AgentRunProfile:
+    """Resolve a bounded contextual follow-up without trusting conversation prose.
+
+    The supplied context classification must originate from already-authorized,
+    persisted server records. Only a small, explicit set of deictic follow-up forms
+    can inherit it. New explicit targets keep the normal resolver and may only raise
+    the resulting classification.
+    """
+    resolved = resolve_demo_run_profile(message, security_context=security_context)
+    if trusted_context_classification is None:
+        return resolved
+    normalized = message.strip().upper()
+    if _EXPLICIT_TARGET_PATTERN.search(normalized):
+        return _profile_at_least(resolved, trusted_context_classification)
+    if _is_contextual_follow_up_request(message):
+        return _profile_for_classification(trusted_context_classification)
+    return resolved
+
+
+def _is_contextual_follow_up_request(message: str) -> bool:
+    return any(
+        pattern.fullmatch(message.strip()) for pattern in _CONTEXTUAL_FOLLOW_UP_PATTERNS
+    )
+
+
+def _profile_at_least(
+    resolved: AgentRunProfile, minimum_classification: DataClassification
+) -> AgentRunProfile:
+    if _profile_classification(resolved) >= minimum_classification:
+        return resolved
+    return _profile_for_classification(minimum_classification)
+
+
+def _profile_for_classification(
+    classification: DataClassification,
+) -> AgentRunProfile:
+    return {
+        DataClassification.PUBLIC: AgentRunProfile.PUBLIC_INFORMATION,
+        DataClassification.INTERNAL: AgentRunProfile.INTERNAL_DIAGNOSTIC,
+        DataClassification.CONFIDENTIAL: AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+        DataClassification.RESTRICTED: AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
+    }[classification]
 
 
 def _is_restricted_information_request(

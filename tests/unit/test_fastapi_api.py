@@ -418,6 +418,134 @@ def test_explicit_response_language_overrides_request_detection(
     assert service.response_languages == [ResponseLanguage(selected_language)]
 
 
+def test_contextual_follow_up_inherits_only_authorized_persisted_context() -> None:
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    first = client.post(
+        "/api/v1/runs",
+        json={"message": "Which stations are available?", "user_clearance": "PUBLIC"},
+    ).json()
+    follow_up = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "What is its current operating status?",
+            "user_clearance": "PUBLIC",
+            "investigation_id": first["investigation_id"],
+        },
+    )
+
+    assert follow_up.status_code == 200
+    assert follow_up.json()["data_classification"] == "PUBLIC"
+    assert service.policies[-1].data_classification is DataClassification.PUBLIC
+    assert len(service.conversation_contexts[-1]) == 1
+
+
+def test_contextual_follow_up_keeps_confidential_context_and_escalates_new_target() -> (
+    None
+):
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    confidential = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P4711.", "user_clearance": "CONFIDENTIAL"},
+    ).json()
+    contextual = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "What does the active fault mean?",
+            "user_clearance": "CONFIDENTIAL",
+            "investigation_id": confidential["investigation_id"],
+        },
+    )
+
+    assert contextual.status_code == 200
+    assert contextual.json()["data_classification"] == "CONFIDENTIAL"
+    assert service.policies[-1].data_classification is DataClassification.CONFIDENTIAL
+
+    public = client.post(
+        "/api/v1/runs",
+        json={"message": "Which stations are available?", "user_clearance": "PUBLIC"},
+    ).json()
+    escalation = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Investigate P4711.",
+            "user_clearance": "PUBLIC",
+            "investigation_id": public["investigation_id"],
+        },
+    )
+
+    assert escalation.status_code == 404
+    assert escalation.json()["code"] == "requested_data_unavailable"
+
+
+def test_contextual_classification_remains_monotonic_after_store_reload() -> None:
+    store = InMemoryAgentRunStore()
+    first_client = TestClient(
+        _create_app(FakeRunService(result=_success_result()), run_store=store)
+    )
+    first = first_client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P4711.", "user_clearance": "CONFIDENTIAL"},
+    ).json()
+
+    reloaded_service = FakeRunService(result=_success_result())
+    reloaded_client = TestClient(_create_app(reloaded_service, run_store=store))
+    follow_up = reloaded_client.post(
+        "/api/v1/runs",
+        json={
+            "message": "What does the active fault mean?",
+            "user_clearance": "CONFIDENTIAL",
+            "investigation_id": first["investigation_id"],
+        },
+    )
+
+    assert follow_up.status_code == 200
+    assert follow_up.json()["data_classification"] == "CONFIDENTIAL"
+    assert (
+        reloaded_service.policies[-1].data_classification
+        is DataClassification.CONFIDENTIAL
+    )
+
+
+def test_invalid_or_inaccessible_investigation_context_cannot_lower_unknown_request() -> (
+    None
+):
+    service = FakeRunService(result=_success_result())
+    client = TestClient(create_app(service))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "What does that mean?",
+            "user_clearance": "PUBLIC",
+            "investigation_id": "00000000-0000-4000-8000-000000000000",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "requested_data_unavailable"
+    assert service.messages == []
+
+    confidential = client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P4711.", "user_clearance": "CONFIDENTIAL"},
+    ).json()
+    inaccessible = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "What does that mean?",
+            "user_clearance": "PUBLIC",
+            "investigation_id": confidential["investigation_id"],
+        },
+    )
+
+    assert inaccessible.status_code == 404
+    assert inaccessible.json()["code"] == "requested_data_unavailable"
+
+
 def test_public_run_response_accepts_the_maintenance_ticket_read_trajectory() -> None:
     result = AgentRunResult(
         status=AgentRunStatus.SUCCESS,
