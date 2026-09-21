@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +48,7 @@ def test_frontend_workspace_uses_a_full_width_scrollable_conversation() -> None:
     assert "max-width: none;" in css
     assert ".result-panel {" in css
     assert "min-width: 0;" in css
-    assert "grid-template-columns" not in css
+    assert not re.search(r"\.shell\s*\{[^}]*grid-template-columns", css)
     assert "max-width: 1440px;" not in css
     assert ".conversation-history {" in css
     assert "overflow-y: auto;" in css

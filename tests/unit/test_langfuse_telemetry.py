@@ -420,6 +420,7 @@ def test_observed_llm_client_records_provider_usage_as_token_metrics() -> None:
 
     expected_labels = {
         "model.id": "local_quality",
+        "model.display_name": "Local Quality",
         "data.classification": "RESTRICTED",
         "execution.zone": "LOCAL",
         "operation.status": "success",
@@ -463,6 +464,7 @@ def test_tool_decision_usage_is_attributed_once_to_its_bound_tool() -> None:
 
     expected_labels = {
         "model.id": "local_quality",
+        "model.display_name": "Local Quality",
         "data.classification": "CONFIDENTIAL",
         "execution.zone": "LOCAL",
         "operation.status": "success",
@@ -550,6 +552,7 @@ def test_multiple_tool_calls_attribute_usage_once_to_first_admitted_tool() -> No
 
     labels = {
         "model.id": "local_quality",
+        "model.display_name": "Local Quality",
         "data.classification": "CONFIDENTIAL",
         "execution.zone": "LOCAL",
         "operation.status": "success",
