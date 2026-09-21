@@ -8,9 +8,13 @@ import {
   assertAssignmentSnapshot,
   assignmentSnapshot,
   awaitTriggeredResponses,
+  calculateHarnessFingerprint,
+  classifyReferenceMeasurement,
   classifySubmissionObservation,
+  createRunMetadata,
   createReadOnlyConfigurationGuard,
   isModelAssignmentPut,
+  renderSummaryMarkdown,
   isRunRequestMetadata,
   runnerFailure,
   shouldResume,
@@ -50,17 +54,19 @@ test("response timeout is represented as a harness error", async () => {
   assert.match(result.message, /Timeout/);
 });
 
-test("only PASS artifacts are skipped by resume", () => {
+test("resume retries only unmeasured or harness-error artifacts", () => {
   assert.equal(shouldResume("PASS"), false);
   assert.equal(shouldResume(HARNESS_ERROR), true);
-  assert.equal(shouldResume("FAIL"), true);
-  assert.equal(shouldResume("BLOCKED"), true);
+  assert.equal(shouldResume("FAIL"), false);
+  assert.equal(shouldResume("PRODUCT_FAIL"), false);
+  assert.equal(shouldResume("BLOCKED"), false);
   assert.equal(shouldResume("MISSING"), true);
+  assert.equal(shouldResume("NOT_REACHED"), true);
 });
 
-test("valid product failures remain product failures", () => {
+test("valid product failures remain terminal measurements", () => {
   assert.notEqual("FAIL", HARNESS_ERROR);
-  assert.equal(shouldResume("FAIL"), true);
+  assert.equal(shouldResume("FAIL"), false);
 });
 
 test("sanitized harness messages do not retain bearer credentials", () => {
@@ -140,4 +146,95 @@ test("compares the complete assignment matrix and reports configuration drift", 
     () => assertAssignmentSnapshot(snapshot, [{ ...snapshot[1], selection_mode: "AUTO", model_id: null, selection_policy: "QUALITY_FIRST" }, snapshot[0]], "before model call"),
     (error) => error.name === CONFIGURATION_DRIFT,
   );
+});
+
+test("reference POST plus terminal DOM without a secondary response remains measurable", () => {
+  assert.deepEqual(
+    classifyReferenceMeasurement({ referenceFound: true, submissionStarted: true, matchingRequest: true, apiRequest: true, terminalResult: true, expectedSeverity: "SUCCESS", actualSeverity: "SUCCESS" }),
+    { category: "PRODUCT_RESULT", runner_result: "PRODUCT_RESULT", test_result: "PASS" },
+  );
+});
+
+test("reference terminal attention is a passing measured result", () => {
+  assert.deepEqual(
+    classifyReferenceMeasurement({ referenceFound: true, submissionStarted: true, matchingRequest: true, apiRequest: true, terminalResult: true, expectedSeverity: "ATTENTION", actualSeverity: "ATTENTION" }),
+    { category: "PRODUCT_RESULT", runner_result: "PRODUCT_RESULT", test_result: "PASS" },
+  );
+});
+
+test("reference terminal technical failure remains a product failure", () => {
+  assert.deepEqual(
+    classifyReferenceMeasurement({ referenceFound: true, submissionStarted: true, matchingRequest: true, apiRequest: true, terminalResult: true, expectedSeverity: "SUCCESS", actualSeverity: "FAILURE" }),
+    { category: "PRODUCT_RESULT", runner_result: "PRODUCT_FAIL", test_result: "FAIL" },
+  );
+});
+
+test("missing rendered reference remains a product finding", () => {
+  assert.deepEqual(
+    classifyReferenceMeasurement({ referenceFound: false, submissionStarted: false, matchingRequest: false, apiRequest: false, terminalResult: false }),
+    { category: "REFERENCE_MISSING", runner_result: "PRODUCT_FAIL" },
+  );
+});
+
+test("reference click without a POST or UI transition is a harness submit error", () => {
+  assert.deepEqual(
+    classifyReferenceMeasurement({ referenceFound: true, submissionStarted: false, matchingRequest: false, apiRequest: false, terminalResult: false }),
+    { category: "SUBMIT_NOT_TRIGGERED", runner_result: HARNESS_ERROR },
+  );
+});
+
+test("reference POST without a terminal DOM result is a bounded product timeout", () => {
+  assert.deepEqual(
+    classifyReferenceMeasurement({ referenceFound: true, submissionStarted: true, matchingRequest: true, apiRequest: true, terminalResult: false }),
+    { category: "PRODUCT_TIMEOUT", runner_result: "PRODUCT_FAIL" },
+  );
+});
+
+test("run metadata records the frozen git head and dirty harness paths", () => {
+  const metadata = createRunMetadata({
+    runId: "baseline-20260921-01",
+    startedAt: "2026-09-21T10:00:00.000Z",
+    gitHead: "21e0f46",
+    dirtyPaths: ["frontend/scripts/run-e2e-journey.mjs"],
+    dirtyScope: "HARNESS_ONLY",
+    harnessFingerprint: "a".repeat(64),
+    assignmentSnapshot: [{ consumer_id: "agent", data_classification: "PUBLIC", selection_mode: "MANUAL", model_id: "local_quality", selection_policy: null }],
+  });
+
+  assert.equal(metadata.git_head, "21e0f46");
+  assert.equal(metadata.product_revision, "21e0f46");
+  assert.equal(metadata.working_tree_dirty, true);
+  assert.deepEqual(metadata.dirty_paths, ["frontend/scripts/run-e2e-journey.mjs"]);
+  assert.equal(metadata.dirty_scope, "HARNESS_ONLY");
+});
+
+test("harness fingerprint is stable for deterministic path and content ordering", () => {
+  const entries = [{ path: "b.mjs", content: Buffer.from("two") }, { path: "a.mjs", content: Buffer.from("one") }];
+  assert.equal(calculateHarnessFingerprint(entries), calculateHarnessFingerprint([...entries].reverse()));
+  assert.notEqual(calculateHarnessFingerprint(entries), calculateHarnessFingerprint([{ ...entries[0], content: Buffer.from("changed") }, entries[1]]));
+});
+
+test("JSON and Markdown summaries agree on core metadata", () => {
+  const metadata = createRunMetadata({
+    runId: "baseline-20260921-01",
+    startedAt: "2026-09-21T10:00:00.000Z",
+    finishedAt: "2026-09-21T10:01:00.000Z",
+    gitHead: "21e0f46",
+    dirtyPaths: [],
+    dirtyScope: "CLEAN",
+    harnessFingerprint: "b".repeat(64),
+    assignmentSnapshot: [],
+  });
+  const summary = {
+    metadata,
+    execution_status: "PASS",
+    product_quality_gate: "PASS",
+    journey_summary: [{ journey: "Documentation chain", result: "PASS", steps: 4 }],
+  };
+  const markdown = renderSummaryMarkdown(summary);
+
+  assert.match(markdown, /Run ID: baseline-20260921-01/);
+  assert.match(markdown, /Product Git HEAD: 21e0f46/);
+  assert.match(markdown, new RegExp(`Harness fingerprint: ${metadata.harness_fingerprint}`));
+  assert.match(markdown, /Execution status: PASS/);
 });

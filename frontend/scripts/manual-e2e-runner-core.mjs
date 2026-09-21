@@ -28,7 +28,7 @@ export function runnerFailure(error, operation, browserState = {}) {
 }
 
 export function shouldResume(status) {
-  return status !== "PASS";
+  return [HARNESS_ERROR, "MISSING", "NOT_REACHED"].includes(status);
 }
 
 export function sanitizeMessage(message) {
@@ -110,3 +110,108 @@ export function classifySubmissionObservation({ submissionStarted, matchingReque
   if (!matchingRequest) return "REQUEST_NOT_OBSERVED";
   return terminalResult ? "PRODUCT_OPERATIONAL_RESULT" : "PRODUCT_RESULT_NOT_RENDERED";
 }
+
+export function classifyReferenceObservation({
+  referenceFound,
+  submissionStarted,
+  matchingRequest,
+  apiRequest,
+  terminalResult,
+}) {
+  if (!referenceFound) return "REFERENCE_MISSING";
+  return classifySubmissionObservation({
+    submissionStarted,
+    matchingRequest,
+    apiRequest,
+    terminalResult,
+  });
+}
+
+export function classifyReferenceMeasurement({
+  referenceFound,
+  submissionStarted,
+  matchingRequest,
+  apiRequest,
+  terminalResult,
+  expectedSeverity = null,
+  actualSeverity = null,
+}) {
+  const observation = classifyReferenceObservation({
+    referenceFound,
+    submissionStarted,
+    matchingRequest,
+    apiRequest,
+    terminalResult,
+  });
+  if (observation === "REFERENCE_MISSING") return { category: observation, runner_result: "PRODUCT_FAIL" };
+  if (observation === "PRODUCT_RESULT_NOT_RENDERED") return { category: "PRODUCT_TIMEOUT", runner_result: "PRODUCT_FAIL" };
+  if (observation !== "PRODUCT_OPERATIONAL_RESULT") return { category: observation, runner_result: HARNESS_ERROR };
+  return {
+    category: "PRODUCT_RESULT",
+    runner_result: actualSeverity === "FAILURE" ? "PRODUCT_FAIL" : "PRODUCT_RESULT",
+    test_result: actualSeverity === expectedSeverity ? "PASS" : "FAIL",
+  };
+}
+
+export function createRunMetadata({
+  runId,
+  startedAt,
+  finishedAt = null,
+  gitHead,
+  dirtyPaths,
+  dirtyScope,
+  harnessFingerprint,
+  assignmentSnapshot: assignments,
+}) {
+  const workingTreeDirty = dirtyPaths.length > 0;
+  return {
+    run_id: runId,
+    started_at: startedAt,
+    finished_at: finishedAt,
+    git_head: gitHead,
+    product_revision: gitHead,
+    working_tree_dirty: workingTreeDirty,
+    dirty_paths: dirtyPaths,
+    dirty_scope: workingTreeDirty ? dirtyScope : "CLEAN",
+    harness_fingerprint: harnessFingerprint,
+    real_model_id: "local_quality",
+    real_model_display_name: "Local Qwen 3.5 9B",
+    external_provider_calls_expected: 0,
+    assignment_snapshot: assignments,
+  };
+}
+
+export function renderSummaryMarkdown(summary) {
+  const metadata = summary.metadata;
+  return [
+    "# Manual E2E Summary",
+    "",
+    `Run ID: ${metadata.run_id}`,
+    `Product Git HEAD: ${metadata.product_revision}`,
+    `Working tree dirty: ${metadata.working_tree_dirty}`,
+    `Harness fingerprint: ${metadata.harness_fingerprint}`,
+    `Real model: ${metadata.real_model_id} (${metadata.real_model_display_name})`,
+    `External providers: ${metadata.external_provider_calls_expected}`,
+    `Execution status: ${summary.execution_status}`,
+    `Product quality gate: ${summary.product_quality_gate}`,
+    "",
+    "## Journey Results",
+    "",
+    "| Journey | Result | Steps |",
+    "| --- | --- | ---: |",
+    ...summary.journey_summary.map((journey) => `| ${journey.journey} | ${journey.result} | ${journey.steps} |`),
+    "",
+  ].join("\n");
+}
+
+export function calculateHarnessFingerprint(entries) {
+  const hash = createHash("sha256");
+  for (const { path, content } of [...entries].sort((left, right) => left.path.localeCompare(right.path))) {
+    hash.update(path, "utf8");
+    hash.update("\0", "utf8");
+    hash.update(content);
+    hash.update("\0", "utf8");
+  }
+  return hash.digest("hex");
+}
+import { createHash } from "node:crypto";
