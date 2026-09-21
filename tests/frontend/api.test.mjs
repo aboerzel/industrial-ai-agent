@@ -422,7 +422,7 @@ test("renders neutral access unavailability separately from a missing run", asyn
       error instanceof ApiClientError &&
       error.code === "requested_data_unavailable" &&
       error.investigationId === null &&
-      error.message === "The requested data is not available with the selected access level.",
+      error.message === "The requested data is unavailable.",
   );
   await assert.rejects(
     requestError(
@@ -433,7 +433,7 @@ test("renders neutral access unavailability separately from a missing run", asyn
     (error) =>
       error instanceof ApiClientError &&
       error.code === "run_not_found" &&
-      error.message === "The requested run was not found.",
+      error.message === "The requested run does not exist.",
   );
 });
 
@@ -454,7 +454,7 @@ test("retains a persisted investigation identity from a sanitized HTTP 500", asy
       error.status === 500 &&
       error.code === "internal_error" &&
       error.investigationId === RUN_ID &&
-      error.message === "The agent run could not be completed. Try again later.",
+      error.message === "The agent run could not be completed.",
   );
 });
 
@@ -473,7 +473,7 @@ test("accepts a current HTTP error envelope with failure origin", async () => {
     (error) =>
       error instanceof ApiClientError &&
       error.code === "llm_rate_limit" &&
-      error.message === "A required local model or MCP service is unavailable.",
+      error.message === "The language model is temporarily unavailable.",
   );
 });
 

@@ -299,17 +299,17 @@ function renderPendingConversation(message, { replace }) {
 }
 
 function renderPendingFailure(error, selectedLanguage) {
-  const providerLimited = isProviderLimitError(error?.code);
+  const severity = userSeverityForTerminalOutcome("failed", error?.code);
   const message = publicError(error, "The agent run could not be completed.");
   if (pendingTranscriptTurn) {
     pendingTranscriptTurn.error = transcriptError(error?.code, message);
   }
   if (pendingAgentTurn) {
     pendingAgentTurn.classList.remove("is-pending");
-    pendingAgentTurn.classList.add(providerLimited ? "is-limit" : "is-error");
+    pendingAgentTurn.classList.add(severityClass(severity));
     pendingAgentTurn.replaceChildren(
       createTurnLabel("Agent"),
-      createTurnError(error?.code, message, selectedLanguage),
+      createTurnError(error?.code, message, selectedLanguage, severity),
     );
   } else {
     showError(message);
@@ -317,7 +317,7 @@ function renderPendingFailure(error, selectedLanguage) {
   pendingAgentTurn = null;
   pendingTranscriptTurn = null;
   syncExportableConversation();
-  setStatus(providerLimited ? "limit_reached" : "failed", selectedLanguage);
+  setStatus(isProviderLimitError(error?.code) ? "limit_reached" : severity === "ATTENTION" ? "completed_with_attention" : "failed", selectedLanguage);
   scrollHistoryToLatest();
 }
 
@@ -359,13 +359,14 @@ function renderAgentTurn(turn) {
   }
 
   if (turn.status === "failed" || turn.status === "limit_reached") {
-    const providerLimited = isProviderLimitError(turn.error?.code);
-    article.classList.add(providerLimited ? "is-limit" : "is-error");
+    const severity = userSeverityForTerminalOutcome(turn.status, turn.error?.code);
+    article.classList.add(severityClass(severity));
     article.append(
       createTurnError(
         turn.error?.code,
         turn.error?.message ?? "The agent run could not be completed.",
         turn.response_language,
+        severity,
       ),
     );
     return article;
@@ -679,16 +680,44 @@ function createIcon(name) {
   return icon;
 }
 
-function createTurnError(errorCode, message, selectedLanguage) {
+function createTurnError(errorCode, message, selectedLanguage, severity) {
   const error = document.createElement("div");
-  const providerLimited = isProviderLimitError(errorCode);
-  error.className = providerLimited ? "turn-error turn-limit" : "turn-error";
+  error.className = `turn-error ${severity === "ATTENTION" ? "turn-attention" : "turn-failure"}`;
   const title = document.createElement("strong");
-  title.textContent = failureTitle(errorCode, selectedLanguage);
+  title.textContent = severity === "ATTENTION"
+    ? attentionTitle(errorCode, selectedLanguage)
+    : failureTitle(errorCode, selectedLanguage);
   const detail = document.createElement("p");
   detail.textContent = message;
   error.append(title, detail);
   return error;
+}
+
+function userSeverityForTerminalOutcome(status, errorCode) {
+  if (status === "success") return "SUCCESS";
+  if (
+    status === "limit_reached" ||
+    [
+      "requested_data_unavailable",
+      "diagnostic_target_unavailable",
+      "llm_rate_limit",
+      "llm_quota_exceeded",
+      "evidence_requirements_unsatisfied",
+      "evidence_source_unavailable",
+    ].includes(errorCode)
+  ) return "ATTENTION";
+  return "FAILURE";
+}
+
+function severityClass(severity) {
+  return severity === "ATTENTION" ? "is-attention" : "is-error";
+}
+
+function attentionTitle(errorCode, selectedLanguage) {
+  if (errorCode === "llm_rate_limit" || errorCode === "llm_quota_exceeded") {
+    return selectedLanguage === "DE" ? "LLM-Limit erreicht" : "LLM limit reached";
+  }
+  return selectedLanguage === "DE" ? "Hinweis" : "Attention";
 }
 
 function renderTools(calls) {
@@ -836,7 +865,7 @@ function turnStatusLabel(turn) {
 }
 
 function isProviderLimitError(errorCode) {
-  return ["llm_rate_limit", "llm_quota_exceeded", "llm_provider_unavailable"].includes(errorCode);
+  return ["llm_rate_limit", "llm_quota_exceeded"].includes(errorCode);
 }
 
 function failureTitle(errorCode, selectedLanguage) {

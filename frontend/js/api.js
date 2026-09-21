@@ -437,12 +437,7 @@ function isUuid(value) {
 }
 
 function errorMessageFor(status, code, publicMessage) {
-  if (code === "requested_data_unavailable") {
-    return "The requested data is not available with the selected access level.";
-  }
-  if (code === "document_not_available") {
-    return "The requested document is not available with the selected access level.";
-  }
+  if (publicMessage) return publicMessage;
   const defaults = {
     403: "This request is not permitted by the server security policy.",
     404: "The requested run was not found.",
@@ -451,5 +446,5 @@ function errorMessageFor(status, code, publicMessage) {
     503: "A required local model or MCP service is unavailable.",
     409: "This run is no longer waiting for approval.",
   };
-  return defaults[status] ?? publicMessage ?? "The request could not be completed.";
+  return defaults[status] ?? "The request could not be completed.";
 }

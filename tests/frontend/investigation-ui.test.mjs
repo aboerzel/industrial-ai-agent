@@ -302,7 +302,7 @@ test("renders a single-composer investigation workspace", async (t) => {
       await settle();
 
       const agentTurn = document.querySelector(".agent-turn");
-      assert.equal(agentTurn?.classList.contains("is-limit"), true);
+        assert.equal(agentTurn?.classList.contains("is-attention"), true);
       assert.equal(agentTurn?.classList.contains("is-error"), false);
       assert.match(agentTurn?.textContent ?? "", /LLM-Limit erreicht/);
       assert.match(agentTurn?.textContent ?? "", /Nutzungslimits/);
@@ -389,7 +389,7 @@ test("renders a single-composer investigation workspace", async (t) => {
       await settle();
 
       assert.equal(requests, 1);
-      assert.equal(document.querySelector(".agent-turn.is-limit") !== null, true);
+        assert.equal(document.querySelector(".agent-turn.is-attention") !== null, true);
       assert.equal(document.querySelector(".agent-turn.is-error"), null);
       assert.match(document.querySelector(".agent-turn")?.textContent ?? "", /LLM limit reached/);
       assert.equal(document.querySelector("#run-status")?.dataset.status, "limit_reached");
@@ -419,7 +419,7 @@ test("renders a single-composer investigation workspace", async (t) => {
       await settle();
 
       assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
-      assert.match(document.querySelector(".agent-turn.is-error")?.textContent ?? "", /selected access level/);
+        assert.match(document.querySelector(".agent-turn.is-attention")?.textContent ?? "", /requested data is unavailable/i);
       document.querySelector("#export-pdf-button").click();
       assert.equal(downloads.length, 1);
       assert.equal(downloads[0]?.download, "investigation-transcript.pdf");
@@ -763,7 +763,7 @@ test("renders a single-composer investigation workspace", async (t) => {
   await t.test("renders terminal success, attention, and failure continuations without pending turns", async (t) => {
     for (const scenario of [
       { status: "success", answer: "Terminal success.", error: null, className: "" },
-      { status: "limit_reached", answer: null, error: { code: "llm_rate_limit", message: "Limit reached." }, className: "is-limit" },
+        { status: "limit_reached", answer: null, error: { code: "llm_rate_limit", message: "Limit reached." }, className: "is-attention" },
       { status: "failed", answer: null, error: { code: "tool_execution_failed", message: "Tool failed." }, className: "is-error" },
     ]) {
       await t.test(scenario.status, async () => {
@@ -939,7 +939,7 @@ test("keeps a full-width workspace and responsive toolbar contract in CSS", asyn
   assert.match(css, /\.agent-turn \{ border-left: 3px solid var\(--color-turn-agent\)/);
   assert.match(css, /\.agent-turn\.is-pending \{ border-left-color: var\(--color-turn-running-border\)/);
   assert.match(css, /\.agent-turn\.is-error \{ border-left-color: var\(--color-turn-error-border\)/);
-  assert.match(css, /\.agent-turn\.is-limit \{ border-left-color: var\(--color-turn-limit-border\)/);
+  assert.match(css, /\.agent-turn\.is-attention \{ border-left-color: var\(--color-turn-limit-border\)/);
   assert.doesNotMatch(css, /\.agent-turn \{[^}]*#b55a29/);
 });
 

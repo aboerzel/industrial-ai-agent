@@ -41,6 +41,10 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     InternalDiagnosticTargetUnavailableError,
     McpServiceUnavailableError,
 )
+from industrial_ai_agent.agent.user_severity import (
+    UserSeverity,
+    user_severity_for_terminal_outcome,
+)
 from industrial_ai_agent.application.document_content import AuthorizedDocumentContent
 from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
 from industrial_ai_agent.domain.security import DataClassification
@@ -266,6 +270,24 @@ def test_provider_failure_is_terminal_and_following_request_remains_usable(
     assert failed_run is not None
     assert failed_run.status is RunStatus.FAILED
     assert failed_run.error_code == "llm_rate_limit"
+    assert (
+        user_severity_for_terminal_outcome(
+            status=failed_run.status.value, error_code=failed_run.error_code
+        )
+        is UserSeverity.ATTENTION
+    )
+    successful_run = asyncio.run(
+        store.get(UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"))
+    )
+    assert successful_run is not None
+    assert successful_run.status is RunStatus.SUCCESS
+    assert (
+        user_severity_for_terminal_outcome(
+            status=successful_run.status.value,
+            error_code=successful_run.error_code,
+        )
+        is UserSeverity.SUCCESS
+    )
 
 
 @pytest.mark.parametrize("origin", ("http://localhost:8080", "http://127.0.0.1:8080"))

@@ -244,10 +244,10 @@ select:focus, textarea:focus {
 .agent-turn.is-pending .turn-label { color: var(--color-turn-running); }
 .agent-turn.is-error { border-left-color: var(--color-turn-error-border); }
 .agent-turn.is-error .turn-label { color: var(--color-turn-error); }
-.agent-turn.is-limit { border-left-color: var(--color-turn-limit-border); }
-.agent-turn.is-limit .turn-label { color: var(--color-turn-limit); }
+.agent-turn.is-attention { border-left-color: var(--color-turn-limit-border); }
+.agent-turn.is-attention .turn-label { color: var(--color-turn-limit); }
 .turn-error { color: var(--color-turn-error); }
-.turn-limit { color: var(--color-turn-limit); }
+.turn-attention { color: var(--color-turn-limit); }
 .turn-error p { margin: 4px 0 0; }
 .turn-metadata { margin: 14px 0 0; color: #63716d; font-size: 0.76rem; font-weight: 700; }
 
