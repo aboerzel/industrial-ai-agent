@@ -22,6 +22,12 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from industrial_ai_agent.agent.user_severity import (
+    user_severity_for_terminal_outcome,
+)
+from industrial_ai_agent.infrastructure.api.output_sanitization import (
+    sanitize_public_text,
+)
 from industrial_ai_agent.infrastructure.api.schemas import InvestigationResponse
 
 _PDF_FONT_FAMILY = "IndustrialPdfVera"
@@ -99,6 +105,10 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
     ]
     for turn in investigation.turns:
         labels = _pdf_labels(turn.response_language)
+        severity = user_severity_for_terminal_outcome(
+            status=turn.status.value,
+            error_code=turn.error.code if turn.error is not None else None,
+        )
         story.extend(
             [
                 Paragraph(f"{labels['turn']} {turn.sequence}", heading),
@@ -190,7 +200,12 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
                 [
                     Paragraph(labels["error"], label),
                     Paragraph(escape(turn.error.code), text),
-                    Paragraph(_inline_markup(turn.error.message, code_font), text),
+                    Paragraph(
+                        _inline_markup(
+                            sanitize_public_text(turn.error.message) or "", code_font
+                        ),
+                        text,
+                    ),
                     *(
                         [
                             Paragraph(labels["failure_origin"], label),
@@ -237,6 +252,8 @@ def render_investigation_pdf(investigation: InvestigationResponse) -> bytes:
             [
                 Paragraph(labels["status"], label),
                 Paragraph(escape(turn.status.value), text),
+                Paragraph(labels["severity"], label),
+                Paragraph(escape(severity.value), text),
                 Paragraph(labels["classification"], label),
                 Paragraph(escape(turn.data_classification.value), text),
                 Paragraph(
@@ -283,6 +300,7 @@ def _pdf_labels(response_language: str) -> dict[str, str]:
             "not_recorded": "Nicht aufgezeichnet",
             "report_title": "Untersuchungsbericht",
             "runs": "Runs",
+            "severity": "Bewertung",
             "status": "Status",
             "summary": "Zusammenfassung",
             "tools": "Werkzeuge",
@@ -301,6 +319,7 @@ def _pdf_labels(response_language: str) -> dict[str, str]:
         "not_recorded": "Not recorded",
         "report_title": "Investigation Report",
         "runs": "Runs",
+        "severity": "Severity",
         "status": "Status",
         "summary": "Summary",
         "tools": "Tools",
