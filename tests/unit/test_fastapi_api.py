@@ -11,6 +11,7 @@ from industrial_ai_agent.agent.agent_run import (
     AgentRunStatus,
     DocumentReference,
     ExecutedToolCall,
+    FinalAgentOutput,
     FinalAgentOutputContractError,
     InvestigationStep,
 )
@@ -1140,6 +1141,31 @@ def test_invalid_final_model_output_has_a_distinct_persisted_origin() -> None:
     assert response.json()["error"] == {
         "code": "model_output_invalid",
         "message": "The model returned an invalid final response.",
+        "failure_origin": "MODEL_OUTPUT_VALIDATION",
+    }
+
+
+def test_confidential_p4801_history_with_empty_final_output_is_not_internal_error() -> (
+    None
+):
+    with pytest.raises(FinalAgentOutputContractError) as captured:
+        FinalAgentOutput.from_model_text("")
+    client = TestClient(create_app(FakeRunService(error=captured.value)))
+
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Zeige die Produkthistorie von P4801.",
+            "user_clearance": "CONFIDENTIAL",
+            "response_language": "DE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data_classification"] == "CONFIDENTIAL"
+    assert response.json()["error"] == {
+        "code": "model_output_invalid",
+        "message": "Das Modell hat keine gültige finale Antwort geliefert.",
         "failure_origin": "MODEL_OUTPUT_VALIDATION",
     }
 

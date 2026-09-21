@@ -370,6 +370,14 @@ def test_final_agent_output_unwraps_an_empty_serialized_provider_wrapper() -> No
     assert output.next_steps == ("Check the calibration state of station S04.",)
 
 
+def test_final_agent_output_rejects_an_empty_raw_model_response() -> None:
+    with pytest.raises(
+        FinalAgentOutputContractError,
+        match="did not contain a valid answer",
+    ):
+        FinalAgentOutput.from_model_text("")
+
+
 def test_final_agent_output_detects_observed_recommended_actions_section() -> None:
     output = FinalAgentOutput.model_validate(
         {

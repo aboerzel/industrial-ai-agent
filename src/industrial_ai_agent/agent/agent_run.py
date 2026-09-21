@@ -150,7 +150,12 @@ class FinalAgentOutput(BaseModel):
         try:
             return cls.model_validate_json(text).unwrap_serialized_answer()
         except ValidationError:
-            return cls(answer=text)
+            try:
+                return cls(answer=text)
+            except ValidationError as error:
+                raise FinalAgentOutputContractError(
+                    "Final model response did not contain a valid answer"
+                ) from error
 
     def unwrap_serialized_answer(self) -> Self:
         """Unwrap a provider's empty JSON wrapper around the final output once.
