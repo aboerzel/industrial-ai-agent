@@ -103,7 +103,9 @@ MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
     "evidence steps in order before proposing the action. For broad, underdetermined "
     "requests that identify no product, station, error, explicit documentation "
     "search, or explicit factory-discovery request, do not call a tool. Give safe general considerations or ask for the "
-    "missing scope. Format final troubleshooting answers in Markdown where applicable. "
+    "missing scope. For an explicit factory-discovery request, call `list_stations` "
+    "before answering and never name factory stations from internal knowledge. Format "
+    "final troubleshooting answers in Markdown where applicable. "
     "Use `### Likely Root Cause` where applicable. "
     "When you make the final response, return narrative Markdown only; do not emit JSON. "
     "The system, not you, finalizes an `answer` Markdown string, a bounded "
@@ -257,6 +259,7 @@ class TroubleshootingGraphState(TypedDict):
     evidence_eligible_source_capabilities: tuple[str, ...]
     evidence_eligible_tool_count: int
     evidence_selected_source_capability: str | None
+    factory_discovery_attempts: int
 
 
 class CheckpointedTroubleshootingGraphState(TypedDict):
@@ -293,6 +296,7 @@ class CheckpointedTroubleshootingGraphState(TypedDict):
     evidence_selected_source_capability: str | None
     evidence_target_station_id: str | None
     evidence_feedback_pending: bool
+    factory_discovery_attempts: int
 
 
 class LangGraphTroubleshootingAgent:
@@ -591,6 +595,13 @@ class LangGraphTroubleshootingAgent:
         ledger = _evidence_ledger_from_state(state)
         visible_tools = model_tools
         evidence_trace: dict[str, object] = {}
+        factory_discovery_required = state[
+            "executed_tool_count"
+        ] == 0 and _is_explicit_factory_discovery_request(state["messages"])
+        if factory_discovery_required:
+            visible_tools = tuple(
+                tool for tool in model_tools if tool.name == "list_stations"
+            )
         if ledger is not None and not ledger.complete:
             eligible = resolve_eligible_evidence_tools(
                 ledger,
@@ -622,6 +633,21 @@ class LangGraphTroubleshootingAgent:
             )
             response = to_llm_response(message)
         if not response.tool_calls:
+            if factory_discovery_required:
+                return {
+                    "messages": [
+                        message,
+                        SystemMessage(
+                            content=(
+                                "This is an explicit factory-discovery request. Call "
+                                "`list_stations` before answering; do not invent station data."
+                            )
+                        ),
+                    ],
+                    "factory_discovery_attempts": state["factory_discovery_attempts"]
+                    + 1,
+                    "evidence_feedback_pending": True,
+                }
             if (
                 state["requires_verified_recovery"]
                 and not state["recovery_execution_verified"]
@@ -1298,6 +1324,7 @@ class LangGraphTroubleshootingAgent:
             "requires_verified_recovery": self._requires_verified_recovery,
             "recovery_execution_verified": False,
             "recovery_outcome": None,
+            "factory_discovery_attempts": 0,
             **_evidence_state_update(evidence_ledger),
         }
 
@@ -2157,6 +2184,37 @@ _COMPACT_DOCUMENT_FORMATS = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
 }
 
+# Retrieval results are trusted for their structured metadata, but their chunk bodies are
+# untrusted model context. Keep the best matching excerpt useful while bounding the
+# post-tool model turn independently from the catalog/result projection.
+_MAX_DOCUMENTATION_MODEL_EXCERPT_CHARACTERS = 1_600
+_DOCUMENTATION_MODEL_METADATA_FIELDS = (
+    "document_title",
+    "fault_ids",
+    "mime_type",
+    "station_code",
+    "version",
+)
+
+
+def _is_explicit_factory_discovery_request(messages: list[AnyMessage]) -> bool:
+    """Recognize a bounded request for the authorized station inventory."""
+    request = next(
+        (
+            str(message.content).casefold()
+            for message in reversed(messages)
+            if isinstance(message, HumanMessage)
+        ),
+        "",
+    )
+    return bool(
+        re.search(
+            r"\b(?:welche|which|list|show)\b.*\b(?:stationen|stations)\b"
+            r"|\b(?:stationen|stations)\b.*\b(?:kennst|known|available|list)\b",
+            request,
+        )
+    )
+
 
 def _derive_structured_references(
     state: CheckpointedTroubleshootingGraphState,
@@ -2441,10 +2499,71 @@ def _deduplicate_document_references(
 
 
 def _serialized_tool_observation(result: object) -> str:
-    """Keep structured MCP result shape available to the deterministic final projection."""
+    """Keep a bounded structured tool observation available to the model turn.
+
+    The evidence ledger receives the original typed retrieval result before this
+    projection. The projection retains all document-reference metadata, while avoiding
+    an unbounded collection of document bodies in the final model decision.
+    """
+    if isinstance(result, BaseModel):
+        result = result.model_dump(mode="json")
+    if isinstance(result, str):
+        try:
+            parsed_result = json.loads(result)
+        except json.JSONDecodeError:
+            return result
+        if not (
+            isinstance(parsed_result, dict)
+            and isinstance(parsed_result.get("query"), str)
+            and isinstance(parsed_result.get("results"), list | tuple)
+        ):
+            return result
+        result = parsed_result
     if isinstance(result, (dict, list, tuple)):
-        return json.dumps(result, ensure_ascii=False, default=str)
+        payload = _compact_documentation_observation(result)
+        return json.dumps(payload, ensure_ascii=False, default=str)
     return str(result)
+
+
+def _compact_documentation_observation(
+    result: dict[object, object] | list[object] | tuple[object, ...],
+) -> object:
+    """Bound only a documentation-search observation without changing trusted data."""
+    if not isinstance(result, dict):
+        return result
+    results = result.get("results")
+    if not isinstance(result.get("query"), str) or not isinstance(
+        results, (list, tuple)
+    ):
+        return result
+
+    compact_results: list[dict[object, object]] = []
+    for index, item in enumerate(results):
+        if not isinstance(item, dict):
+            continue
+        compact: dict[object, object] = {
+            key: item[key]
+            for key in (
+                "rank",
+                "document_id",
+                "source",
+                "classification",
+                "relevance_score",
+            )
+            if key in item
+        }
+        metadata = item.get("metadata")
+        if isinstance(metadata, dict):
+            compact["metadata"] = {
+                key: metadata[key]
+                for key in _DOCUMENTATION_MODEL_METADATA_FIELDS
+                if key in metadata
+            }
+        content = item.get("content")
+        if index == 0 and isinstance(content, str):
+            compact["content"] = content[:_MAX_DOCUMENTATION_MODEL_EXCERPT_CHARACTERS]
+        compact_results.append(compact)
+    return {"query": result["query"], "results": compact_results}
 
 
 def _prepared_reference_calibration_device(

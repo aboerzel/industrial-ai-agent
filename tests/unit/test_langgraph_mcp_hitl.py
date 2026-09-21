@@ -9,6 +9,7 @@ from typing import cast
 from uuid import uuid4
 
 import pytest
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -21,6 +22,7 @@ from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
     MCP_TROUBLESHOOTING_SYSTEM_MESSAGE,
     LangGraphTroubleshootingAgent,
+    _is_explicit_factory_discovery_request,
     _model_visible_tools,
 )
 from industrial_ai_agent.agent.llm import (
@@ -61,6 +63,23 @@ def test_system_message_requires_structured_investigation_steps() -> None:
     assert "distinguish collected evidence from inference" in message
     assert "Keep the answer concise and evidence-based" in message
     assert "or explicit factory-discovery request, do not call a tool" in message
+    assert "call `list_stations` before answering" in message
+    assert "never name factory stations from internal knowledge" in message
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("Welche Stationen kennst du?", True),
+        ("Which stations are available?", True),
+        ("Investigate station S04 in detail.", False),
+    ],
+)
+def test_factory_discovery_request_detection(prompt: str, expected: bool) -> None:
+    assert (
+        _is_explicit_factory_discovery_request([HumanMessage(content=prompt)])
+        is expected
+    )
 
 
 @dataclass

@@ -12,7 +12,9 @@ from langchain_core.tools import StructuredTool
 from industrial_ai_agent.agent.agent_run import AgentRunStatus
 from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
     LangGraphTroubleshootingAgent,
+    _document_references_from_observation,
     _evidence_ledger_from_state,
+    _serialized_tool_observation,
 )
 from industrial_ai_agent.agent.llm import (
     FinishReason,
@@ -28,7 +30,9 @@ from industrial_ai_agent.domain.investigation_evidence import (
     EvidenceRequirementId,
     InvestigationType,
 )
+from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
+from industrial_ai_agent.tools.documentation_search import DocumentationSearchResult
 
 
 @dataclass
@@ -52,6 +56,19 @@ class EvidenceMcpToolProvider:
 
     @asynccontextmanager
     async def open_session(self) -> AsyncIterator[McpToolSession]:
+        async def list_stations() -> str:
+            self.calls.append("stations")
+            return json.dumps(
+                {
+                    "classification": "CONFIDENTIAL",
+                    "stations": [
+                        {
+                            "station_id": "S04",
+                        }
+                    ],
+                }
+            )
+
         async def machine_status(station_id: str) -> str:
             self.calls.append("machine")
             return json.dumps(
@@ -86,6 +103,11 @@ class EvidenceMcpToolProvider:
         yield McpToolSession(
             tools=(
                 StructuredTool.from_function(
+                    coroutine=list_stations,
+                    name="list_stations",
+                    description="List authorized stations.",
+                ),
+                StructuredTool.from_function(
                     coroutine=machine_status,
                     name="get_machine_status",
                     description="Read machine state.",
@@ -96,11 +118,16 @@ class EvidenceMcpToolProvider:
                     description="Read technical documentation.",
                 ),
             ),
-            discovered_tool_names=("get_machine_status", "search_documentation"),
+            discovered_tool_names=(
+                "list_stations",
+                "get_machine_status",
+                "search_documentation",
+            ),
             server_name="evidence-test",
             server_version="test",
             protocol_version="test",
             tool_policies=(
+                ToolPolicy("list_stations", ToolOperation.READ),
                 ToolPolicy("get_machine_status", ToolOperation.READ),
                 ToolPolicy("search_documentation", ToolOperation.READ),
             ),
@@ -213,6 +240,113 @@ def test_documentation_without_machine_state_does_not_satisfy_rca_contract() -> 
     )
 
 
+def test_documentation_model_projection_bounds_content_and_keeps_references() -> None:
+    observation = _serialized_tool_observation(
+        {
+            "query": "QUALITY-09",
+            "results": [
+                {
+                    "rank": 1,
+                    "document_id": "doc-quality-procedure",
+                    "source": "quality.md",
+                    "classification": "CONFIDENTIAL",
+                    "content": "A" * 4_000,
+                    "metadata": {
+                        "document_title": "QUALITY-09 Procedure",
+                        "fault_ids": ["QUALITY-09"],
+                        "mime_type": "text/markdown",
+                        "station_code": "S04",
+                    },
+                },
+                {
+                    "rank": 2,
+                    "document_id": "doc-positioning",
+                    "source": "positioning.pdf",
+                    "classification": "CONFIDENTIAL",
+                    "content": "B" * 4_000,
+                    "metadata": {
+                        "document_title": "Positioning Procedure",
+                        "fault_ids": ["POSITION-ENC-02"],
+                        "mime_type": "application/pdf",
+                    },
+                },
+            ],
+        }
+    )
+
+    projected = json.loads(observation)
+
+    assert len(projected["results"][0]["content"]) == 1_600
+    assert "content" not in projected["results"][1]
+    assert [
+        reference.model_dump()
+        for reference in _document_references_from_observation(observation)
+    ] == [
+        {
+            "document_id": "doc-quality-procedure",
+            "title": "QUALITY-09 Procedure",
+            "format": "text/markdown",
+        },
+        {
+            "document_id": "doc-positioning",
+            "title": "Positioning Procedure",
+            "format": "application/pdf",
+        },
+    ]
+
+
+def test_documentation_pydantic_result_uses_the_bounded_model_projection() -> None:
+    observation = _serialized_tool_observation(
+        DocumentationSearchResult(
+            query="QUALITY-09",
+            results=(
+                KnowledgeRetrievalResult(
+                    content="A" * 4_000,
+                    document_id="doc-quality-procedure",
+                    source="quality.md",
+                    chunk_id="quality::001",
+                    metadata={"document_title": "QUALITY-09 Procedure"},
+                ),
+            ),
+        )
+    )
+
+    projected = json.loads(observation)
+
+    assert len(projected["results"][0]["content"]) == 1_600
+    assert _document_references_from_observation(observation)[0].document_id == (
+        "doc-quality-procedure"
+    )
+
+
+def test_documentation_json_transport_result_uses_the_bounded_model_projection() -> (
+    None
+):
+    observation = _serialized_tool_observation(
+        json.dumps(
+            {
+                "query": "QUALITY-09",
+                "results": [
+                    {
+                        "content": "A" * 4_000,
+                        "document_id": "doc-quality-procedure",
+                        "source": "quality.md",
+                        "classification": "CONFIDENTIAL",
+                        "metadata": {"document_title": "QUALITY-09 Procedure"},
+                    }
+                ],
+            }
+        )
+    )
+
+    projected = json.loads(observation)
+
+    assert len(projected["results"][0]["content"]) == 1_600
+    assert _document_references_from_observation(observation)[0].document_id == (
+        "doc-quality-procedure"
+    )
+
+
 def test_unrelated_station_and_documentation_do_not_satisfy_s04_requirements() -> None:
     client = FakeLLMClient(
         [
@@ -299,7 +433,15 @@ def test_checkpoint_state_reconstructs_exactly_and_preserves_classification() ->
 
 def test_station_list_and_status_only_requirements_remain_proportional() -> None:
     station_list = LangGraphTroubleshootingAgent(
-        LLMClientChatModel(FakeLLMClient([_final("S04")]), ModelProfile("test")),
+        LLMClientChatModel(
+            FakeLLMClient(
+                [
+                    _tool("list_stations", {}, "stations-1"),
+                    _final("S04"),
+                ]
+            ),
+            ModelProfile("test"),
+        ),
         mcp_tool_provider=cast(McpToolProvider, EvidenceMcpToolProvider()),
         run_classification=DataClassification.CONFIDENTIAL,
         investigation_type=InvestigationType.STATION_LIST,
@@ -310,6 +452,7 @@ def test_station_list_and_status_only_requirements_remain_proportional() -> None
     )
     assert list_state["run_status"] is AgentRunStatus.SUCCESS
     assert list_state["evidence_required"] == ()
+    assert list_state["executed_tool_count"] == 1
 
     status_client = FakeLLMClient(
         [
