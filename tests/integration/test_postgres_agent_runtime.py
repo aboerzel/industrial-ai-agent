@@ -70,7 +70,7 @@ def test_model_assignment_repository_round_trips_stable_model_id() -> None:
         factory.dispose()
 
 
-def test_model_assignment_migration_preserves_unambiguous_seeds_only() -> None:
+def test_model_assignment_migration_normalizes_current_local_manual_defaults() -> None:
     factory = PostgreSqlSessionFactory(DATABASE_URL or "")
     repository = PostgreSqlModelAssignmentRepository(
         factory,
@@ -79,17 +79,18 @@ def test_model_assignment_migration_preserves_unambiguous_seeds_only() -> None:
 
     try:
         assignments = {
-            (item.consumer_id.value, item.data_classification): item.model_id.value
+            (item.consumer_id.value, item.data_classification): item
             for item in repository.list()
         }
     finally:
         factory.dispose()
 
-    assert assignments[("agent", DataClassification.PUBLIC)] == "nvidia_quality"
-    assert assignments[("agent", DataClassification.INTERNAL)] == "nvidia_quality"
-    assert assignments[("agent", DataClassification.CONFIDENTIAL)] == "nvidia_quality"
-    assert ("agent", DataClassification.RESTRICTED) not in assignments
-    assert assignments[("rca.reasoning", DataClassification.RESTRICTED)] == "local_fast"
+    for consumer_id in ("agent", "rca.reasoning"):
+        for classification in DataClassification:
+            assignment = assignments[(consumer_id, classification)]
+            assert assignment.model_id == ModelId("local_quality")
+            assert assignment.selection_mode.value == "MANUAL"
+            assert assignment.selection_policy is None
 
 
 DATABASE_URL = os.getenv("FACTORY_DATABASE_URL")

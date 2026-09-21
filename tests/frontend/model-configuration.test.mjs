@@ -127,7 +127,7 @@ test("keeps the same row grid when switching between manual and automatic modes"
 });
 
 test("auto-saves a manual model change with one global confirmation", async () => {
-  const { content, saveStatus, restoreFetch } = renderWithSave((body) => ({
+  const { content, saveStatus, bodies, restoreFetch } = renderWithSave((body) => ({
     ...body,
     model_id: "nvidia_quality",
     selection_mode: "MANUAL",
@@ -138,6 +138,9 @@ test("auto-saves a manual model change with one global confirmation", async () =
     select.value = "nvidia_quality";
     select.dispatchEvent(new window.Event("change", { bubbles: true }));
     await settle();
+    assert.equal(bodies.length, 1);
+    assert.equal(bodies[0].consumer_id, "agent");
+    assert.equal(bodies[0].data_classification, "PUBLIC");
     assert.equal(saveStatus.textContent, "Saved");
     assert.equal(content.querySelectorAll(".model-assignment-feedback").length, 0);
     assert.equal(select.value, "nvidia_quality");
@@ -231,9 +234,9 @@ test("opens, loads, closes, and reopens the production model configuration dialo
   dialog.close = () => { dialog.open = false; };
   const originalFetch = globalThis.fetch;
   const requests = [];
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, options = {}) => {
     const path = new URL(String(url)).pathname;
-    requests.push(path);
+    requests.push({ method: options.method ?? "GET", path });
     const payload = path.endsWith("/models") ? CATALOG
       : path.endsWith("/model-consumers") ? CONSUMERS
       : [{
@@ -257,10 +260,10 @@ test("opens, loads, closes, and reopens the production model configuration dialo
     assert.match(dialog.textContent, /Agent Models/);
     assert.match(dialog.textContent, /Specialized Models/);
     assert.equal(dialog.querySelectorAll("#model-configuration-save-status").length, 1);
-    assert.deepEqual(requests.sort(), [
-      "/api/v1/model-assignments",
-      "/api/v1/model-consumers",
-      "/api/v1/models",
+    assert.deepEqual(requests.sort((left, right) => left.path.localeCompare(right.path)), [
+      { method: "GET", path: "/api/v1/model-assignments" },
+      { method: "GET", path: "/api/v1/model-consumers" },
+      { method: "GET", path: "/api/v1/models" },
     ]);
 
     document.querySelector("#model-configuration-close").click();
@@ -271,6 +274,7 @@ test("opens, loads, closes, and reopens the production model configuration dialo
     await waitForConfiguration();
     assert.equal(dialog.open, true);
     assert.equal(requests.length, 3);
+    assert.ok(requests.every((request) => request.method === "GET"));
   } finally {
     globalThis.fetch = originalFetch;
   }

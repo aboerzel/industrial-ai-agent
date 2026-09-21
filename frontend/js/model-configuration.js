@@ -132,14 +132,15 @@ function renderAssignmentRow(consumer, classification, catalog, assignment, save
     draftManualModelId = confirmedAssignment.model_id;
     update();
   };
-  const queueSave = () => {
+  const queueSave = (action) => {
     const next = currentConfiguration();
     const selected = catalog.find((model) => model.model_id === next.modelId);
     if (next.selectionMode === "MANUAL" && (!selected || !isAllowed(selected, classification) || selected.runtime_available === false)) {
       restoreConfirmed();
       return;
     }
-    queuedConfiguration = { configuration: next, generation: ++changeGeneration };
+    if (next.selectionMode === "AUTO" && !next.selectionPolicy) return;
+    queuedConfiguration = { configuration: next, action, generation: ++changeGeneration };
     setSaveStatus(saveStatus, "Saving...");
     void saveNext();
   };
@@ -149,7 +150,7 @@ function renderAssignmentRow(consumer, classification, catalog, assignment, save
     const request = queuedConfiguration;
     queuedConfiguration = null;
     try {
-      const persisted = await saveModelConfiguration(consumer.consumer_id, classification, request.configuration);
+      const persisted = await saveModelConfiguration(consumer.consumer_id, classification, request.configuration, request.action);
       confirmedAssignment = persisted;
       if (request.generation === changeGeneration) {
         feedback.textContent = "";
@@ -180,7 +181,7 @@ function renderAssignmentRow(consumer, classification, catalog, assignment, save
   configuration.addEventListener("change", () => {
     if (!automatic()) draftManualModelId = configuration.value || null;
     renderDetails();
-    queueSave();
+    queueSave("MODEL_CHANGED");
   });
   mode.addEventListener("change", () => {
     update();
@@ -189,7 +190,7 @@ function renderAssignmentRow(consumer, classification, catalog, assignment, save
       details.append(feedback);
       return;
     }
-    queueSave();
+    queueSave("MODE_CHANGED");
   });
   row.append(heading, mode, configuration, details);
   return row;

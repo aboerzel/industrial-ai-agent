@@ -13,6 +13,7 @@ from industrial_ai_agent.agent.model_selection import (
     ModelDefinition,
     ModelSelectionMode,
     ModelSelectionPolicy,
+    validate_model_capabilities,
 )
 from industrial_ai_agent.domain.security import DataClassification
 
@@ -58,6 +59,36 @@ class ModelConfigurationService:
 
     def list_consumers(self) -> tuple[ModelConsumerDefinition, ...]:
         return self._consumer_definitions
+
+    def ensure_default_assignments(self) -> tuple[ModelAssignment, ...]:
+        """Create only absent supported assignments with the local default model.
+
+        This is deliberately idempotent: an existing operator selection is never
+        rewritten during application startup.
+        """
+
+        default_model_id = ModelId("local_quality")
+        default_model = self._catalog.get_model(default_model_id.value)
+        created: list[ModelAssignment] = []
+        for consumer in self._consumer_definitions:
+            capability_validation = validate_model_capabilities(
+                default_model, consumer.call_requirements
+            )
+            if not capability_validation.allowed:
+                raise ValueError(
+                    "The default model does not satisfy consumer capabilities"
+                )
+            for classification in DataClassification:
+                if self._assignments.get(consumer.consumer_id, classification) is None:
+                    created.append(
+                        self.assign(
+                            consumer_id=consumer.consumer_id,
+                            data_classification=classification,
+                            model_id=default_model_id,
+                            updated_by="bootstrap",
+                        )
+                    )
+        return tuple(created)
 
     def assign(
         self,

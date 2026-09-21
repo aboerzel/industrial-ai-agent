@@ -101,6 +101,17 @@ def create_default_app():
         authorizer=authorizer,
         consumer_requirements=CURRENT_CONSUMER_REQUIREMENTS,
     )
+    model_configuration_service = ModelConfigurationService(
+        catalog=model_catalog,
+        assignments=assignment_repository,
+        supported_consumers=model_resolver.supported_consumers,
+        consumer_definitions=CURRENT_MODEL_CONSUMERS,
+        authorizer=authorizer,
+        model_is_statically_available=lambda model: model_catalog.is_model_available(
+            model.model_id.value, environment=os.environ
+        ),
+    )
+    model_configuration_service.ensure_default_assignments()
     return create_app(
         observed_run_service(run_service, telemetry),
         run_store=ObservedAgentRunStore(
@@ -115,18 +126,7 @@ def create_default_app():
             PostgreSqlSessionFactory(database_url),
             Path(os.getenv("DOCUMENT_ROOT", str(DEFAULT_DOCUMENT_ROOT))),
         ),
-        model_configuration_service=ModelConfigurationService(
-            catalog=model_catalog,
-            assignments=assignment_repository,
-            supported_consumers=model_resolver.supported_consumers,
-            consumer_definitions=CURRENT_MODEL_CONSUMERS,
-            authorizer=authorizer,
-            model_is_statically_available=lambda model: (
-                model_catalog.is_model_available(
-                    model.model_id.value, environment=os.environ
-                )
-            ),
-        ),
+        model_configuration_service=model_configuration_service,
     )
 
 

@@ -96,6 +96,7 @@ from industrial_ai_agent.infrastructure.telemetry import Telemetry, instrument_f
 
 API_PREFIX = "/api/v1"
 _FAILURE_LOGGER = logging.getLogger("industrial_ai_agent.api.failure_diagnostics")
+_MODEL_ASSIGNMENT_LOGGER = logging.getLogger("industrial_ai_agent.api.model_assignment")
 _PERSISTED_RUN_ERROR_CODES = frozenset(
     {
         "internal_error",
@@ -260,12 +261,23 @@ def create_app(
     async def assign_model(
         payload: AssignModelRequest, request: Request
     ) -> ModelAssignmentResponse:
+        service = _model_configuration_service(request)
+        consumer_id = ModelConsumerId(payload.consumer_id)
+        classification = DataClassification[payload.data_classification.value]
+        previous_assignment = next(
+            (
+                item
+                for item in service.list_assignments()
+                if item.consumer_id == consumer_id
+                and item.data_classification == classification
+            ),
+            None,
+        )
+        audit = _model_assignment_audit(request, payload, previous_assignment)
         try:
-            assignment = _model_configuration_service(request).configure(
-                consumer_id=ModelConsumerId(payload.consumer_id),
-                data_classification=DataClassification[
-                    payload.data_classification.value
-                ],
+            assignment = service.configure(
+                consumer_id=consumer_id,
+                data_classification=classification,
                 selection_mode=payload.selection_mode,
                 model_id=(
                     ModelId(payload.model_id) if payload.model_id is not None else None
@@ -274,6 +286,9 @@ def create_app(
                 updated_by="api",
             )
         except ModelAssignmentPolicyError as error:
+            _MODEL_ASSIGNMENT_LOGGER.info(
+                "model_assignment_write %s", {**audit, "http_status": 403}
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -282,6 +297,9 @@ def create_app(
                 },
             ) from error
         except ValueError as error:
+            _MODEL_ASSIGNMENT_LOGGER.info(
+                "model_assignment_write %s", {**audit, "http_status": 400}
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -289,6 +307,14 @@ def create_app(
                     "message": "The model assignment is invalid.",
                 },
             ) from error
+        _MODEL_ASSIGNMENT_LOGGER.info(
+            "model_assignment_write %s",
+            {
+                **audit,
+                "http_status": 200,
+                "resulting": _assignment_audit_values(assignment),
+            },
+        )
         return _model_assignment_response(assignment)
 
     runs = app
@@ -645,6 +671,53 @@ def _model_configuration_service(request: Request) -> ModelConfigurationService:
             },
         )
     return service
+
+
+def _model_assignment_audit(
+    request: Request,
+    payload: AssignModelRequest,
+    previous: ModelAssignment | None,
+) -> dict[str, object]:
+    """Return safe attribution metadata for configuration writes only."""
+
+    user_agent = request.headers.get("user-agent", "")
+    client_host = request.client.host if request.client is not None else None
+    return {
+        "request_id": request.headers.get("x-request-id") or str(uuid4()),
+        "consumer_id": payload.consumer_id,
+        "classification": payload.data_classification.value,
+        "previous": _assignment_audit_values(previous),
+        "requested": {
+            "selection_mode": payload.selection_mode.value,
+            "model_id": payload.model_id,
+            "selection_policy": (
+                payload.selection_policy.value if payload.selection_policy else None
+            ),
+        },
+        "action": request.headers.get("x-model-configuration-action", "UNATTRIBUTED"),
+        "origin": request.headers.get("origin"),
+        "referer_path": request.headers.get("referer", "").split("?", 1)[0],
+        "user_agent_category": "browser"
+        if "mozilla" in user_agent.lower()
+        else "other",
+        "remote_scope": "loopback"
+        if client_host in {"127.0.0.1", "::1"}
+        else "non_loopback",
+    }
+
+
+def _assignment_audit_values(
+    assignment: ModelAssignment | None,
+) -> dict[str, object] | None:
+    if assignment is None:
+        return None
+    return {
+        "selection_mode": assignment.selection_mode.value,
+        "model_id": assignment.model_id.value if assignment.model_id else None,
+        "selection_policy": (
+            assignment.selection_policy.value if assignment.selection_policy else None
+        ),
+    }
 
 
 def _model_assignment_response(

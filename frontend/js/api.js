@@ -29,9 +29,10 @@ export async function saveModelAssignment(consumerId, dataClassification, modelI
   });
 }
 
-export async function saveModelConfiguration(consumerId, dataClassification, configuration) {
+export async function saveModelConfiguration(consumerId, dataClassification, configuration, action = "UNKNOWN") {
   return request("/api/v1/model-assignments", {
     method: "PUT",
+    headers: { "X-Model-Configuration-Action": action },
     body: JSON.stringify({
       consumer_id: consumerId,
       data_classification: dataClassification,

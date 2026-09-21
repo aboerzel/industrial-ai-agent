@@ -11,6 +11,7 @@ from industrial_ai_agent.agent.model_egress import (
 from industrial_ai_agent.agent.model_selection import (
     AGENT_CONSUMER,
     CURRENT_MODEL_CONSUMERS,
+    RCA_REASONING_CONSUMER,
     CostClass,
     ModelAssignment,
     ModelCapability,
@@ -32,6 +33,8 @@ class Catalog:
     def __init__(self) -> None:
         self.models = {
             "local": _model("local", ExecutionZone.LOCAL),
+            "local_quality": _model("local_quality", ExecutionZone.LOCAL),
+            "local_alternative": _model("local_alternative", ExecutionZone.LOCAL),
             "public": _model("public", ExecutionZone.PUBLIC_CLOUD),
         }
 
@@ -83,21 +86,88 @@ def _model(model_id: str, zone: ExecutionZone) -> ModelDefinition:
             if zone is ExecutionZone.LOCAL
             else DataClassification.CONFIDENTIAL
         ),
-        capabilities=frozenset({ModelCapability.TEXT}),
+        capabilities=frozenset(
+            {
+                ModelCapability.TEXT,
+                ModelCapability.TOOL_CALLING,
+                ModelCapability.STRUCTURED_OUTPUT,
+            }
+        ),
         quality_class=QualityClass.STANDARD,
         cost_class=CostClass.LOW,
     )
 
 
-def _service(*, model_is_statically_available=None) -> ModelConfigurationService:
+def _service(
+    *,
+    assignments=None,
+    supported_consumers=(AGENT_CONSUMER,),
+    model_is_statically_available=None,
+) -> ModelConfigurationService:
     return ModelConfigurationService(
         catalog=Catalog(),
-        assignments=Assignments(),
-        supported_consumers=(AGENT_CONSUMER,),
+        assignments=assignments or Assignments(),
+        supported_consumers=supported_consumers,
         consumer_definitions=CURRENT_MODEL_CONSUMERS,
         authorizer=ModelExecutionAuthorizer(),
         model_is_statically_available=model_is_statically_available,
     )
+
+
+def test_bootstrap_creates_missing_assignments_with_local_quality_manual_mode() -> None:
+    assignments = Assignments()
+    service = _service(
+        assignments=assignments,
+        supported_consumers=(AGENT_CONSUMER, RCA_REASONING_CONSUMER),
+    )
+
+    created = service.ensure_default_assignments()
+
+    assert len(created) == len(DataClassification) * 2
+    for consumer_id in (AGENT_CONSUMER, RCA_REASONING_CONSUMER):
+        for classification in DataClassification:
+            assignment = assignments.get(consumer_id, classification)
+            assert assignment is not None
+            assert assignment.model_id == ModelId("local_quality")
+            assert assignment.selection_mode is ModelSelectionMode.MANUAL
+            assert assignment.selection_policy is None
+    assert service.ensure_default_assignments() == ()
+    assert len(assignments.values) == len(DataClassification) * 2
+
+
+def test_bootstrap_preserves_existing_choices_and_cross_consumer_rows() -> None:
+    assignments = Assignments()
+    service = _service(
+        assignments=assignments,
+        supported_consumers=(AGENT_CONSUMER, RCA_REASONING_CONSUMER),
+    )
+    service.ensure_default_assignments()
+    service.assign(
+        consumer_id=AGENT_CONSUMER,
+        data_classification=DataClassification.PUBLIC,
+        model_id=ModelId("local_alternative"),
+        updated_by="operator",
+    )
+    restricted_before = assignments.get(AGENT_CONSUMER, DataClassification.RESTRICTED)
+
+    service.ensure_default_assignments()
+    service.assign(
+        consumer_id=RCA_REASONING_CONSUMER,
+        data_classification=DataClassification.PUBLIC,
+        model_id=ModelId("local_alternative"),
+        updated_by="operator",
+    )
+
+    assert assignments.get(
+        AGENT_CONSUMER, DataClassification.PUBLIC
+    ).model_id == ModelId("local_alternative")
+    assert (
+        assignments.get(AGENT_CONSUMER, DataClassification.RESTRICTED)
+        == restricted_before
+    )
+    assert assignments.get(
+        RCA_REASONING_CONSUMER, DataClassification.PUBLIC
+    ).model_id == ModelId("local_alternative")
 
 
 def test_assignment_cannot_grant_restricted_public_egress() -> None:
@@ -201,7 +271,12 @@ def test_catalog_api_keeps_statically_unavailable_models_visible() -> None:
     response = TestClient(app).get("/api/v1/models")
 
     assert response.status_code == 200
-    assert [item["model_id"] for item in response.json()] == ["local", "public"]
+    assert [item["model_id"] for item in response.json()] == [
+        "local",
+        "local_quality",
+        "local_alternative",
+        "public",
+    ]
     assert all(item["runtime_available"] is False for item in response.json())
 
 
