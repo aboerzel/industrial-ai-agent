@@ -647,8 +647,7 @@ async function browserPageState(page, context, browser) {
 }
 async function pageContext(page) { return { clearance: await value(page, "#user-clearance"), language: await value(page, "#response-language") }; }
 async function userSeverity(agentTurn, text) {
-  if (await agentTurn.locator(".turn-limit").count()) return "ATTENTION";
-  if (/selected access level|not available with the selected access level|nicht verfuegbar|nicht verfügbar|not permitted/i.test(text)) return "ATTENTION";
+  if (await agentTurn.locator(".turn-attention").count()) return "ATTENTION";
   return (await agentTurn.locator(".turn-error").count()) ? "FAILURE" : "SUCCESS";
 }
 function hasLanguageSignal(text, language, severity) {
