@@ -6,6 +6,7 @@ import {
   createRun,
   downloadInvestigationPdf,
   getRun,
+  getInvestigation,
   saveModelAssignment,
 } from "../../frontend/js/api.js";
 
@@ -32,8 +33,27 @@ test("accepts OpenAPI-valid run responses with omitted default fields", async ()
   });
 });
 
+test("rejects a run response without required investigation identity fields", async () => {
+  await assert.rejects(
+    requestRawRun({
+      run_id: RUN_ID,
+      status: "success",
+      data_classification: "PUBLIC",
+    }),
+    (error) => error instanceof ApiClientError && error.code === "invalid_response",
+  );
+});
+
 test("renders every public terminal and approval lifecycle state", async (t) => {
   for (const payload of [
+    {
+      run_id: RUN_ID,
+      status: "running",
+      data_classification: "CONFIDENTIAL",
+      answer: null,
+      tool_calls: [],
+      approval_request: null,
+    },
     {
       run_id: RUN_ID,
       status: "success",
@@ -146,6 +166,210 @@ test("accepts a bounded incomplete S04 recovery result as failed", async () => {
   assert.deepEqual(await requestRun(payload), payload);
 });
 
+test("accepts the persisted QUALITY-09 operational failure response", async () => {
+  const payload = {
+    run_id: RUN_ID,
+    investigation_id: RUN_ID,
+    investigation_sequence: 1,
+    status: "failed",
+    data_classification: "CONFIDENTIAL",
+    answer: null,
+    recovery_outcome: null,
+    investigation_steps: [],
+    next_steps: [],
+    identifiers: [],
+    documents: [],
+    tool_calls: [],
+    error: {
+      code: "tool_execution_failed",
+      message: "The requested investigation step could not be completed.",
+      failure_origin: "TOOL_EXECUTION",
+    },
+    approval_request: null,
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
+test("rejects an operational failure with an unknown failure origin", async () => {
+  await assert.rejects(
+    requestRun({
+      run_id: RUN_ID,
+      status: "failed",
+      data_classification: "CONFIDENTIAL",
+      error: {
+        code: "tool_execution_failed",
+        message: "The requested investigation step could not be completed.",
+        failure_origin: "UNTRUSTED_ORIGIN",
+      },
+    }),
+    (error) => error instanceof ApiClientError && error.code === "invalid_response",
+  );
+});
+
+test("accepts every current normalized operational failure origin", async (t) => {
+  const failures = [
+    ["llm_rate_limit", "PROVIDER_RATE_LIMIT"],
+    ["llm_provider_unavailable", "PROVIDER_CONNECTION"],
+    ["llm_provider_request_invalid", "PROVIDER_REQUEST"],
+    ["model_capability_mismatch", "CAPABILITY_VALIDATION"],
+    ["model_not_configured", "MODEL_SELECTION"],
+    ["model_runtime_unavailable", "MODEL_AVAILABILITY"],
+    ["model_egress_denied", "SECURITY_POLICY"],
+    ["mcp_service_unavailable", "MCP"],
+    ["tool_execution_failed", "TOOL_EXECUTION"],
+    ["evidence_requirements_unsatisfied", "ORCHESTRATION"],
+    ["evidence_source_unavailable", "ORCHESTRATION"],
+    ["model_output_invalid", "MODEL_OUTPUT_VALIDATION"],
+    ["persistence_failure", "PERSISTENCE"],
+  ];
+
+  for (const [code, failureOrigin] of failures) {
+    await t.test(code, async () => {
+      const payload = {
+        status: "failed",
+        data_classification: "CONFIDENTIAL",
+        error: {
+          code,
+          message: "The request could not be completed.",
+          failure_origin: failureOrigin,
+        },
+      };
+      assert.deepEqual(await requestRun(payload), payload);
+    });
+  }
+});
+
+test("accepts nullable optional ApiErrorResponse fields", async () => {
+  const payload = {
+    status: "failed",
+    data_classification: "CONFIDENTIAL",
+    error: {
+      code: "tool_execution_failed",
+      message: "The requested investigation step could not be completed.",
+      investigation_id: null,
+      failure_origin: null,
+    },
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
+test("accepts a successful documentation response with optional empty fields", async () => {
+  const payload = {
+    run_id: RUN_ID,
+    status: "success",
+    data_classification: "CONFIDENTIAL",
+    answer: "QUALITY-09 documentation is available.",
+    investigation_steps: [],
+    next_steps: [],
+    identifiers: [],
+    documents: [{
+      document_id: "DOC-QUALITY-09",
+      title: "QUALITY-09 procedure",
+      format: "markdown",
+    }],
+    tool_calls: [{ tool: "search_documentation", arguments: { query: "QUALITY-09" } }],
+    error: null,
+    approval_request: null,
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
+test("accepts every current recovery outcome", async (t) => {
+  for (const recoveryOutcome of ["SUCCEEDED", "NOT_REQUIRED", "FAILED", "BLOCKED"]) {
+    await t.test(recoveryOutcome, async () => {
+      const payload = {
+        status: "success",
+        data_classification: "CONFIDENTIAL",
+        recovery_outcome: recoveryOutcome,
+      };
+      assert.deepEqual(await requestRun(payload), payload);
+    });
+  }
+});
+
+test("accepts Pydantic-valid non-sequential investigation step numbers", async () => {
+  const payload = {
+    status: "success",
+    data_classification: "CONFIDENTIAL",
+    investigation_steps: [{
+      step: 4,
+      action: "search_documentation",
+      finding: "Documentation was retrieved.",
+    }],
+  };
+
+  assert.deepEqual(await requestRun(payload), payload);
+});
+
+test("accepts every current public tool enum value", async (t) => {
+  const tools = [
+    "list_stations",
+    "get_station_overview",
+    "list_products",
+    "get_product_overview",
+    "get_product_history",
+    "get_machine_status",
+    "get_position_reference_status",
+    "get_maintenance_ticket",
+    "prepare_reference_calibration",
+    "search_documentation",
+    "create_maintenance_ticket",
+    "execute_reference_calibration",
+  ];
+
+  for (const tool of tools) {
+    await t.test(tool, async () => {
+      const payload = {
+        status: "success",
+        data_classification: "CONFIDENTIAL",
+        tool_calls: [{ tool, arguments: {} }],
+      };
+      assert.deepEqual(await requestRun(payload), payload);
+    });
+  }
+});
+
+test("accepts every current identifier type enum value", async (t) => {
+  for (const type of ["error_code", "station", "product", "maintenance_ticket"]) {
+    await t.test(type, async () => {
+      const payload = {
+        status: "success",
+        data_classification: "CONFIDENTIAL",
+        identifiers: [{ value: "REF-01", type }],
+      };
+      assert.deepEqual(await requestRun(payload), payload);
+    });
+  }
+});
+
+test("accepts a current investigation response with optional turn defaults", async () => {
+  const payload = {
+    investigation_id: RUN_ID,
+    created_at: null,
+    run_count: 1,
+    tool_call_count: 0,
+    status: "failed",
+    turns: [{
+      run_id: RUN_ID,
+      sequence: 1,
+      status: "failed",
+      data_classification: "CONFIDENTIAL",
+      response_language: "DE",
+      request: "QUALITY-09",
+      error: {
+        code: "tool_execution_failed",
+        message: "The request could not be completed.",
+        failure_origin: "TOOL_EXECUTION",
+      },
+    }],
+  };
+
+  assert.deepEqual(await requestInvestigation(payload), payload);
+});
+
 test("accepts discovery tool calls in the existing run result contract", async () => {
   const payload = {
     run_id: RUN_ID,
@@ -234,6 +458,25 @@ test("retains a persisted investigation identity from a sanitized HTTP 500", asy
   );
 });
 
+test("accepts a current HTTP error envelope with failure origin", async () => {
+  await assert.rejects(
+    requestError(
+      "/api/v1/runs",
+      {
+        code: "llm_rate_limit",
+        message: "The language model is temporarily unavailable.",
+        failure_origin: "PROVIDER_RATE_LIMIT",
+      },
+      createRun,
+      503,
+    ),
+    (error) =>
+      error instanceof ApiClientError &&
+      error.code === "llm_rate_limit" &&
+      error.message === "A required local model or MCP service is unavailable.",
+  );
+});
+
 test("uses the existing server PDF route for persisted investigations", () => {
   const originalWindow = globalThis.window;
   let assignedUrl = null;
@@ -276,6 +519,36 @@ test("persists model configuration with stable model_id values", async () => {
 });
 
 async function requestRun(payload) {
+  if (payload.run_id === undefined) payload.run_id = RUN_ID;
+  if (payload.investigation_id === undefined) payload.investigation_id = RUN_ID;
+  if (payload.investigation_sequence === undefined) payload.investigation_sequence = 1;
+  if (payload.answer === undefined) payload.answer = null;
+  if (payload.investigation_steps === undefined) payload.investigation_steps = [];
+  if (payload.next_steps === undefined) payload.next_steps = [];
+  if (payload.tool_calls === undefined) payload.tool_calls = [];
+  if (payload.approval_request === undefined) payload.approval_request = null;
+  return requestPayload(payload);
+}
+
+async function requestRawRun(payload) {
+  return requestPayload(payload);
+}
+
+async function requestInvestigation(payload) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  try {
+    return await getInvestigation(RUN_ID, "CONFIDENTIAL");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function requestPayload(payload) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () =>
     new Response(JSON.stringify(payload), {
@@ -284,12 +557,6 @@ async function requestRun(payload) {
     });
   try {
     const result = await createRun("Investigate P4711.");
-    if (payload.investigation_id === undefined) {
-      payload.investigation_id = RUN_ID;
-      payload.investigation_sequence = 1;
-    }
-    if (payload.next_steps === undefined) payload.next_steps = [];
-    if (payload.investigation_steps === undefined) payload.investigation_steps = [];
     return result;
   } finally {
     globalThis.fetch = originalFetch;

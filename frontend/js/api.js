@@ -176,8 +176,8 @@ async function request(path, options = {}, validator = isRunResponse) {
   }
   return validator === isRunResponse ? {
     ...payload,
-    investigation_id: payload.investigation_id ?? payload.run_id,
-    investigation_sequence: payload.investigation_sequence ?? 1,
+    investigation_id: payload.investigation_id,
+    investigation_sequence: payload.investigation_sequence,
     answer: payload.answer ?? null,
     investigation_steps: payload.investigation_steps ?? [],
     next_steps: payload.next_steps ?? [],
@@ -191,9 +191,9 @@ function isRunResponse(value) {
     isRecord(value) &&
     hasOnlyKeys(value, ["run_id", "investigation_id", "investigation_sequence", "status", "data_classification", "answer", "recovery_outcome", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "error", "approval_request"]) &&
     isUuid(value.run_id) &&
-    (value.investigation_id === undefined || isUuid(value.investigation_id)) &&
-    (value.investigation_sequence === undefined || (Number.isInteger(value.investigation_sequence) && value.investigation_sequence > 0)) &&
-    ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
+    isUuid(value.investigation_id) &&
+    (Number.isInteger(value.investigation_sequence) && value.investigation_sequence > 0) &&
+    isRunStatus(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
     (value.answer === undefined || value.answer === null || isBoundedString(value.answer, 8_000)) &&
     (value.recovery_outcome === undefined || value.recovery_outcome === null || ["SUCCEEDED", "NOT_REQUIRED", "FAILED", "BLOCKED"].includes(value.recovery_outcome)) &&
@@ -264,6 +264,7 @@ function isInvestigationResponse(value) {
     isUuid(value.investigation_id) &&
     Number.isInteger(value.run_count) && value.run_count >= 0 &&
     Number.isInteger(value.tool_call_count) && value.tool_call_count >= 0 &&
+    (value.created_at === undefined || value.created_at === null || typeof value.created_at === "string") &&
     typeof value.status === "string" &&
     Array.isArray(value.turns) && value.turns.every(isInvestigationTurn)
   );
@@ -274,9 +275,9 @@ function isInvestigationTurn(value) {
     isRecord(value) &&
     hasOnlyKeys(value, ["run_id", "sequence", "status", "data_classification", "response_language", "request", "answer", "recovery_outcome", "investigation_steps", "next_steps", "identifiers", "documents", "tool_calls", "error", "created_at", "updated_at", "approval_request"]) &&
     isUuid(value.run_id) && Number.isInteger(value.sequence) && value.sequence > 0 &&
-    ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
+    isRunStatus(value.status) &&
     ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(value.data_classification) &&
-    ["DE", "EN"].includes(value.response_language) &&
+    typeof value.response_language === "string" &&
     isBoundedString(value.request, 4_000) &&
     (value.answer === null || value.answer === undefined || isBoundedString(value.answer, 8_000)) &&
     (value.recovery_outcome === null || value.recovery_outcome === undefined || ["SUCCEEDED", "NOT_REQUIRED", "FAILED", "BLOCKED"].includes(value.recovery_outcome)) &&
@@ -284,7 +285,8 @@ function isInvestigationTurn(value) {
     (value.next_steps === undefined || isNextSteps(value.next_steps)) &&
     (value.identifiers === undefined || isIdentifierReferences(value.identifiers)) &&
     (value.documents === undefined || isDocumentReferences(value.documents)) &&
-    Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall) &&
+    (value.tool_calls === undefined ||
+      (Array.isArray(value.tool_calls) && value.tool_calls.every(isToolCall))) &&
     (value.error === null || value.error === undefined || isApiErrorResponse(value.error)) &&
     (value.approval_request === null || value.approval_request === undefined || isApprovalRequest(value.approval_request))
   );
@@ -293,11 +295,33 @@ function isInvestigationTurn(value) {
 function isApiErrorResponse(value) {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["code", "message", "investigation_id"]) &&
+    hasOnlyKeys(value, ["code", "message", "investigation_id", "failure_origin"]) &&
     isBoundedString(value.code, 80, true) &&
     isBoundedString(value.message, 500, true) &&
-    (value.investigation_id === undefined || isUuid(value.investigation_id))
+    (value.investigation_id === undefined || value.investigation_id === null || isUuid(value.investigation_id)) &&
+    (value.failure_origin === undefined || value.failure_origin === null || isFailureOrigin(value.failure_origin))
   );
+}
+
+function isRunStatus(value) {
+  return ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value);
+}
+
+function isFailureOrigin(value) {
+  return [
+    "MODEL_SELECTION",
+    "MODEL_AVAILABILITY",
+    "CAPABILITY_VALIDATION",
+    "SECURITY_POLICY",
+    "PROVIDER_RATE_LIMIT",
+    "PROVIDER_CONNECTION",
+    "PROVIDER_REQUEST",
+    "MODEL_OUTPUT_VALIDATION",
+    "TOOL_EXECUTION",
+    "MCP",
+    "ORCHESTRATION",
+    "PERSISTENCE",
+  ].includes(value);
 }
 
 function isToolCall(value) {
@@ -321,10 +345,10 @@ function isInvestigationSteps(value) {
   return (
     Array.isArray(value) &&
     value.length <= 4 &&
-    value.every((step, index) =>
+    value.every((step) =>
       isRecord(step) &&
       hasOnlyKeys(step, ["step", "action", "finding"]) &&
-      step.step === index + 1 &&
+      Number.isInteger(step.step) && step.step >= 1 && step.step <= 4 &&
       isPublicToolName(step.action) &&
       isBoundedString(step.finding, 1_000, true),
     )
@@ -367,7 +391,7 @@ function isApprovalRequest(value) {
     isRecord(value.arguments) &&
     isBoundedString(value.classification, 32, true) &&
     isBoundedString(value.model_id, 128, true) &&
-    ["running", "waiting_for_approval", "success", "limit_reached", "failed"].includes(value.status) &&
+    isRunStatus(value.status) &&
     typeof value.created_at === "string"
   );
 }
