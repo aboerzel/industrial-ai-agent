@@ -80,6 +80,60 @@ def test_protocol_readiness_rejects_process_without_required_capability(
         )
 
 
+def test_protocol_readiness_rejects_initialize_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _InitializeFailingSession(_FakeMcpSession):
+        async def initialize(self):
+            raise RuntimeError("initialize failed")
+
+    @asynccontextmanager
+    async def open_failing_session(
+        _transport,
+    ) -> AsyncIterator[_InitializeFailingSession]:
+        yield _InitializeFailingSession(("search_documentation",))
+
+    monkeypatch.setattr(
+        "industrial_ai_agent.infrastructure.mcp_readiness.open_mcp_session",
+        open_failing_session,
+    )
+
+    with pytest.raises(RuntimeError, match="initialize failed"):
+        asyncio.run(
+            probe_mcp_readiness(
+                StreamableHttpServerParameters(url="http://knowledge.invalid/mcp"),
+                required_tool_names=("search_documentation",),
+            )
+        )
+
+
+def test_protocol_readiness_rejects_list_tools_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ListToolsFailingSession(_FakeMcpSession):
+        async def list_tools(self):
+            raise RuntimeError("list tools failed")
+
+    @asynccontextmanager
+    async def open_failing_session(
+        _transport,
+    ) -> AsyncIterator[_ListToolsFailingSession]:
+        yield _ListToolsFailingSession(("search_documentation",))
+
+    monkeypatch.setattr(
+        "industrial_ai_agent.infrastructure.mcp_readiness.open_mcp_session",
+        open_failing_session,
+    )
+
+    with pytest.raises(RuntimeError, match="list tools failed"):
+        asyncio.run(
+            probe_mcp_readiness(
+                StreamableHttpServerParameters(url="http://knowledge.invalid/mcp"),
+                required_tool_names=("search_documentation",),
+            )
+        )
+
+
 class _TransientDiscoveryProvider(McpLangChainToolProvider):
     def __init__(self, outcomes: list[bool]) -> None:
         super().__init__(

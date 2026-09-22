@@ -201,7 +201,7 @@ services:
     ports:
       - "127.0.0.1:8003:8003"
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8003), 2).close()"]
+      test: ["CMD", "python", "-m", "industrial_ai_agent.infrastructure.mcp_readiness", "--url", "http://127.0.0.1:8003/mcp", "--bearer-token-env", "MCP_INDUSTRIAL_AGENT_TOKEN", "--required-tool", "get_run_trace"]
       interval: 10s
       timeout: 3s
       start_period: 20s
@@ -232,7 +232,7 @@ services:
     ports:
       - "127.0.0.1:8004:8004"
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8004), 2).close()"]
+      test: ["CMD", "python", "-m", "industrial_ai_agent.infrastructure.mcp_readiness", "--url", "http://127.0.0.1:8004/mcp", "--bearer-token-env", "MCP_INDUSTRIAL_AGENT_TOKEN", "--required-tool", "get_agent_run"]
       interval: 10s
       timeout: 3s
       start_period: 20s
@@ -272,7 +272,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8005), 2).close()"]
+      test: ["CMD", "python", "-m", "industrial_ai_agent.infrastructure.mcp_readiness", "--url", "http://127.0.0.1:8005/mcp", "--bearer-token-env", "MCP_CODEX_DEVELOPMENT_TOKEN", "--required-tool", "analyze_run"]
       interval: 10s
       timeout: 3s
       start_period: 20s

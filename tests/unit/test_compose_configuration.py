@@ -1,10 +1,32 @@
 """Static local-demo network guarantees from the resolved Compose configuration."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+_MCP_READINESS_REQUIRED_TOOLS = {
+    "factory-mcp": ("get_machine_status", "get_product_history"),
+    "knowledge-mcp": ("search_documentation",),
+    "hardware-mcp": (
+        "get_position_reference_status",
+        "prepare_reference_calibration",
+        "execute_reference_calibration",
+    ),
+    "runtime-mcp": ("get_agent_run",),
+    "observability-mcp": ("get_run_trace",),
+    "rca-mcp": ("analyze_run",),
+}
+_MCP_READINESS_BEARER_TOKEN_ENVS = {
+    "factory-mcp": "MCP_INDUSTRIAL_AGENT_TOKEN",
+    "knowledge-mcp": "MCP_INDUSTRIAL_AGENT_TOKEN",
+    "hardware-mcp": "MCP_INDUSTRIAL_AGENT_TOKEN",
+    "runtime-mcp": "MCP_INDUSTRIAL_AGENT_TOKEN",
+    "observability-mcp": "MCP_INDUSTRIAL_AGENT_TOKEN",
+    "rca-mcp": "MCP_CODEX_DEVELOPMENT_TOKEN",
+}
 
 
 def _compose_configuration() -> dict[str, object]:
@@ -52,11 +74,7 @@ def test_agent_dependencies_use_protocol_aware_mcp_readiness() -> None:
     services = configuration["services"]
     assert isinstance(services, dict)
 
-    for service_name, expected_tool in (
-        ("factory-mcp", "get_machine_status"),
-        ("knowledge-mcp", "search_documentation"),
-        ("hardware-mcp", "get_position_reference_status"),
-    ):
+    for service_name, expected_tools in _MCP_READINESS_REQUIRED_TOOLS.items():
         service = services[service_name]
         assert isinstance(service, dict)
         healthcheck = service["healthcheck"]
@@ -64,7 +82,15 @@ def test_agent_dependencies_use_protocol_aware_mcp_readiness() -> None:
         test = healthcheck["test"]
         assert isinstance(test, list)
         assert "industrial_ai_agent.infrastructure.mcp_readiness" in test
-        assert expected_tool in test
+        required_tools = tuple(
+            test[index + 1]
+            for index, value in enumerate(test)
+            if value == "--required-tool"
+        )
+        assert required_tools == expected_tools
+        bearer_token_env = test[test.index("--bearer-token-env") + 1]
+        assert bearer_token_env == _MCP_READINESS_BEARER_TOKEN_ENVS[service_name]
+        assert "socket.create_connection" not in test
 
     agent_api = services["agent-api"]
     assert isinstance(agent_api, dict)
@@ -74,6 +100,21 @@ def test_agent_dependencies_use_protocol_aware_mcp_readiness() -> None:
         dependency = dependencies[service_name]
         assert isinstance(dependency, dict)
         assert dependency["condition"] == "service_healthy"
+
+
+def test_mcp_dockerfiles_use_the_same_protocol_aware_readiness_contract() -> None:
+    for service_name, expected_tools in _MCP_READINESS_REQUIRED_TOOLS.items():
+        dockerfile_name = f"Dockerfile.{service_name}"
+        dockerfile = (PROJECT_ROOT / dockerfile_name).read_text(encoding="utf-8")
+        assert "industrial_ai_agent.infrastructure.mcp_readiness" in dockerfile
+        assert tuple(re.findall(r"--required-tool ([a-z_]+)", dockerfile)) == (
+            expected_tools
+        )
+        assert (
+            re.search(r"--bearer-token-env ([A-Z_]+)", dockerfile).group(1)
+            == _MCP_READINESS_BEARER_TOKEN_ENVS[service_name]
+        )
+        assert "socket.create_connection" not in dockerfile
 
 
 def test_frontend_is_a_loopback_only_static_service() -> None:
