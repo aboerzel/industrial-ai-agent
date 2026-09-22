@@ -64,10 +64,10 @@ export async function getRun(runId) {
   return request(`/api/v1/runs/${encodeURIComponent(runId)}`);
 }
 
-export async function resumeRun(runId, decision) {
+export async function resumeRun(runId, decision, userClearance) {
   return request(`/api/v1/runs/${encodeURIComponent(runId)}/resume`, {
     method: "POST",
-    body: JSON.stringify({ decision }),
+    body: JSON.stringify({ decision, user_clearance: userClearance }),
   });
 }
 

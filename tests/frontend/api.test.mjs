@@ -7,6 +7,7 @@ import {
   downloadInvestigationPdf,
   getRun,
   getInvestigation,
+  resumeRun,
   saveModelAssignment,
 } from "../../frontend/js/api.js";
 
@@ -491,6 +492,30 @@ test("uses the existing server PDF route for persisted investigations", () => {
     assignedUrl,
     `http://localhost:8000/api/v1/investigations/${RUN_ID}/pdf?user_clearance=CONFIDENTIAL`,
   );
+});
+
+test("submits the current demo clearance with a resume decision", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, `http://localhost:8000/api/v1/runs/${RUN_ID}/resume`);
+    assert.equal(options.method, "POST");
+    assert.deepEqual(JSON.parse(options.body), {
+      decision: "approve",
+      user_clearance: "CONFIDENTIAL",
+    });
+    return new Response(JSON.stringify({
+      run_id: RUN_ID,
+      investigation_id: RUN_ID,
+      investigation_sequence: 1,
+      status: "success",
+      data_classification: "CONFIDENTIAL",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    await resumeRun(RUN_ID, "approve", "CONFIDENTIAL");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("persists model configuration with stable model_id values", async () => {

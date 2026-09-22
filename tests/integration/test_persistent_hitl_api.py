@@ -281,10 +281,12 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
     try:
         restored = second_client.get(f"/api/v1/runs/{run_id}")
         approved = second_client.post(
-            f"/api/v1/runs/{run_id}/resume", json={"decision": "approve"}
+            f"/api/v1/runs/{run_id}/resume",
+            json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
         )
         duplicate = second_client.post(
-            f"/api/v1/runs/{run_id}/resume", json={"decision": "approve"}
+            f"/api/v1/runs/{run_id}/resume",
+            json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
         )
     finally:
         second_client.close()
@@ -334,7 +336,8 @@ def test_fastapi_hitl_reject_survives_runtime_recreation_without_ticket() -> Non
     second_client, second_sessions = _application(factory)
     try:
         rejected = second_client.post(
-            f"/api/v1/runs/{run_id}/resume", json={"decision": "reject"}
+            f"/api/v1/runs/{run_id}/resume",
+            json={"decision": "reject", "user_clearance": "CONFIDENTIAL"},
         )
     finally:
         second_client.close()
@@ -376,7 +379,8 @@ def test_fastapi_hitl_concurrent_approvals_claim_one_postgres_resume() -> None:
         client, sessions = _application(factory)
         try:
             return client.post(
-                f"/api/v1/runs/{run_id}/resume", json={"decision": "approve"}
+                f"/api/v1/runs/{run_id}/resume",
+                json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
             ).status_code
         finally:
             client.close()

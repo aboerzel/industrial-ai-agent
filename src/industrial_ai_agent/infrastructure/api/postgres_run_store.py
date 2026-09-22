@@ -111,6 +111,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 approval_decision=None,
                 approval_requested_at=None,
                 approval_decided_at=None,
+                approval_decided_clearance=None,
                 interrupted_at=None,
                 completed_at=None,
             )
@@ -259,14 +260,26 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             record.interrupted_at = datetime.now(UTC)
             record.approval_requested_at = record.interrupted_at
             record.approval_decided_at = None
+            record.approval_decided_clearance = None
             return _stored(record)
 
     async def claim_resume(
-        self, run_id: UUID, *, decision: str
+        self,
+        run_id: UUID,
+        *,
+        decision: str,
+        approval_clearance: DataClassification,
     ) -> StoredAgentRun | None:
-        return await asyncio.to_thread(self._claim_resume, run_id, decision)
+        return await asyncio.to_thread(
+            self._claim_resume, run_id, decision, approval_clearance
+        )
 
-    def _claim_resume(self, run_id: UUID, decision: str) -> StoredAgentRun | None:
+    def _claim_resume(
+        self,
+        run_id: UUID,
+        decision: str,
+        approval_clearance: DataClassification,
+    ) -> StoredAgentRun | None:
         with self._session_factory.session(self._security_context) as session:
             changed = session.execute(
                 update(AgentRunRecord)
@@ -278,6 +291,7 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                     status=RunStatus.RUNNING.value,
                     approval_decision=decision,
                     approval_decided_at=datetime.now(UTC),
+                    approval_decided_clearance=approval_clearance.name,
                 )
             ).rowcount
             if changed != 1:
@@ -414,6 +428,11 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
         approval_decision=record.approval_decision,
         approval_requested_at=record.approval_requested_at,
         approval_decided_at=record.approval_decided_at,
+        approval_decided_clearance=(
+            DataClassification[record.approval_decided_clearance]
+            if record.approval_decided_clearance is not None
+            else None
+        ),
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

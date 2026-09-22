@@ -95,7 +95,11 @@ class ObservedAgentRunStore:
         )
 
     async def claim_resume(
-        self, run_id: UUID, *, decision: str
+        self,
+        run_id: UUID,
+        *,
+        decision: str,
+        approval_clearance: DataClassification,
     ) -> StoredAgentRun | None:
         return await self._observe(
             "claim_resume",
@@ -103,6 +107,7 @@ class ObservedAgentRunStore:
             self._delegate.claim_resume,
             run_id,
             decision=decision,
+            approval_clearance=approval_clearance,
         )
 
     async def claim_reference_calibration_approval(

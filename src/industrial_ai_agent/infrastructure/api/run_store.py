@@ -37,6 +37,7 @@ class StoredAgentRun:
     approval_decision: str | None = None
     approval_requested_at: datetime | None = None
     approval_decided_at: datetime | None = None
+    approval_decided_clearance: DataClassification | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -121,7 +122,11 @@ class AgentRunStore(Protocol):
     ) -> StoredAgentRun: ...
 
     async def claim_resume(
-        self, run_id: UUID, *, decision: str
+        self,
+        run_id: UUID,
+        *,
+        decision: str,
+        approval_clearance: DataClassification,
     ) -> StoredAgentRun | None: ...
 
     async def claim_reference_calibration_approval(
@@ -207,6 +212,7 @@ class InMemoryAgentRunStore:
             approval_decision=existing.approval_decision,
             approval_requested_at=existing.approval_requested_at,
             approval_decided_at=existing.approval_decided_at,
+            approval_decided_clearance=existing.approval_decided_clearance,
             created_at=existing.created_at,
             updated_at=datetime.now(UTC),
         )
@@ -238,6 +244,7 @@ class InMemoryAgentRunStore:
             approval_decision=existing.approval_decision,
             approval_requested_at=existing.approval_requested_at,
             approval_decided_at=existing.approval_decided_at,
+            approval_decided_clearance=existing.approval_decided_clearance,
             created_at=existing.created_at,
             updated_at=datetime.now(UTC),
         )
@@ -279,7 +286,11 @@ class InMemoryAgentRunStore:
         return await self._replace_existing(record)
 
     async def claim_resume(
-        self, run_id: UUID, *, decision: str
+        self,
+        run_id: UUID,
+        *,
+        decision: str,
+        approval_clearance: DataClassification,
     ) -> StoredAgentRun | None:
         async with self._lock:
             existing = self._records.get(run_id)
@@ -293,6 +304,7 @@ class InMemoryAgentRunStore:
                 status=RunStatus.RUNNING,
                 approval_decision=decision,
                 approval_decided_at=datetime.now(UTC),
+                approval_decided_clearance=approval_clearance,
                 updated_at=datetime.now(UTC),
             )
             self._records[run_id] = record
@@ -375,6 +387,7 @@ class InMemoryAgentRunStore:
                 approval_decision=existing.approval_decision,
                 approval_requested_at=existing.approval_requested_at,
                 approval_decided_at=existing.approval_decided_at,
+                approval_decided_clearance=existing.approval_decided_clearance,
                 created_at=existing.created_at,
                 updated_at=datetime.now(UTC),
             )

@@ -253,6 +253,13 @@ class ResumeRunRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     decision: ResumeDecision
+    user_clearance: DemoUserClearance = Field(
+        default=DemoUserClearance.PUBLIC,
+        description=(
+            "Demo-only simulated user clearance; resolved by the server before "
+            "an approval can be claimed."
+        ),
+    )
 
 
 class RunResponse(BaseModel):

@@ -282,7 +282,16 @@ def test_run_store_approval_adapter_requires_approved_exact_pending_action_once(
     run_id = uuid4()
     asyncio.run(store.create(run_id))
     asyncio.run(store.wait_for_approval(run_id, _approval_payload("stored-action")))
-    assert asyncio.run(store.claim_resume(run_id, decision="approve")) is not None
+    assert (
+        asyncio.run(
+            store.claim_resume(
+                run_id,
+                decision="approve",
+                approval_clearance=DataClassification.CONFIDENTIAL,
+            )
+        )
+        is not None
+    )
     approval_port = AgentRunStoreRecoveryApprovalPort(store)
 
     assert not asyncio.run(
@@ -324,7 +333,16 @@ def test_run_store_rejected_or_mismatched_approval_cannot_be_claimed() -> None:
     run_id = uuid4()
     asyncio.run(store.create(run_id))
     asyncio.run(store.wait_for_approval(run_id, _approval_payload("stored-action")))
-    assert asyncio.run(store.claim_resume(run_id, decision="reject")) is not None
+    assert (
+        asyncio.run(
+            store.claim_resume(
+                run_id,
+                decision="reject",
+                approval_clearance=DataClassification.CONFIDENTIAL,
+            )
+        )
+        is not None
+    )
     approval_port = AgentRunStoreRecoveryApprovalPort(store)
 
     assert not asyncio.run(

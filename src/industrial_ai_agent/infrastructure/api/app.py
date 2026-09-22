@@ -34,6 +34,7 @@ from industrial_ai_agent.agent.response_language import (
 )
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
+    AgentRunProfile,
     InternalDiagnosticTarget,
     ResolvedRunPolicy,
     RunClearanceDeniedError,
@@ -531,13 +532,20 @@ def create_app(
     ) -> RunResponse:
         store = _run_store(request)
         existing = await store.get(run_id)
-        if existing is None:
+        security_context = _demo_security_context(request).resolve(
+            payload.user_clearance
+        )
+        if not _is_run_resumable_by(existing, security_context):
             _raise_api_run_error(
                 status_code=status.HTTP_404_NOT_FOUND,
                 code="run_not_found",
                 message=user_facing_error_message("run_not_found", ResponseLanguage.EN),
             )
-        claimed = await store.claim_resume(run_id, decision=payload.decision.value)
+        claimed = await store.claim_resume(
+            run_id,
+            decision=payload.decision.value,
+            approval_clearance=security_context.clearance,
+        )
         if claimed is None:
             _raise_api_run_error(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1130,6 +1138,27 @@ async def _authorized_investigation(
 def _is_run_visible(record: StoredAgentRun, security_context: SecurityContext) -> bool:
     """Apply the shared persisted-run classification visibility policy."""
     return int(record.data_classification) <= int(security_context.clearance)
+
+
+def _is_run_resumable_by(
+    record: StoredAgentRun | None, security_context: SecurityContext
+) -> bool:
+    """Authorize a demo approval from server-resolved clearance before claiming it."""
+    if record is None or not _is_run_visible(record, security_context):
+        return False
+    if record.status is not RunStatus.WAITING_FOR_APPROVAL:
+        return True
+    if record.data_classification is not DataClassification.CONFIDENTIAL:
+        return False
+    if record.approval_action == "create_maintenance_ticket":
+        return record.run_profile is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    return record.approval_action == "execute_reference_calibration" and (
+        record.run_profile
+        in {
+            AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+            AgentRunProfile.CONFIDENTIAL_RECOVERY,
+        }
+    )
 
 
 def _to_investigation_turn(

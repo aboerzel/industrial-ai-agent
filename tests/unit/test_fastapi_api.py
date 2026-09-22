@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -40,6 +40,7 @@ from industrial_ai_agent.agent.run_classification_policy import (
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     InternalDiagnosticTargetUnavailableError,
     McpServiceUnavailableError,
+    RunExecution,
 )
 from industrial_ai_agent.agent.user_severity import (
     UserSeverity,
@@ -125,6 +126,32 @@ class FakeDocumentContentReader:
             media_type="text/markdown",
             filename="S04-QUALITY-09-Troubleshooting-Procedure.md",
         )
+
+
+class RecordingRunStore(InMemoryAgentRunStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.claim_resume_calls = 0
+
+    async def claim_resume(self, run_id, *, decision, approval_clearance):
+        self.claim_resume_calls += 1
+        return await super().claim_resume(
+            run_id,
+            decision=decision,
+            approval_clearance=approval_clearance,
+        )
+
+
+class ResumeCapableFakeRunService(FakeRunService):
+    persistent_hitl_enabled = True
+
+    def __init__(self) -> None:
+        super().__init__(result=_success_result())
+        self.resume_calls: list[dict[str, object]] = []
+
+    async def resume(self, **kwargs) -> RunExecution:
+        self.resume_calls.append(kwargs)
+        return RunExecution(result=_success_result())
 
 
 def create_app(
@@ -1197,6 +1224,160 @@ def test_resume_rejects_unknown_decision_before_run_lookup() -> None:
     )
 
     assert response.status_code == 422
+
+
+async def _create_pending_run(
+    store: InMemoryAgentRunStore,
+    *,
+    classification: DataClassification,
+    action: str = "create_maintenance_ticket",
+) -> UUID:
+    run_id = uuid4()
+    await store.create(
+        run_id,
+        data_classification=classification,
+        model_profile="local_quality",
+    )
+    await store.wait_for_approval(
+        run_id,
+        {
+            "action": action,
+            "summary": "Protected approval details for S04.",
+            "arguments": {"station_id": "S04", "device_id": "POSITION-ENC-02"},
+            "classification": classification.name,
+            "model_id": "local_quality",
+            "status": "waiting_for_approval",
+            "created_at": "2026-09-22T10:00:00+00:00",
+        },
+    )
+    return run_id
+
+
+@pytest.mark.parametrize(
+    ("classification", "payload"),
+    (
+        (
+            DataClassification.CONFIDENTIAL,
+            {"decision": "approve", "user_clearance": "PUBLIC"},
+        ),
+        (
+            DataClassification.RESTRICTED,
+            {"decision": "approve", "user_clearance": "PUBLIC"},
+        ),
+        (DataClassification.CONFIDENTIAL, {"decision": "approve"}),
+    ),
+)
+def test_resume_hides_protected_pending_run_without_claiming_it(
+    classification: DataClassification, payload: dict[str, str]
+) -> None:
+    store = RecordingRunStore()
+    run_id = asyncio.run(_create_pending_run(store, classification=classification))
+    service = ResumeCapableFakeRunService()
+    response = TestClient(_create_app(service, run_store=store)).post(
+        f"/api/v1/runs/{run_id}/resume", json=payload
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "code": "run_not_found",
+        "message": "The requested run does not exist.",
+    }
+    assert "Protected approval details" not in response.text
+    assert "POSITION-ENC-02" not in response.text
+    assert classification.name not in response.text
+    assert store.claim_resume_calls == 0
+    assert asyncio.run(store.get(run_id)).status is RunStatus.WAITING_FOR_APPROVAL
+    assert service.resume_calls == []
+
+
+def test_authorized_resume_claims_pending_run_and_records_demo_clearance() -> None:
+    store = RecordingRunStore()
+    run_id = asyncio.run(
+        _create_pending_run(store, classification=DataClassification.CONFIDENTIAL)
+    )
+    service = ResumeCapableFakeRunService()
+    response = TestClient(_create_app(service, run_store=store)).post(
+        f"/api/v1/runs/{run_id}/resume",
+        json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    assert store.claim_resume_calls == 1
+    assert len(service.resume_calls) == 1
+    stored = asyncio.run(store.get(run_id))
+    assert stored is not None
+    assert stored.approval_decided_clearance is DataClassification.CONFIDENTIAL
+
+
+def test_denied_resume_does_not_consume_the_authorized_claim() -> None:
+    store = RecordingRunStore()
+    run_id = asyncio.run(
+        _create_pending_run(store, classification=DataClassification.CONFIDENTIAL)
+    )
+    service = ResumeCapableFakeRunService()
+    client = TestClient(_create_app(service, run_store=store))
+
+    denied = client.post(
+        f"/api/v1/runs/{run_id}/resume",
+        json={"decision": "approve", "user_clearance": "PUBLIC"},
+    )
+    approved = client.post(
+        f"/api/v1/runs/{run_id}/resume",
+        json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+    )
+
+    assert denied.status_code == 404
+    assert approved.status_code == 200
+    assert store.claim_resume_calls == 1
+    assert len(service.resume_calls) == 1
+
+
+def test_visible_run_without_pending_approval_preserves_conflict_contract() -> None:
+    store = RecordingRunStore()
+    run_id = uuid4()
+    asyncio.run(
+        store.create(
+            run_id,
+            data_classification=DataClassification.CONFIDENTIAL,
+            model_profile="local_quality",
+        )
+    )
+
+    response = TestClient(
+        _create_app(ResumeCapableFakeRunService(), run_store=store)
+    ).post(
+        f"/api/v1/runs/{run_id}/resume",
+        json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "run_not_waiting_for_approval"
+    assert store.claim_resume_calls == 1
+
+
+def test_concurrent_authorized_resume_claims_remain_single_use() -> None:
+    async def claim_twice() -> tuple[object, object]:
+        store = InMemoryAgentRunStore()
+        run_id = await _create_pending_run(
+            store, classification=DataClassification.CONFIDENTIAL
+        )
+        return await asyncio.gather(
+            store.claim_resume(
+                run_id,
+                decision="approve",
+                approval_clearance=DataClassification.CONFIDENTIAL,
+            ),
+            store.claim_resume(
+                run_id,
+                decision="approve",
+                approval_clearance=DataClassification.CONFIDENTIAL,
+            ),
+        )
+
+    claims = asyncio.run(claim_twice())
+
+    assert sum(claim is not None for claim in claims) == 1
 
 
 def test_successful_public_response_sanitizes_diagnostic_text() -> None:

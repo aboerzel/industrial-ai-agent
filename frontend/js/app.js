@@ -768,7 +768,7 @@ function renderApproval(turn) {
 
 async function decide(runId, decision) {
   try {
-    await resumeRun(runId, decision);
+    await resumeRun(runId, decision, userClearance.value);
     await reloadInvestigation();
   } catch (error) {
     showError(publicError(error, "The decision could not be submitted."));

@@ -339,7 +339,13 @@ def test_confidential_recovery_approval_persists_reloads_and_claims_once() -> No
             )
         )
         pending = asyncio.run(store.get(run_id))
-        claimed = asyncio.run(store.claim_resume(run_id, decision="approve"))
+        claimed = asyncio.run(
+            store.claim_resume(
+                run_id,
+                decision="approve",
+                approval_clearance=DataClassification.CONFIDENTIAL,
+            )
+        )
         restored = asyncio.run(store.get(run_id))
         approval_claimed = asyncio.run(
             store.claim_reference_calibration_approval(

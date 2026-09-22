@@ -48,7 +48,11 @@ def test_run_store_preserves_response_language_across_approval_lifecycle() -> No
             response_language=ResponseLanguage.DE,
         )
         await store.wait_for_approval(run_id, {"action": "create_maintenance_ticket"})
-        claimed = await store.claim_resume(run_id, decision="approve")
+        claimed = await store.claim_resume(
+            run_id,
+            decision="approve",
+            approval_clearance=DataClassification.CONFIDENTIAL,
+        )
         assert claimed is not None
         completed = await store.complete(
             run_id,

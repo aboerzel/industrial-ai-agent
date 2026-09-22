@@ -195,6 +195,7 @@ class AgentRunRecord(Base):
     approval_decided_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    approval_decided_clearance: Mapped[str | None] = mapped_column(String)
     interrupted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
