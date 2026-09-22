@@ -423,7 +423,8 @@ def create_app(
         user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
     ) -> RunResponse:
         record = await _run_store(request).get(run_id)
-        if record is None:
+        security_context = _demo_security_context(request).resolve(user_clearance)
+        if record is None or not _is_run_visible(record, security_context):
             _raise_api_run_error(
                 status_code=status.HTTP_404_NOT_FOUND,
                 code="run_not_found",
@@ -434,7 +435,7 @@ def create_app(
             documents=_authorized_documents_for_result(
                 request,
                 record.result,
-                _demo_security_context(request).resolve(user_clearance),
+                security_context,
             ),
         )
 
@@ -1103,9 +1104,7 @@ async def _authorized_investigation(
     security_context = _demo_security_context(request).resolve(user_clearance)
     records = await _run_store(request).list_investigation(investigation_id)
     visible = tuple(
-        record
-        for record in records
-        if int(record.data_classification) <= int(security_context.clearance)
+        record for record in records if _is_run_visible(record, security_context)
     )
     if not visible:
         return None
@@ -1126,6 +1125,11 @@ async def _authorized_investigation(
         status=_investigation_status(visible),
         turns=turns,
     )
+
+
+def _is_run_visible(record: StoredAgentRun, security_context: SecurityContext) -> bool:
+    """Apply the shared persisted-run classification visibility policy."""
+    return int(record.data_classification) <= int(security_context.clearance)
 
 
 def _to_investigation_turn(

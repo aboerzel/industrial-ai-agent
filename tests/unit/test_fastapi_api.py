@@ -388,7 +388,9 @@ def test_create_run_returns_stable_public_schema_and_can_be_read() -> None:
     assert payload["approval_request"] is None
     assert service.messages == ["Investigate product P4711."]
 
-    stored_response = client.get(f"/api/v1/runs/{payload['run_id']}")
+    stored_response = client.get(
+        f"/api/v1/runs/{payload['run_id']}?user_clearance=CONFIDENTIAL"
+    )
 
     assert stored_response.status_code == 200
     assert stored_response.json() == payload
@@ -1224,6 +1226,91 @@ def test_get_unknown_run_returns_sanitized_not_found_error() -> None:
         "code": "run_not_found",
         "message": "The requested run does not exist.",
     }
+
+
+@pytest.mark.parametrize(
+    ("message", "creator_clearance", "required_clearance"),
+    (
+        ("Investigate P4711.", "CONFIDENTIAL", "CONFIDENTIAL"),
+        ("Investigate P9001.", "RESTRICTED", "RESTRICTED"),
+    ),
+)
+def test_direct_run_retrieval_hides_runs_above_caller_clearance(
+    message: str, creator_clearance: str, required_clearance: str
+) -> None:
+    client = TestClient(create_app(FakeRunService(result=_success_result())))
+    created = client.post(
+        "/api/v1/runs",
+        json={"message": message, "user_clearance": creator_clearance},
+    )
+
+    assert created.status_code == 200
+    run = created.json()
+    hidden = client.get(f"/api/v1/runs/{run['run_id']}")
+
+    assert hidden.status_code == 404
+    assert hidden.json() == {
+        "code": "run_not_found",
+        "message": "The requested run does not exist.",
+    }
+    assert message not in hidden.text
+    assert run["answer"] not in hidden.text
+    assert run["data_classification"] not in hidden.text
+
+    visible = client.get(
+        f"/api/v1/runs/{run['run_id']}?user_clearance={required_clearance}"
+    )
+
+    assert visible.status_code == 200
+    assert visible.json()["run_id"] == run["run_id"]
+    assert visible.json()["data_classification"] == run["data_classification"]
+
+
+@pytest.mark.parametrize(
+    ("message", "creator_clearance", "required_clearance"),
+    (
+        ("Investigate P4711.", "CONFIDENTIAL", "CONFIDENTIAL"),
+        ("Investigate P9001.", "RESTRICTED", "RESTRICTED"),
+    ),
+)
+def test_investigation_and_pdf_visibility_match_direct_run_policy(
+    message: str, creator_clearance: str, required_clearance: str
+) -> None:
+    client = TestClient(create_app(FakeRunService(result=_success_result())))
+    run = client.post(
+        "/api/v1/runs",
+        json={"message": message, "user_clearance": creator_clearance},
+    ).json()
+    investigation_id = run["investigation_id"]
+
+    hidden_history = client.get(
+        f"/api/v1/investigations/{investigation_id}?user_clearance=PUBLIC"
+    )
+    hidden_pdf = client.get(
+        f"/api/v1/investigations/{investigation_id}/pdf?user_clearance=PUBLIC"
+    )
+
+    assert hidden_history.status_code == 404
+    assert hidden_history.json()["code"] == "investigation_not_found"
+    assert hidden_pdf.status_code == 404
+    assert hidden_pdf.json()["code"] == "investigation_not_found"
+    for response in (hidden_history, hidden_pdf):
+        assert message not in response.text
+        assert run["answer"] not in response.text
+        assert run["data_classification"] not in response.text
+
+    visible_history = client.get(
+        f"/api/v1/investigations/{investigation_id}?user_clearance={required_clearance}"
+    )
+    visible_pdf = client.get(
+        f"/api/v1/investigations/{investigation_id}/pdf"
+        f"?user_clearance={required_clearance}"
+    )
+
+    assert visible_history.status_code == 200
+    assert visible_history.json()["turns"][0]["run_id"] == run["run_id"]
+    assert visible_pdf.status_code == 200
+    assert run["answer"].encode() in visible_pdf.content
 
 
 def test_model_not_configured_returns_a_persisted_failed_run() -> None:
