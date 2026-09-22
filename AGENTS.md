@@ -387,6 +387,10 @@ Keep deterministic tests and AI / Agent evaluations as separate quality mechanis
 Every meaningful model-dependent agent capability should eventually have automated
 evaluation when the corresponding behavior and metric exist.
 
+Every genuine acceptance defect must receive regression coverage at the lowest reliable
+deterministic tier. Manual Real-Model E2E is a milestone/release gate, not a per-change
+gate. FAST and INTEGRATION quality gates must not invoke real or external LLMs.
+
 Possible metrics include:
 
 * task success
