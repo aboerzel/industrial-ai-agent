@@ -24,19 +24,16 @@ For the full industrial-value and scope statement, see [Capabilities and Industr
 
 ## Highlights
 
-- **Classification-aware model selection:** Persistent assignments are resolved by consumer and trusted classification, then checked for required capabilities and egress authorization; `RESTRICTED` data remains local-only.
-- **Final egress enforcement:** An independent, deny-by-default check runs immediately before every model-provider call; model selection alone cannot authorize data transfer.
-- **Bounded industrial tools:** Factory, Knowledge, Hardware, Runtime, Observability, and RCA capabilities are exposed through six authenticated MCP (Model Context Protocol) services with strict schemas and bounded operations.
-- **MHS-ready physical integration:** The implemented S04 reference-calibration demonstrator uses an internal `PhysicalDevicePort`, a simulated position-encoder adapter, Hardware MCP, and closed-loop verification. A future `MHSDeviceAdapter` remains replaceable below that port; MHS conformance is not claimed.
-- **Deterministic security boundaries:** Authorization, RLS, validation, tool allowlists, execution limits, and approval policy remain outside the LLM.
-- **Hybrid deterministic and AI processing:** Code owns guarantees; the model is used for bounded semantic decisions such as selecting the next approved tool or formulating an explanation.
-- **Human-in-the-loop write protection:** The implemented `create_maintenance_ticket` action pauses and executes only after explicit approval.
-- **Controlled knowledge access:** Classified factory records and engineering documents are filtered by server-side authorization and PostgreSQL RLS before they reach tools or retrieval.
-- **Repeatable model evaluation:** Versioned datasets measure initial tool selection, bounded tool trajectories, retrieval behavior, and evidence-before-action expectations.
-- **Trust & quality assurance:** Versioned Golden Regression scenarios, deterministic security boundaries, and observability make critical Agent behavior reproducible, testable, and inspectable.
-- **Metadata-only observability:** OpenTelemetry, Tempo, Loki, Prometheus, Grafana, and Langfuse trace operational metadata while excluding prompts, responses, tool content, documents, and secrets.
-- **Evidence-based RCA:** Recorded facts, deterministic derivations, and optional AI hypotheses are explicitly separated; an LLM cannot claim a confirmed root cause.
-- **Modern, testable architecture:** Python, FastAPI, LangGraph, Pydantic, MCP, PostgreSQL, Docker Compose, pytest, Ruff, focused integration tests, and documented ADRs support incremental evolution.
+- **Quality and reliability engineering:** Deterministic regression coverage and a resumable, fingerprinted Manual Real-Model E2E suite cover 12 real browser journeys and 46 user-visible interactions across German/English, multi-turn conversations, real DOM/reference navigation, all four clearance levels, and `SUCCESS` / `ATTENTION` / `FAILURE` semantics. The manual suite uses Local Qwen only, with no external provider dependency.
+- **End-to-end classified security and egress:** Authoritative `DataClassification` is monotonic across contextual runs; run, investigation, and PDF visibility, protected knowledge access, model egress, and authorization before protected HITL side effects are enforced deterministically, with no classification downgrade.
+- **Model catalog and policy-bound model execution:** Stable `model_id` values, a model catalog, persistent assignments, `MANUAL` / `AUTO` selection, capability guards, and security/egress guards govern execution without silent provider fallback.
+- **Authenticated, bounded MCP capabilities:** Authenticated MCP services expose bounded domain capabilities, with Factory, Knowledge, and Hardware in the agent path, Runtime, Observability, and RCA as diagnostic/development surfaces, and protocol-aware readiness checks.
+- **Hybrid deterministic and AI processing:** Deterministic code owns guarantees, policy, validation, and authorization; the LLM is used only for bounded semantic judgment such as selecting an approved tool or formulating an explanation.
+- **Authorized HITL before protected actions:** Protected side effects require approval; authorization is checked before `claim_resume`, resume is atomic and one-time, and unauthorized callers cannot consume the pending claim.
+- **PhysicalDevicePort and closed-loop recovery:** The S04 recovery demonstrator uses a `PhysicalDevicePort`, an observe/verify recovery lifecycle, Hardware MCP, and a future replaceable `MHSDeviceAdapter`; full MHS conformance and production MHS implementation are not claimed.
+- **Durable runtime and configuration integrity:** Durable investigations and checkpoints, persistent model assignments, upgrade-safe assignment migrations, configuration-drift protection, and protocol-aware service readiness support reliable operation.
+- **Metadata-only observability:** OpenTelemetry, Tempo, Loki, Prometheus, Grafana, and Langfuse capture safe operational metadata while excluding prompts, responses, tool content, documents, and secrets from diagnostics.
+- **Evidence-based RCA:** Trusted evidence, Evidence Requirements, and evidence-source capabilities separate `OBSERVED`, `DERIVED`, and `HYPOTHESIS` findings; RCA remains grounded and the model cannot self-declare evidence.
 
 Trust is not delegated to the LLM. It is built around the model through deterministic security boundaries, structured contracts, versioned Golden Regression scenarios, automated regression tests, and inspectable execution.
 
