@@ -1,4 +1,4 @@
-"""Normalize persisted default model assignments to local manual selection."""
+"""Add missing local default model assignments without rewriting configuration."""
 
 from alembic import op
 
@@ -9,7 +9,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    """Apply the one-time local default without creating a startup reset path."""
+    """Create defaults only for assignments that do not already exist.
+
+    The original 0019 seed is identifiable by its own ``updated_by`` value.  Only
+    that known migration-owned state may be normalized.  Every other existing row
+    may be an operator selection and remains untouched during an upgrade.
+    """
     op.execute("SET ROLE factory_migration_owner")
     op.execute(
         """
@@ -30,7 +35,8 @@ def upgrade() -> None:
             selection_mode = EXCLUDED.selection_mode,
             selection_policy = EXCLUDED.selection_policy,
             updated_at = CURRENT_TIMESTAMP,
-            updated_by = EXCLUDED.updated_by;
+            updated_by = EXCLUDED.updated_by
+        WHERE agent_runtime.model_assignments.updated_by = 'migration:0019';
         """
     )
     op.execute("RESET ROLE")

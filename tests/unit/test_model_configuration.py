@@ -170,6 +170,37 @@ def test_bootstrap_preserves_existing_choices_and_cross_consumer_rows() -> None:
     ).model_id == ModelId("local_alternative")
 
 
+def test_bootstrap_preserves_existing_automatic_selection_and_attribution() -> None:
+    assignments = Assignments()
+    existing = ModelAssignment(
+        consumer_id=AGENT_CONSUMER,
+        data_classification=DataClassification.RESTRICTED,
+        model_id=None,
+        selection_mode=ModelSelectionMode.AUTO,
+        selection_policy=ModelSelectionPolicy.QUALITY_FIRST,
+        updated_by="operator:carol",
+    )
+    assignments.upsert(existing)
+    service = _service(
+        assignments=assignments,
+        supported_consumers=(AGENT_CONSUMER, RCA_REASONING_CONSUMER),
+    )
+
+    service.ensure_default_assignments()
+
+    assert assignments.get(AGENT_CONSUMER, DataClassification.RESTRICTED) == (
+        ModelAssignment(
+            consumer_id=AGENT_CONSUMER,
+            data_classification=DataClassification.RESTRICTED,
+            model_id=None,
+            selection_mode=ModelSelectionMode.AUTO,
+            selection_policy=ModelSelectionPolicy.QUALITY_FIRST,
+            updated_at=datetime(2026, 9, 19, tzinfo=UTC),
+            updated_by="operator:carol",
+        )
+    )
+
+
 def test_assignment_cannot_grant_restricted_public_egress() -> None:
     with pytest.raises(ModelAssignmentPolicyError):
         _service().assign(

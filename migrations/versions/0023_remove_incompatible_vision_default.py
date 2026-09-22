@@ -1,4 +1,4 @@
-"""Remove an incompatible legacy vision model assignment."""
+"""Preserve existing vision assignments during upgrade."""
 
 from alembic import op
 
@@ -9,14 +9,13 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """Do not infer assignment provenance from consumer or model values.
+
+    At this revision, ``updated_by`` is informational only.  A matching
+    ``vision.vlm/local_quality`` row may be an explicit historical operator choice,
+    so capability validation must reject it at execution time instead of deleting it.
+    """
     op.execute("SET ROLE factory_migration_owner")
-    op.execute(
-        """
-        DELETE FROM agent_runtime.model_assignments
-        WHERE consumer_id = 'vision.vlm'
-          AND model_id = 'local_quality'
-        """
-    )
     op.execute("RESET ROLE")
 
 
