@@ -1,6 +1,10 @@
 # Browser E2E Journeys
 
-The browser E2E suite runs realistic multi-turn investigations against the local Compose runtime. It is intentionally separate from deterministic frontend unit tests and provider-contract tests.
+The browser E2E suite runs 12 realistic multi-turn user journeys against the local Compose
+runtime. It is intentionally separate from deterministic frontend unit tests and
+provider-contract tests. It exercises real DOM navigation in German and English,
+classification/clearance boundaries, resumable manual execution, persisted investigations,
+and PDF/document interactions.
 
 Run it after the local stack is healthy:
 
@@ -74,3 +78,7 @@ it does not compare generated answer prose byte-for-byte. A GREEN suite has no P
 finding and all required journeys. YELLOW means only bounded P2/P3 findings. RED means
 a security finding, unexpected technical failure, invalid response, internal error, or
 broken core navigation.
+
+This Manual Real-Model E2E suite is deliberately not intended for every development
+change. The next quality-protection task will formalize the FAST / INTEGRATION /
+MANUAL_REAL_MODEL ladder; this document describes the currently implemented workflow.

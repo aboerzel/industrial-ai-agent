@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Accepted, superseded in part by ADR-019
+
+The provider-independent `LLMClient` port and Infrastructure adapter boundary remain
+accepted. ADR-019 supersedes this ADR's profile-based model-selection and configuration
+details; references to semantic Model Profiles and `config/model_profiles.toml` below are
+historical context, not the current implementation.
 
 ## Context
 

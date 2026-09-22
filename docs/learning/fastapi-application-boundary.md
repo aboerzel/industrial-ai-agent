@@ -2,181 +2,148 @@
 
 ## Purpose
 
-FastAPI is the external HTTP Application Boundary for the local/demo Industrial AI Agent.
-It provides a versioned API contract and generated OpenAPI documentation without becoming
-an agent framework, tool protocol, routing policy, or security control.
+FastAPI is the external HTTP Application Boundary for the local/demo Industrial AI
+Agent. It publishes the versioned public contract and generated OpenAPI without becoming
+an agent framework, an MCP client, a model router, or an authorization decision maker.
+Swagger UI is at `/docs` and OpenAPI is at `/openapi.json`.
 
-Swagger UI at `/docs` remains the generated contract explorer. The separate static
-browser UI in `frontend/` is an HTTP/JSON client of this API, not a FastAPI template or
-an agent-runtime component.
+The browser UI in `frontend/` is a separate static HTTP/JSON client. It neither imports
+backend code nor selects a provider, model, MCP identity, classification, or permission.
+The clearance selector is a demo simulation of an authenticated user's clearance. It is
+not production identity-bound authorization: `user_clearance` supplies a demo context
+only; a production adapter must derive `SecurityContext` from a verified identity.
 
-## Responsibilities
+## Current API Surface
 
-FastAPI owns:
+The API intentionally exposes task and configuration boundaries, not underlying
+capabilities or MCP tools:
 
-* HTTP routing, input validation, response serialization, and sanitized error responses.
-* Public Pydantic API schemas.
-* UUID generation for API run IDs.
-* Delegation to a focused PostgreSQL-backed application run lifecycle store.
-* OpenAPI and Swagger UI publication.
-* A locally configured explicit CORS allowlist for the separate browser development
-  origin.
+| Route group | Current architectural purpose |
+| --- | --- |
+| `GET /health` | Process-local API liveness. Compose readiness remains a deployment concern. |
+| `POST /api/v1/runs` | Create a server-classified free-form troubleshooting or recovery run. |
+| `POST /api/v1/diagnostics` | Start the bounded, read-only INTERNAL diagnostic entry point. |
+| `GET /api/v1/runs/{run_id}` | Retrieve one persisted run only when visible to the supplied demo clearance. |
+| `GET /api/v1/investigations/{investigation_id}` | Retrieve the authorized visible history of an investigation. |
+| `GET /api/v1/investigations/{investigation_id}/pdf` | Export that already authorized visible history as a PDF. |
+| `GET /api/v1/documents/{document_id}` and `/download` | Open or download one currently authorized cataloged document. |
+| `POST /api/v1/runs/{run_id}/resume` | Approve or reject a pending protected action and continue its persisted thread. |
+| `GET /api/v1/models`, `/model-consumers`, `/model-assignments`; `PUT /api/v1/model-assignments` | Read catalog/configuration metadata and persist an operator model assignment. |
 
-FastAPI does not own:
+This is an architectural surface, not a replacement for generated OpenAPI. All public
+schemas are Pydantic models with strict validation and project public projections rather
+than LangGraph state, LangChain messages, MCP SDK values, provider SDK values, prompts,
+raw tool payloads, or exceptions.
 
-* tool discovery or direct tool calls;
-* factory or knowledge capabilities, repositories, retrieval, embeddings, or reranking;
-* model/provider selection, model names, execution zones, or egress authorization;
-* LangGraph state, tool-loop limits, checkpoint semantics, or HITL decisions;
-* browser rendering, templates, static asset hosting, or frontend UI logic;
-* Docker lifecycle or MCP service deployment.
-
-## Request Lifecycle
+## Run and Investigation Lifecycle
 
 ```text
-POST /api/v1/runs
-    -> FastAPI validates CreateRunRequest
-    -> UUID + PostgreSqlAgentRunStore record in agent_runtime
-    -> TroubleshootingRunService
-    -> trusted DataClassification + model consumer
-    -> persistent model assignment
-    -> capability validation + egress authorization
-    -> LangGraphTroubleshootingAgent
-    -> MCP Tool Provider
-    -> Factory MCP + Knowledge MCP
-    -> EgressCheckedLLMClient
-    -> AgentRunResult
-    -> public RunResponse
+Browser or API client
+  -> POST /api/v1/runs
+  -> server-authoritative classification and security context
+  -> persistent run/investigation record
+  -> consumer + classification model resolution
+  -> bounded LangGraph workflow and authorized MCP tools
+  -> terminal public run projection, or waiting_for_approval
+  -> authorized retrieval, investigation history, or PDF projection
 ```
 
-The endpoint is `async` and awaits the application service and the existing
-LangGraph/MCP path. It does not call `asyncio.run()` or create a nested event loop.
-The currently provider-independent `LLMClient` has a synchronous provider call; that
-existing inner boundary remains unchanged in this slice.
-
-## Public Contract
-
-The initial routes are:
-
-| Route | Purpose |
-| --- | --- |
-| `GET /health` | Process-local API liveness. |
-| `POST /api/v1/runs` | Start one confidential troubleshooting run. |
-| `GET /api/v1/runs/{run_id}` | Read a persistent lifecycle record. |
-| `GET /api/v1/models` | Read catalog metadata, including presentation names. |
-| `GET /api/v1/model-assignments` | Read current persistent assignments. |
-| `PUT /api/v1/model-assignments` | Assign a stable model ID after structural and egress-policy validation. |
-
-`CreateRunRequest` accepts exactly one required non-empty `message`. It deliberately
-does not accept model, provider, semantic profile, execution zone, or data
-classification. The service sets troubleshooting requests to `CONFIDENTIAL`
-server-side, so a client cannot downgrade the security context.
-
-`RunResponse` exposes only `run_id`, public `status`, optional `answer`, and
-normalized `tool_calls`. It excludes internal LangChain messages, LangGraph state, MCP
-SDK values, provider SDK values, prompts, and raw tool-result payloads.
-
-## Run Store and Future HITL
-
-`PostgreSqlAgentRunStore` keeps `running`, `waiting_for_approval`, `success`,
-`limit_reached`, or `failed` records in `agent_runtime.agent_runs`. It is a narrow
-SQLAlchemy 2.x adapter and not a generic repository platform. The row persists the
-run/thread UUID, effective classification, selected stable model ID, normalized tool-call
-summary, sanitized errors, and lifecycle timestamps. PostgreSQL RLS remains the database
-boundary; the ORM is mapping/query composition, not authorization enforcement.
-
-The UUID and lifecycle model permit a later `POST /api/v1/runs/{run_id}/resume` endpoint
-for ADR-011 approval flows. LangGraph checkpoints are persisted separately with the
-official `AsyncPostgresSaver` in its framework-managed schema. This slice does not yet
-publish a resume, streaming, or approval HTTP endpoint.
-
-## Auth-ready Classification Context
-
-ADR-014 introduces a provider-independent `SecurityContext` with `subject_id`, roles,
-clearance, and `authenticated`. The current API still injects the unauthenticated local
-`demo-engineer` context server-side; no request field can lower its clearance or choose
-a model. A future JWT/OIDC boundary belongs in FastAPI and must translate a verified
-identity into this existing structure before application, MCP, and PostgreSQL access.
-The LangGraph agent remains unaware of authentication mechanics.
-
-## Error and Security Boundary
-
-FastAPI preserves deterministic inner policy decisions:
-
-* invalid request schemas use FastAPI/Pydantic `422`;
-* unknown runs return a sanitized `404`;
-* missing assignments and capability mismatches return normalized `503` failures;
-* `ModelEgressDeniedError` returns `403` and does not authorize a fallback;
-* unavailable MCP services return `503`;
-* unexpected failures return a generic `500`; when the failed run was already
-  persisted, the sanitized error also carries only its existing `investigation_id`.
-
-Public errors contain a stable code, safe message, and, only for an already persisted
-run, its opaque investigation identity. They do not expose stack traces, secrets,
-prompts, raw tool results, or internal failure diagnostics.
-
-MCP's local network transport is independent from model egress. Factory and Knowledge
-MCP may run in Docker, while ADR-009 still requires the final local-only egress check for
-a confidential troubleshooting run. The API uses no CORS wildcard. Its local entry point
-permits only `http://localhost:8080` and `http://127.0.0.1:8080` by default;
-`AGENT_FRONTEND_ORIGIN` can provide one explicit replacement origin for a changed local
-deployment. Production origin policy
-must be configured with the real browser client and its authentication, authorization,
-TLS, and rate-limiting controls. The API remains local/demo only and has no
-authentication, authorization, TLS, rate limiting, remote deployment, or agent container
-in this slice.
-
-## OpenAPI
-
-FastAPI derives OpenAPI and Swagger UI from the public Pydantic schemas and route
-declarations. The contract is available at `/openapi.json`; Swagger UI is at `/docs`.
-Tests assert that this schema exposes the public run models rather than internal agent or
-MCP types.
-
-## Local Usage
-
-Start the two MCP services, then run:
-
-```powershell
-python -m industrial_ai_agent.infrastructure.agent_api
-```
-
-The default API address is `http://127.0.0.1:8000`. The Composition Root defaults to
-Streamable HTTP MCP endpoints at ports `8001` and `8002`; `AGENT_MCP_TRANSPORT=stdio`
-retains the development/test transport.
-
-For the separate browser client, run:
-
-```powershell
-python -m http.server 8080 --directory frontend
-```
-
-Then open `http://localhost:8080`. The frontend sends only public run requests and reads
-public run responses; it cannot select a model, provider, MCP server, or data
+Runs persist in the application lifecycle store; an investigation is an ordered grouping
+of those runs, not a new authorization scope. A contextual, identifierless follow-up may
+inherit only trusted, visible persisted context monotonically. An explicit higher target
+escalates classification. Inaccessible prior context cannot be inherited, and unknown or
+untrusted context falls back conservatively. Neither the user nor the model can lower
 classification.
 
-See [ADR-013](../decisions/ADR-013-fastapi-application-boundary.md) for the durable
-boundary decision.
+Direct run retrieval, investigation retrieval, PDF export, and document access evaluate
+the current clearance before projection. Protected content is not made visible merely
+because it was present in an earlier turn. PDF rendering receives the authorized persisted
+investigation projection; it does not query broader data again. It preserves per-turn
+language and user severity, renders trusted structured references, excludes inaccessible
+higher-classification content, and sanitizes technical error details.
 
-## Durable Resume Contract
+## Model Configuration and Egress
 
-`RunResponse` represents `waiting_for_approval` with a public approval request.
-`POST /api/v1/runs/{run_id}/resume` accepts a Pydantic-validated
-`ResumeRunRequest { decision: approve | reject }`. Invalid decisions receive `422`,
-unknown IDs receive `404`, and a run that is no longer waiting receives `409`.
+`config/model_catalog.toml` defines stable `model_id` values and model metadata. PostgreSQL
+persists one assignment for each `(consumer_id, DataClassification)`. `MANUAL` assigns one
+stable model ID. `AUTO` persists a ranking policy (`QUALITY_FIRST` or `COST_FIRST`) and
+selects only among statically available, capability-compatible, security-eligible catalog
+candidates before invocation. Both modes use the same hard guards.
 
-## Strict Public Projection
+```text
+trusted DataClassification + consumer_id
+  -> persistent MANUAL assignment or AUTO ranking policy
+  -> ModelResolutionService and catalog lookup
+  -> per-call capability validation
+  -> security/egress authorization
+  -> final provider-boundary capability and egress guard
+  -> provider adapter
+```
 
-All public request, response, approval, and normalized tool-call contracts are Pydantic
-v2 models with `extra="forbid"`. FastAPI therefore rejects unknown request fields and
-invalid `ResumeDecision` values with its normal `422` response before a run is started
-or resumed. The public request cannot name a model, provider, profile, execution zone,
-classification, tool, or idempotency key.
+An assignment is configuration, never authorization. Missing compatible assignments,
+capability mismatches, and security denials fail closed. Defaults create only missing
+compatible assignments; explicit operator choices persist across restart and upgrade.
+Provider availability, rate limits, timeouts, cost, and failures never cause automatic
+provider fallback. The implemented specialized consumer is `rca.reasoning`; future
+consumers must declare their call-level requirements. In particular, a `vision.vlm`
+consumer requiring `VISION` is not compatible with `local_quality` unless the catalog
+actually declares that capability.
 
-Successful responses are also a security boundary. The API projects only the public
-run ID, lifecycle status, final text, normalized executed calls, and a pending approval
-summary. It never serializes LangGraph checkpoints, message state, MCP objects, raw tool
-payloads, prompts, or exceptions. Before projection, strings resembling stack traces,
-database URLs, credential assignments, local paths, or checkpoint data are replaced by a
-safe generic result. This is defense in depth; inner failures already map to stable API
-errors.
+## Durable HITL and Recovery
+
+The official LangGraph PostgreSQL checkpointer persists a run's thread. A protected
+maintenance or physical recovery action interrupts the graph and returns
+`waiting_for_approval`. `POST /api/v1/runs/{run_id}/resume` accepts only `approve` or
+`reject`; it checks authorization before atomically claiming the pending action, then
+resumes the same thread with its persisted model and classification binding. A rejected
+action never executes. Hardware recovery additionally performs deterministic fresh
+precondition checks and post-action verification through `ClosedLoopRecoveryService`.
+
+The demo records the approval clearance used for attribution, not a real authenticated
+user identity. This is deliberately not production approval attribution. Authentication,
+identity-bound authorization, TLS, and rate limiting remain production integration work.
+
+## User Severity
+
+`SUCCESS`, `ATTENTION`, and `FAILURE` are turn-local presentation semantics, separate
+from HTTP status and persisted run status/error codes.
+
+| Severity | Meaning |
+| --- | --- |
+| `SUCCESS` | A normally completed task. |
+| `ATTENTION` | A bounded operational limitation, for example insufficient clearance, unavailable requested data, rate limiting, or unavailable/incomplete evidence. |
+| `FAILURE` | A technical malfunction, for example an internal error, invalid model output, execution timeout, or MCP/protocol/database failure. |
+
+Internal lifecycle states and error codes remain diagnostic evidence. They must not be
+presented as an equivalent UX severity.
+
+## Deployment and MCP Dependencies
+
+The normal Compose stack is started from the repository root with:
+
+```powershell
+docker compose up --build -d
+```
+
+Core agent runtime dependencies are Factory MCP, Knowledge MCP, and Hardware MCP when a
+recovery profile requires it. `agent-api` does not consume Runtime MCP, Observability MCP,
+or RCA MCP. Runtime and Observability MCP are diagnostic/development services. RCA MCP is
+a read-only development consumer surface (`analyze_run`), not an `agent-api` dependency
+or an additional troubleshooting path.
+
+Every deployed MCP readiness check is protocol-aware: it establishes a Streamable HTTP
+session, performs MCP `initialize`, authenticates the session, calls `tools/list`, and
+requires the service's declared bounded tools to be visible. It is not a TCP-port check.
+Compose exposes the browser at `http://localhost:8080`, API/Swagger at
+`http://localhost:8000/docs`, Grafana at `http://localhost:3000`, Langfuse at
+`http://localhost:3001`, and Prometheus at `http://localhost:9090`.
+
+## Validation
+
+From the repository root, run backend tests with the configured project interpreter. For
+frontend unit tests use `npm --prefix frontend test`. The expensive browser real-model
+workflow is documented in [Browser E2E Journeys](browser-e2e-journeys.md); it is manual
+regression work, not the normal development gate.
+
+See [ADR-013](../decisions/ADR-013-fastapi-application-boundary.md) for the enduring
+outer-adapter decision and its explicit current-state refinement.

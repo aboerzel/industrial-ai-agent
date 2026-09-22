@@ -592,10 +592,12 @@ creates LangChain `StructuredTool` objects from discovered MCP schemas and has n
 logic. It is a **TEMPORARY COMPATIBILITY ADAPTER** until a stable
 `langchain-mcp-adapters` release supports MCP SDK v2.
 
-Compose readiness for Factory, Knowledge, and Hardware MCP is protocol-aware: it requires
-a Streamable HTTP connection, MCP initialization, and discovery of the service's required
-bounded capabilities, rather than only an open TCP port. `agent-api` waits for those
-readiness states at startup. Its MCP provider also makes bounded discovery retries for a
+Compose readiness for every deployed MCP service (Factory, Knowledge, Hardware, Runtime,
+Observability, and RCA) is protocol-aware: it requires a Streamable HTTP connection,
+authenticated session, MCP initialization, `tools/list`, and discovery of the service's
+required bounded capabilities, rather than only an open TCP port. `agent-api` waits at
+startup only for its applicable Factory, Knowledge, and Hardware dependencies. Its MCP
+provider also makes bounded discovery retries for a
 transient service-start or restart race before a run receives a session; a persistent
 outage remains a sanitized `mcp_service_unavailable` failure and never broadens tool
 exposure.

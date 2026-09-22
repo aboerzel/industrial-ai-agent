@@ -80,7 +80,8 @@ defaults:
 * deterministic sequential-dispatch and limit rules
 * `DataClassification` and `ExecutionZone`
 * `ModelEgressPolicy` and the final pre-adapter egress boundary
-* `TaskRequirements` and `DeterministicModelRouter`
+* server-authoritative run classification, persistent assignments, and model-execution
+  policy (refined by ADR-019)
 * semantic Model Profiles
 * retrieval ports and provenance
 * evaluation datasets, ground truth, and deterministic scoring
@@ -97,10 +98,11 @@ LangGraph and LangChain must not construct provider clients directly, select fal
 models, authorize egress, or send sensitive prompts, tool results, retrieval results, or
 traces to an unapproved external service.
 
-ADR-008 also remains binding. A Composition Root constructs explicit Task Requirements,
-applies security eligibility through `DeterministicModelRouter`, and injects the selected
-semantic Model Profile into the graph path. The graph does not construct a router or
-choose a concrete provider or model.
+ADR-019 supersedes ADR-008's routing-oriented selection implementation. A Composition
+Root resolves authoritative run classification, persistent consumer/classification
+assignment, catalog model, call-level capabilities, and ADR-009 eligibility through
+`ModelResolutionService`; it injects the selected stable model ID into the graph path.
+The graph does not construct a resolver or choose a concrete provider or model.
 
 ### Tool Boundary
 
