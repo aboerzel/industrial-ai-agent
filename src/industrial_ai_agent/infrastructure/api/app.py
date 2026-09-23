@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import NoReturn
 from uuid import UUID, uuid4
@@ -148,6 +149,7 @@ def create_app(
     telemetry: Telemetry | None = None,
     document_content_reader: AuthorizedDocumentContentReader | None = None,
     model_configuration_service: ModelConfigurationService | None = None,
+    operational_readiness_check: Callable[[], Awaitable[None]] | None = None,
     execution_timeout_seconds: float = 90.0,
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
@@ -185,6 +187,26 @@ def create_app(
         summary="Report API process health",
     )
     async def health() -> HealthResponse:
+        return HealthResponse()
+
+    @app.get(
+        "/ready",
+        response_model=HealthResponse,
+        summary="Report dependency-aware API readiness",
+    )
+    async def ready() -> HealthResponse:
+        if operational_readiness_check is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Operational readiness is not configured.",
+            )
+        try:
+            await operational_readiness_check()
+        except Exception:  # noqa: BLE001 - never expose dependency details.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Required operational dependencies are unavailable.",
+            ) from None
         return HealthResponse()
 
     @app.get(

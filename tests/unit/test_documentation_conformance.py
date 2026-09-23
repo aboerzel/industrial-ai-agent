@@ -17,6 +17,7 @@ def test_fastapi_boundary_documented_routes_exist_in_api_source() -> None:
 
     routes = {
         "/health": '"/health"',
+        "/ready": '"/ready"',
         "/api/v1/runs": 'f"{API_PREFIX}/runs"',
         "/api/v1/diagnostics": 'f"{API_PREFIX}/diagnostics"',
         "/api/v1/runs/{run_id}": 'f"{API_PREFIX}/runs/{{run_id}}"',

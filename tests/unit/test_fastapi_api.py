@@ -196,6 +196,36 @@ def test_health_returns_ok() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_ready_requires_an_operational_readiness_check() -> None:
+    client = TestClient(create_app(FakeRunService(result=_success_result())))
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+
+
+def test_ready_reports_dependency_availability() -> None:
+    async def unavailable() -> None:
+        raise RuntimeError("Factory MCP unavailable")
+
+    async def available() -> None:
+        return None
+
+    unavailable_app = _create_app(
+        FakeRunService(result=_success_result()),
+        run_store=InMemoryAgentRunStore(),
+        operational_readiness_check=unavailable,
+    )
+    available_app = _create_app(
+        FakeRunService(result=_success_result()),
+        run_store=InMemoryAgentRunStore(),
+        operational_readiness_check=available,
+    )
+
+    assert TestClient(unavailable_app).get("/ready").status_code == 503
+    assert TestClient(available_app).get("/ready").json() == {"status": "ok"}
+
+
 def test_default_execution_budget_supports_bounded_sequential_tool_runs() -> None:
     app = create_app(FakeRunService(result=_success_result()))
 

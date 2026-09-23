@@ -17,6 +17,9 @@ from industrial_ai_agent.application.model_configuration import (
     ModelConfigurationService,
 )
 from industrial_ai_agent.domain.security import DEMO_RUNTIME_SECURITY_CONTEXT
+from industrial_ai_agent.infrastructure.agent_api_readiness import (
+    create_default_agent_api_readiness_check,
+)
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.observed_run_store import (
     ObservedAgentRunStore,
@@ -127,6 +130,7 @@ def create_default_app():
             Path(os.getenv("DOCUMENT_ROOT", str(DEFAULT_DOCUMENT_ROOT))),
         ),
         model_configuration_service=model_configuration_service,
+        operational_readiness_check=create_default_agent_api_readiness_check(),
     )
 
 

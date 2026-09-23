@@ -21,6 +21,7 @@ capabilities or MCP tools:
 | Route group | Current architectural purpose |
 | --- | --- |
 | `GET /health` | Process-local API liveness. Compose readiness remains a deployment concern. |
+| `GET /ready` | Operational readiness: authenticated MCP `initialize` plus `tools/list` for every Factory, Knowledge, and Hardware capability required by Agent API. Returns 503 until all are ready. |
 | `POST /api/v1/runs` | Create a server-classified free-form troubleshooting or recovery run. |
 | `POST /api/v1/diagnostics` | Start the bounded, read-only INTERNAL diagnostic entry point. |
 | `GET /api/v1/runs/{run_id}` | Retrieve one persisted run only when visible to the supplied demo clearance. |
@@ -137,6 +138,9 @@ requires the service's declared bounded tools to be visible. It is not a TCP-por
 Compose exposes the browser at `http://localhost:8080`, API/Swagger at
 `http://localhost:8000/docs`, Grafana at `http://localhost:3000`, Langfuse at
 `http://localhost:3001`, and Prometheus at `http://localhost:9090`.
+`agent-api` preserves the liveness/readiness distinction: Docker checks `/ready`, while
+`/health` remains a process-only endpoint. The check opens fresh MCP sessions, so it does
+not cache a failed startup connection or a stale tool list.
 
 ## Validation
 

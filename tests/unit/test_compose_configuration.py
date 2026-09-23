@@ -101,6 +101,10 @@ def test_agent_dependencies_use_protocol_aware_mcp_readiness() -> None:
         assert isinstance(dependency, dict)
         assert dependency["condition"] == "service_healthy"
 
+    dockerfile = (PROJECT_ROOT / "Dockerfile.agent-api").read_text(encoding="utf-8")
+    assert "http://127.0.0.1:8000/ready" in dockerfile
+    assert "socket.create_connection" not in dockerfile
+
 
 def test_mcp_dockerfiles_use_the_same_protocol_aware_readiness_contract() -> None:
     for service_name, expected_tools in _MCP_READINESS_REQUIRED_TOOLS.items():

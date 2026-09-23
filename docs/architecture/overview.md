@@ -410,7 +410,10 @@ status, narrative final answer, bounded structured investigation steps derived f
 actual tool trajectory, bounded structured follow-up prompts, and normalized tool calls;
 they do not expose LangGraph state,
 LangChain messages, MCP types, prompts, or raw tool payloads. `GET /health` is
-process-local liveness only, and `GET /api/v1/runs/{run_id}` reads the durable application
+process-local liveness only. `GET /ready` separately establishes an authenticated MCP
+session with Factory, Knowledge, and Hardware, runs `initialize` and `tools/list`, and
+requires their agent-authorized capabilities. Compose uses this dependency-aware
+operational readiness endpoint for the Agent API Docker healthcheck. `GET /api/v1/runs/{run_id}` reads the durable application
 record. The separate static `frontend/` browser client communicates only with this public
 HTTP/JSON API. Compose serves it with a loopback-only Nginx service at
 `http://localhost:8080`; the local API entry point permits only that origin through
