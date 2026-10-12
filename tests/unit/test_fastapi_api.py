@@ -369,6 +369,34 @@ def test_cors_allows_both_explicit_local_demo_origins(origin: str) -> None:
     assert response.headers["access-control-allow-methods"] == "GET, POST, PUT"
 
 
+def test_cors_allows_model_configuration_audit_header() -> None:
+    origin = "http://localhost:8080"
+    client = TestClient(
+        create_app(
+            FakeRunService(result=_success_result()),
+            allowed_origins=(origin,),
+        )
+    )
+
+    response = client.options(
+        "/api/v1/model-assignments",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": (
+                "content-type,x-model-configuration-action"
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert (
+        "x-model-configuration-action"
+        in response.headers["access-control-allow-headers"].lower()
+    )
+
+
 def test_cors_rejects_unconfigured_origin() -> None:
     client = TestClient(
         create_app(

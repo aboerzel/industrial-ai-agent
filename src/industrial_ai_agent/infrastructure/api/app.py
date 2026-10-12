@@ -178,7 +178,7 @@ def create_app(
             allow_origins=list(allowed_origins),
             allow_credentials=False,
             allow_methods=["GET", "POST", "PUT"],
-            allow_headers=["Content-Type"],
+            allow_headers=["Content-Type", "X-Model-Configuration-Action"],
         )
 
     @app.get(
