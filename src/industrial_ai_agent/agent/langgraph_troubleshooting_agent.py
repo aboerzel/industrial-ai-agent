@@ -52,6 +52,7 @@ from industrial_ai_agent.agent.model_egress import (
 from industrial_ai_agent.agent.response_language import (
     ResponseLanguage,
     detect_response_language,
+    is_response_language_compliant,
     response_language_instruction,
 )
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
@@ -130,8 +131,11 @@ MCP_TROUBLESHOOTING_SYSTEM_MESSAGE = (
 
 _FINAL_OUTPUT_NORMALIZATION_SYSTEM_MESSAGE = (
     "You normalize an already authorized industrial troubleshooting draft into the "
-    "required final JSON schema. Preserve its supported findings and language. Return only "
-    "the JSON object. `answer` is Markdown analysis, evidence, findings, explanation, "
+    "required final JSON schema. Preserve its supported findings and technical identifiers. "
+    "Rewrite every user-facing string in the selected response language stated below, "
+    "translating the draft and observations when necessary. Never preserve the draft or "
+    "source language when it differs from the selected response language. Return only the "
+    "JSON object. `answer` is Markdown analysis, evidence, findings, explanation, "
     "conclusions, and status. `investigation_steps` is the only channel for completed "
     "tool observations and must exactly mirror the system-supplied authorized tool steps; "
     "use only their observations for concise findings. `next_steps` is the only channel for concrete optional "
@@ -720,6 +724,21 @@ class LangGraphTroubleshootingAgent:
                 if normalized_output is not final_output:
                     final_output = normalized_output
                     final_messages.append(normalized_message)
+                response_language = ResponseLanguage(state["response_language"])
+                if _has_response_language_mismatch(final_output, response_language):
+                    corrected_message = normalizer.invoke(
+                        _final_output_language_correction_messages(
+                            final_output,
+                            response_language,
+                            _authorized_tool_observations(state),
+                        )
+                    )
+                    corrected_output = _normalized_final_output_or_draft(
+                        corrected_message, draft=final_output
+                    )
+                    if corrected_output is not final_output:
+                        final_output = corrected_output
+                        final_messages.append(corrected_message)
             final_output = _with_safe_narrative(
                 final_output, ResponseLanguage(state["response_language"])
             )
@@ -2122,10 +2141,49 @@ def _final_output_normalization_messages(
         ),
         HumanMessage(
             content=(
-                "Normalize this final draft without adding evidence. The authorized "
+                f"The selected response language is {response_language.display_name}. "
+                f"Translate every user-facing string into {response_language.display_name}, "
+                "even when the draft or observations use another language. Normalize this "
+                "final draft without adding evidence. The authorized "
                 "tool observations define the only valid investigation_steps. Return "
                 "one step per observation in the supplied order, preserving each exact "
                 "step number and action. Do not expose the observation payload verbatim:\n\n"
+                + json.dumps(
+                    {
+                        "draft": draft.model_dump(mode="json"),
+                        "authorized_tool_observations": authorized_tool_observations,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        ),
+    ]
+
+
+def _final_output_language_correction_messages(
+    draft: FinalAgentOutput,
+    response_language: ResponseLanguage,
+    authorized_tool_observations: tuple[dict[str, object], ...],
+) -> list[AnyMessage]:
+    """Request one bounded correction after a clear response-language violation."""
+    language = response_language.display_name
+    return [
+        SystemMessage(
+            content=(
+                "You correct an already authorized industrial troubleshooting JSON "
+                "object that violated its response-language contract. Preserve supported "
+                "facts and technical identifiers, but translate every user-facing string "
+                f"into {language}. Do not retain prose in any other language. Return only "
+                "the required JSON object.\n\n"
+                f"{response_language_instruction(response_language)}"
+            )
+        ),
+        HumanMessage(
+            content=(
+                f"Correct this object now. The required language is {language}. Translate "
+                "`answer`, every `investigation_steps[].finding`, and every `next_steps[]` "
+                "string without adding evidence. Authorized observations are supplied only "
+                "to preserve supported facts:\n\n"
                 + json.dumps(
                     {
                         "draft": draft.model_dump(mode="json"),
@@ -2919,15 +2977,17 @@ def _narrative_final_output(text: str) -> FinalAgentOutput:
 def _with_safe_narrative(
     output: FinalAgentOutput, response_language: ResponseLanguage
 ) -> FinalAgentOutput:
-    """Replace only a model-produced reserved section with a safe final narrative.
+    """Replace an unsafe model narrative with a localized bounded response.
 
     The normalizer may be unavailable or may itself return an invalid object. In that
     case the initial draft remains usable only when it also satisfies the presentation
-    contract. We do not extract or rewrite Markdown sections; a reserved section is
-    replaced with a localized, evidence-neutral sentence while structured fields stay
-    available for deterministic trajectory validation.
+    and response-language contracts. We do not extract, translate, or rewrite model
+    prose deterministically; a violating output is replaced with a localized,
+    evidence-neutral sentence while structured fields stay available for deterministic
+    trajectory validation.
     """
-    if not (
+    has_language_mismatch = _has_response_language_mismatch(output, response_language)
+    if not has_language_mismatch and not (
         output.forbidden_action_sections()
         or output.forbidden_investigation_summary_sections()
     ):
@@ -2940,7 +3000,21 @@ def _with_safe_narrative(
     return FinalAgentOutput(
         answer=answer,
         investigation_steps=output.investigation_steps,
-        next_steps=output.next_steps,
+        next_steps=() if has_language_mismatch else output.next_steps,
+    )
+
+
+def _has_response_language_mismatch(
+    output: FinalAgentOutput, response_language: ResponseLanguage
+) -> bool:
+    user_facing_text = (
+        output.answer,
+        *(step.finding for step in output.investigation_steps),
+        *output.next_steps,
+    )
+    return any(
+        not is_response_language_compliant(text, response_language)
+        for text in user_facing_text
     )
 
 

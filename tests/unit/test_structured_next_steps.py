@@ -1328,3 +1328,123 @@ def test_structured_finalizer_preserves_german_language_and_identifiers() -> Non
     assert "Response language: German." in (
         client.requests[-1].messages[0].content or ""
     )
+
+
+def test_structured_finalizer_translates_draft_to_selected_english() -> None:
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text="S04 benötigt weitere Untersuchung.",
+                finish_reason=FinishReason.STOP,
+            ),
+            LLMResponse(
+                text=(
+                    '{"answer":"S04 needs further investigation.",'
+                    '"next_steps":["Check the current status of station S04."]}'
+                ),
+                finish_reason=FinishReason.STOP,
+            ),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(
+        agent.aanswer_via_mcp(
+            "Erkläre den Befund an S04.", response_language=ResponseLanguage.EN
+        )
+    )
+
+    assert result.final_answer == "S04 needs further investigation."
+    assert result.next_steps == ("Check the current status of station S04.",)
+    finalizer_instruction = client.requests[-1].messages[0].content or ""
+    assert "Response language: English." in finalizer_instruction
+    assert "translating the draft and observations when necessary" in (
+        finalizer_instruction
+    )
+    assert "Never preserve the draft or source language" in finalizer_instruction
+
+
+def test_wrong_language_finalizer_gets_one_bounded_english_correction() -> None:
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text="S04 benötigt weitere Untersuchung.",
+                finish_reason=FinishReason.STOP,
+            ),
+            LLMResponse(
+                text=(
+                    '{"answer":"S04 benötigt weitere Untersuchung.",'
+                    '"next_steps":["Prüfe den aktuellen Status von Station S04."]}'
+                ),
+                finish_reason=FinishReason.STOP,
+            ),
+            LLMResponse(
+                text=(
+                    '{"answer":"S04 needs further investigation.",'
+                    '"next_steps":["Check the current status of station S04."]}'
+                ),
+                finish_reason=FinishReason.STOP,
+            ),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(
+        agent.aanswer_via_mcp(
+            "Erkläre den Befund an S04.", response_language=ResponseLanguage.EN
+        )
+    )
+
+    assert result.final_answer == "S04 needs further investigation."
+    assert result.next_steps == ("Check the current status of station S04.",)
+    correction_instruction = client.requests[-1].messages[0].content or ""
+    assert "violated its response-language contract" in correction_instruction
+    assert "translate every user-facing string into English" in correction_instruction
+
+
+def test_persistent_wrong_language_cannot_be_published_for_selected_english() -> None:
+    german_output = LLMResponse(
+        text=(
+            '{"answer":"S04 benötigt weitere Untersuchung.",'
+            '"next_steps":["Prüfe den aktuellen Status von Station S04."]}'
+        ),
+        finish_reason=FinishReason.STOP,
+    )
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text="S04 benötigt weitere Untersuchung.",
+                finish_reason=FinishReason.STOP,
+            ),
+            german_output,
+            german_output,
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(
+        agent.aanswer_via_mcp(
+            "Erkläre den Befund an S04.", response_language=ResponseLanguage.EN
+        )
+    )
+
+    assert result.final_answer == "The authorized check is complete."
+    assert result.next_steps == ()

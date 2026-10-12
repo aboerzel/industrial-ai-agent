@@ -259,12 +259,16 @@ discovers and authorizes tools through the temporary LangChain bridge, executes 
 bounded sequential loop, then closes all sessions. Transport selection is made by an
 outer Composition Root.
 
-For every new free-text run, deterministic local DE/EN detection selects a closed
-`response_language` value from the original user request; ambiguous or identifier-only
-requests fall back to English. The value is stored with the durable run record and the
-LangGraph checkpoint, and the same explicit language instruction remains in the message
-history for every model iteration and HITL resume. Tool results and source documents are
-not translated and cannot alter the selected response language.
+For every new free-text run, an explicitly supplied closed `response_language` value is
+authoritative regardless of the request language. Only callers that omit the value use
+deterministic local DE/EN detection from the original request; ambiguous or
+identifier-only requests fall back to English. The resolved value is stored with the
+durable run record and the LangGraph checkpoint, and the same explicit language
+instruction remains in the message history for every model iteration and HITL resume.
+Final-output normalization translates model drafts into that language when needed. A
+deterministic final-egress check replaces clearly mismatched answer text with a localized
+safe response and omits mismatched model-generated next steps. Tool results and source
+documents are not translated and cannot alter the selected response language.
 
 Runtime and Observability MCP are intentionally separate evidence sources:
 

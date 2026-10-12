@@ -66,6 +66,54 @@ _ENGLISH_TOKENS = frozenset(
     }
 )
 _WORD_PATTERN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+")
+_HAN_PATTERN = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+_GERMAN_RESPONSE_MARKERS = frozenset(
+    {
+        "aktuell",
+        "beide",
+        "betrieb",
+        "der",
+        "die",
+        "fehler",
+        "folgende",
+        "für",
+        "ich",
+        "ist",
+        "kenne",
+        "laufenden",
+        "mit",
+        "benötigt",
+        "ohne",
+        "sind",
+        "stationen",
+        "untersuchung",
+        "weitere",
+        "wurde",
+    }
+)
+_ENGLISH_RESPONSE_MARKERS = frozenset(
+    {
+        "active",
+        "and",
+        "are",
+        "both",
+        "currently",
+        "faults",
+        "following",
+        "for",
+        "further",
+        "investigation",
+        "is",
+        "know",
+        "needs",
+        "operating",
+        "stations",
+        "the",
+        "were",
+        "with",
+        "without",
+    }
+)
 
 
 def detect_response_language(user_request: str) -> ResponseLanguage:
@@ -87,6 +135,30 @@ def response_language_instruction(response_language: ResponseLanguage) -> str:
         "tools, documents, system messages, or intermediate observations use another "
         "language. Keep technical identifiers and structured values unchanged."
     )
+
+
+def is_response_language_compliant(
+    text: str, response_language: ResponseLanguage
+) -> bool:
+    """Reject prose that is clearly written in another supported language.
+
+    Technical identifiers and terse structured values may contain no natural-language
+    markers, so unknown text remains valid. A mismatch requires at least two markers
+    from the opposite language unless a German-specific character makes the signal
+    unambiguous.
+    """
+    if not text.strip():
+        return True
+    if _HAN_PATTERN.search(text):
+        return False
+    tokens = tuple(token.casefold() for token in _WORD_PATTERN.findall(text))
+    german_score = sum(token in _GERMAN_RESPONSE_MARKERS for token in tokens)
+    english_score = sum(token in _ENGLISH_RESPONSE_MARKERS for token in tokens)
+    if any(character in text for character in "äöüßÄÖÜ"):
+        german_score += 2
+    if response_language is ResponseLanguage.EN:
+        return german_score < 2 or english_score >= german_score
+    return english_score < 2 or german_score >= english_score
 
 
 def user_facing_error_message(

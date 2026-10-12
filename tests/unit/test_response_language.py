@@ -7,6 +7,7 @@ from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
 from industrial_ai_agent.agent.response_language import (
     ResponseLanguage,
     detect_response_language,
+    is_response_language_compliant,
     user_facing_error_message,
 )
 from industrial_ai_agent.domain.security import DataClassification
@@ -35,6 +36,38 @@ def test_detect_response_language_uses_a_stable_english_fallback(
     user_message: str, expected: ResponseLanguage
 ) -> None:
     assert detect_response_language(user_message) is expected
+
+
+@pytest.mark.parametrize(
+    ("text", "selected_language", "expected"),
+    (
+        (
+            "Ich kenne folgende Stationen. Beide Stationen sind aktuell in Betrieb.",
+            ResponseLanguage.EN,
+            False,
+        ),
+        (
+            "I know the following stations. Both stations are currently operating.",
+            ResponseLanguage.EN,
+            True,
+        ),
+        (
+            "S04 needs further investigation.",
+            ResponseLanguage.DE,
+            False,
+        ),
+        (
+            "S04 benötigt weitere Untersuchung.",
+            ResponseLanguage.DE,
+            True,
+        ),
+        ("S04: RUNNING", ResponseLanguage.EN, True),
+    ),
+)
+def test_response_language_compliance_rejects_clear_mismatches(
+    text: str, selected_language: ResponseLanguage, expected: bool
+) -> None:
+    assert is_response_language_compliant(text, selected_language) is expected
 
 
 def test_run_store_preserves_response_language_across_approval_lifecycle() -> None:
