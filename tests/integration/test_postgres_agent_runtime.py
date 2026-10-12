@@ -669,7 +669,9 @@ def test_fastapi_run_survives_application_recreation() -> None:
                 _context(DataClassification.CONFIDENTIAL)
             ),
         )
-        restored = TestClient(second_app).get(f"/api/v1/runs/{run_id}")
+        restored = TestClient(second_app).get(
+            f"/api/v1/runs/{run_id}?user_clearance=CONFIDENTIAL"
+        )
     finally:
         second_factory.dispose()
 

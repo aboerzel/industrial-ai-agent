@@ -825,9 +825,7 @@ def _execution_timeout_seconds(request: Request) -> float:
 def _security_context(
     request: Request, requested_clearance: DemoUserClearance
 ) -> SecurityContext:
-    resolver: SecurityContextResolver = (
-        request.app.state.security_context_resolver
-    )
+    resolver: SecurityContextResolver = request.app.state.security_context_resolver
     try:
         return resolver.resolve(
             request.headers.get("authorization"), requested_clearance
@@ -843,9 +841,7 @@ def _security_context(
 
 
 def _require_model_admin(request: Request) -> SecurityContext:
-    resolver: SecurityContextResolver = (
-        request.app.state.security_context_resolver
-    )
+    resolver: SecurityContextResolver = request.app.state.security_context_resolver
     try:
         return resolver.require_role(
             request.headers.get("authorization"), "model-admin"
@@ -869,9 +865,7 @@ def _authorized_document_content(
         request.app.state.document_content_reader
     )
     document = (
-        reader.get_document(
-            document_id, _security_context(request, user_clearance)
-        )
+        reader.get_document(document_id, _security_context(request, user_clearance))
         if reader is not None
         else None
     )

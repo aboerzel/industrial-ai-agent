@@ -40,14 +40,14 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
     McpTransport,
     StreamableHttpServerParameters,
 )
+from industrial_ai_agent.infrastructure.lingua_response_language_detector import (
+    LinguaResponseLanguageDetector,
+)
 from industrial_ai_agent.infrastructure.llm.configuration import (
     ModelCatalogConfiguration,
     load_model_catalog,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
-from industrial_ai_agent.infrastructure.lingua_response_language_detector import (
-    LinguaResponseLanguageDetector,
-)
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
 )

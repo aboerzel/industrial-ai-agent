@@ -2701,10 +2701,9 @@ def _resolve_investigation_steps(
             if not has_stable_correlation and index <= len(observations)
             else None
         )
-        return (
-            _finding_from_authorized_observation(action, observation, response_language)
-            or _fallback_investigation_finding(action, response_language)
-        )
+        return _finding_from_authorized_observation(
+            action, observation, response_language
+        ) or _fallback_investigation_finding(action, response_language)
 
     return tuple(
         InvestigationStep(

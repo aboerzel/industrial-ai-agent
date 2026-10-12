@@ -38,11 +38,10 @@ from industrial_ai_agent.agent.model_egress import DataClassification
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
-from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.lingua_response_language_detector import (
     LinguaResponseLanguageDetector,
 )
-
+from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 
 _LANGUAGE_DETECTOR = LinguaResponseLanguageDetector()
 
@@ -459,26 +458,22 @@ def test_investigation_steps_cannot_diverge_from_the_tool_trajectory() -> None:
         )
 
 
-def test_unknown_finalizer_action_is_replaced_by_the_actual_tool_trajectory() -> None:
-    resolved = _resolve_investigation_steps(
-        ({"tool": "get_machine_status", "arguments": {"station_id": "S04"}},),
-        (
-            InvestigationStep(
-                step=1,
-                action="search_documentation",
-                finding="Invented tool observation.",
+def test_unknown_finalizer_action_is_rejected_as_trajectory_divergence() -> None:
+    with pytest.raises(
+        FinalAgentOutputContractError,
+        match="does not match executed tools",
+    ):
+        _resolve_investigation_steps(
+            ({"tool": "get_machine_status", "arguments": {"station_id": "S04"}},),
+            (
+                InvestigationStep(
+                    step=1,
+                    action="search_documentation",
+                    finding="Invented tool observation.",
+                ),
             ),
-        ),
-        ResponseLanguage.DE,
-    )
-
-    assert resolved == (
-        InvestigationStep(
-            step=1,
-            action="get_machine_status",
-            finding="Autorisierte Beobachtung mit get_machine_status abgeschlossen.",
-        ),
-    )
+            ResponseLanguage.DE,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1492,10 +1487,7 @@ def test_persistent_wrong_or_unclassifiable_language_cannot_be_published(
     wrong_answer: str, wrong_next_step: str
 ) -> None:
     wrong_language_output = LLMResponse(
-        text=(
-            f'{{"answer":"{wrong_answer}",'
-            f'"next_steps":["{wrong_next_step}"]}}'
-        ),
+        text=(f'{{"answer":"{wrong_answer}","next_steps":["{wrong_next_step}"]}}'),
         finish_reason=FinishReason.STOP,
     )
     client = FakeLLMClient(

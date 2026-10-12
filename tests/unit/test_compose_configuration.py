@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -119,6 +120,30 @@ def test_mcp_dockerfiles_use_the_same_protocol_aware_readiness_contract() -> Non
             == _MCP_READINESS_BEARER_TOKEN_ENVS[service_name]
         )
         assert "socket.create_connection" not in dockerfile
+
+
+def test_knowledge_mcp_keeps_docling_and_rapidocr_compatible() -> None:
+    project = tomllib.loads(
+        (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    dependencies = project["project"]["dependencies"]
+    expected_constraint = "rapidocr>=3.9.1,<3.10"
+
+    assert expected_constraint in dependencies
+    dockerfile = (PROJECT_ROOT / "Dockerfile.knowledge-mcp").read_text(encoding="utf-8")
+    assert f'"{expected_constraint}"' in dockerfile
+
+
+def test_agent_api_installs_response_language_detector_runtime_dependency() -> None:
+    project = tomllib.loads(
+        (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    dependencies = project["project"]["dependencies"]
+    expected_constraint = "lingua-language-detector>=2.2,<2.3"
+
+    assert expected_constraint in dependencies
+    dockerfile = (PROJECT_ROOT / "Dockerfile.agent-api").read_text(encoding="utf-8")
+    assert f'"{expected_constraint}"' in dockerfile
 
 
 def test_frontend_is_a_loopback_only_static_service() -> None:

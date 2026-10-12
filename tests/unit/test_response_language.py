@@ -17,7 +17,6 @@ from industrial_ai_agent.infrastructure.lingua_response_language_detector import
     LinguaResponseLanguageDetector,
 )
 
-
 _DETECTOR = LinguaResponseLanguageDetector()
 
 
@@ -115,8 +114,10 @@ def test_response_language_compliance_is_fail_closed_with_technical_exceptions(
             DetectedResponseLanguage.EN,
         ),
         (
-            "Die autorisierte Untersuchung ist abgeschlossen und die Station ist "
-            "betriebsbereit.",
+            (
+                "Die autorisierte Untersuchung ist abgeschlossen und die Station ist "
+                "betriebsbereit."
+            ),
             DetectedResponseLanguage.DE,
         ),
         (

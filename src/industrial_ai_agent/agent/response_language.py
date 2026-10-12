@@ -86,9 +86,7 @@ _WORD_PATTERN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+")
 _RESPONSE_URL_PATTERN = re.compile(
     r"(?:https?://|www\.)\S+|\b[^\s@]+@[^\s@]+\b", re.IGNORECASE
 )
-_RESPONSE_FENCE_PATTERN = re.compile(
-    r"(?m)^[ \t]*```[A-Za-z0-9_+.-]*[ \t]*$"
-)
+_RESPONSE_FENCE_PATTERN = re.compile(r"(?m)^[ \t]*```[A-Za-z0-9_+.-]*[ \t]*$")
 _RESPONSE_STRUCTURAL_HEADING_PATTERN = re.compile(
     r"(?im)^[ \t]{0,3}#{1,6}[ \t]+Likely Root Cause[ \t]*$"
 )

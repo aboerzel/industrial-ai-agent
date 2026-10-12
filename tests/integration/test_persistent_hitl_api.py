@@ -89,6 +89,7 @@ class _StaticSecurityContextResolver:
         del authorization, role
         return self._context
 
+
 DATABASE_URL = os.getenv("FACTORY_DATABASE_URL")
 MODEL_ID = ModelId("local_quality")
 pytestmark = pytest.mark.skipif(
@@ -299,7 +300,9 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
 
     second_client, second_sessions = _application(factory)
     try:
-        restored = second_client.get(f"/api/v1/runs/{run_id}")
+        restored = second_client.get(
+            f"/api/v1/runs/{run_id}?user_clearance=CONFIDENTIAL"
+        )
         approved = second_client.post(
             f"/api/v1/runs/{run_id}/resume",
             json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
@@ -327,7 +330,9 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
 
     third_client, third_sessions = _application(factory)
     try:
-        persisted = third_client.get(f"/api/v1/runs/{run_id}")
+        persisted = third_client.get(
+            f"/api/v1/runs/{run_id}?user_clearance=CONFIDENTIAL"
+        )
     finally:
         third_client.close()
         third_sessions.dispose()
@@ -369,7 +374,9 @@ def test_fastapi_hitl_reject_survives_runtime_recreation_without_ticket() -> Non
 
     third_client, third_sessions = _application(factory)
     try:
-        persisted = third_client.get(f"/api/v1/runs/{run_id}")
+        persisted = third_client.get(
+            f"/api/v1/runs/{run_id}?user_clearance=CONFIDENTIAL"
+        )
     finally:
         third_client.close()
         third_sessions.dispose()

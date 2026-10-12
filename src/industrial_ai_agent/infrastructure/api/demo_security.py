@@ -28,9 +28,7 @@ class SecurityContextResolver(Protocol):
         requested_clearance: DemoUserClearance,
     ) -> SecurityContext: ...
 
-    def require_role(
-        self, authorization: str | None, role: str
-    ) -> SecurityContext: ...
+    def require_role(self, authorization: str | None, role: str) -> SecurityContext: ...
 
 
 class BearerTokenSecurityContextResolver:
