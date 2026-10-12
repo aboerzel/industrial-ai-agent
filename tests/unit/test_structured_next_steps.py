@@ -39,6 +39,12 @@ from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
+from industrial_ai_agent.infrastructure.lingua_response_language_detector import (
+    LinguaResponseLanguageDetector,
+)
+
+
+_LANGUAGE_DETECTOR = LinguaResponseLanguageDetector()
 
 
 @dataclass
@@ -723,7 +729,7 @@ def test_reference_extraction_ignores_untyped_or_untrusted_hidden_identifiers() 
     ] == ["S04", "P4711"]
 
 
-def test_matching_multiple_and_repeated_tool_steps_preserve_execution_order() -> None:
+def test_model_findings_are_never_published_without_authorized_observations() -> None:
     executed_tool_calls = (
         {"tool": "get_machine_status", "arguments": {"station_id": "S04"}},
         {"tool": "search_documentation", "arguments": {"query": "QUALITY-09"}},
@@ -751,7 +757,11 @@ def test_matching_multiple_and_repeated_tool_steps_preserve_execution_order() ->
         executed_tool_calls, proposed_steps, ResponseLanguage.EN
     )
 
-    assert resolved == proposed_steps
+    assert [step.finding for step in resolved] == [
+        "Authorized observation completed with get_machine_status.",
+        "Authorized observation completed with search_documentation.",
+        "Authorized observation completed with get_machine_status.",
+    ]
 
 
 def test_multi_loop_final_output_retains_structured_next_steps() -> None:
@@ -796,6 +806,7 @@ def test_multi_loop_final_output_retains_structured_next_steps() -> None:
         ),
         mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
         run_classification=DataClassification.CONFIDENTIAL,
+        response_language_detector=_LANGUAGE_DETECTOR,
     )
 
     result = asyncio.run(agent.aanswer_via_mcp("Investigate P4711 at S04."))
@@ -824,6 +835,58 @@ def test_multi_loop_final_output_retains_structured_next_steps() -> None:
     assert "Response language: English." in (
         finalization_request.messages[0].content or ""
     )
+
+
+def test_transient_wrong_language_finding_does_not_discard_published_fields() -> None:
+    client = FakeLLMClient(
+        responses=[
+            LLMResponse(
+                text=None,
+                tool_calls=(
+                    LLMToolCall(
+                        id="history-language",
+                        name="get_product_history",
+                        arguments={"product_id": "P4711"},
+                    ),
+                ),
+                finish_reason=FinishReason.TOOL_CALLS,
+            ),
+            LLMResponse(
+                text='{"answer":"P4711 failed at S04."}',
+                finish_reason=FinishReason.STOP,
+            ),
+            LLMResponse(
+                text=(
+                    '{"answer":"P4711 failed at S04.",'
+                    '"investigation_steps":[{"step":1,'
+                    '"action":"get_product_history",'
+                    '"finding":"Produkt P4711 wurde geprüft."}],'
+                    '"next_steps":["Check station S04."]}'
+                ),
+                finish_reason=FinishReason.STOP,
+            ),
+        ]
+    )
+    agent = LangGraphTroubleshootingAgent(
+        LLMClientChatModel(
+            client, ModelProfile("local_quality"), supports_structured_output=True
+        ),
+        mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
+        run_classification=DataClassification.CONFIDENTIAL,
+    )
+
+    result = asyncio.run(
+        agent.aanswer_via_mcp(
+            "Investigate P4711 at S04.", response_language=ResponseLanguage.EN
+        )
+    )
+
+    assert result.final_answer == "P4711 failed at S04."
+    assert result.next_steps == ("Check station S04.",)
+    assert result.investigation_steps[0].finding == (
+        "Authorized observation completed with get_product_history."
+    )
+    assert len(client.requests) == 3
 
 
 def test_restricted_cross_source_tool_calls_are_not_validated_as_final_output() -> None:
@@ -1399,6 +1462,7 @@ def test_wrong_language_finalizer_gets_one_bounded_english_correction() -> None:
         ),
         mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
         run_classification=DataClassification.CONFIDENTIAL,
+        response_language_detector=_LANGUAGE_DETECTOR,
     )
 
     result = asyncio.run(
@@ -1414,22 +1478,34 @@ def test_wrong_language_finalizer_gets_one_bounded_english_correction() -> None:
     assert "translate every user-facing string into English" in correction_instruction
 
 
-def test_persistent_wrong_language_cannot_be_published_for_selected_english() -> None:
-    german_output = LLMResponse(
+@pytest.mark.parametrize(
+    ("wrong_answer", "wrong_next_step"),
+    (
+        (
+            "S04 benötigt weitere Untersuchung.",
+            "Prüfe den aktuellen Status von Station S04.",
+        ),
+        ("Revisar S04 ahora.", "Comprobar el estado de S04."),
+    ),
+)
+def test_persistent_wrong_or_unclassifiable_language_cannot_be_published(
+    wrong_answer: str, wrong_next_step: str
+) -> None:
+    wrong_language_output = LLMResponse(
         text=(
-            '{"answer":"S04 benötigt weitere Untersuchung.",'
-            '"next_steps":["Prüfe den aktuellen Status von Station S04."]}'
+            f'{{"answer":"{wrong_answer}",'
+            f'"next_steps":["{wrong_next_step}"]}}'
         ),
         finish_reason=FinishReason.STOP,
     )
     client = FakeLLMClient(
         responses=[
             LLMResponse(
-                text="S04 benötigt weitere Untersuchung.",
+                text=wrong_answer,
                 finish_reason=FinishReason.STOP,
             ),
-            german_output,
-            german_output,
+            wrong_language_output,
+            wrong_language_output,
         ]
     )
     agent = LangGraphTroubleshootingAgent(
@@ -1438,6 +1514,7 @@ def test_persistent_wrong_language_cannot_be_published_for_selected_english() ->
         ),
         mcp_tool_provider=cast(McpToolProvider, ReadRecordingMcpToolProvider()),
         run_classification=DataClassification.CONFIDENTIAL,
+        response_language_detector=_LANGUAGE_DETECTOR,
     )
 
     result = asyncio.run(

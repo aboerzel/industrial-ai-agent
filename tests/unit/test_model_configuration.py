@@ -24,9 +24,77 @@ from industrial_ai_agent.application.model_configuration import (
     ModelAssignmentPolicyError,
     ModelConfigurationService,
 )
-from industrial_ai_agent.domain.security import DataClassification
-from industrial_ai_agent.infrastructure.api.app import create_app
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
+from industrial_ai_agent.infrastructure.api.app import create_app as _create_app
+from industrial_ai_agent.infrastructure.api.demo_security import (
+    ApiPrincipal,
+    BearerTokenSecurityContextResolver,
+)
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
+from industrial_ai_agent.infrastructure.api.schemas import DemoUserClearance
+
+
+class _StaticSecurityContextResolver:
+    def __init__(self, context: SecurityContext) -> None:
+        self._context = context
+
+    def resolve(self, authorization, requested_clearance: DemoUserClearance):
+        del authorization
+        return SecurityContext(
+            subject_id=self._context.subject_id,
+            roles=self._context.roles,
+            clearance=DataClassification[requested_clearance.name],
+            authenticated=True,
+        )
+
+    def require_role(self, authorization, role: str):
+        del authorization
+        assert role in self._context.roles
+        return self._context
+
+
+_TEST_SECURITY_RESOLVER = _StaticSecurityContextResolver(
+    SecurityContext(
+        subject_id="model-configuration-test",
+        roles=("model-admin",),
+        clearance=DataClassification.RESTRICTED,
+        authenticated=True,
+    )
+)
+
+
+def create_app(*args, **kwargs):
+    kwargs.setdefault("security_context_resolver", _TEST_SECURITY_RESOLVER)
+    return _create_app(*args, **kwargs)
+
+
+def test_model_configuration_requires_server_authorized_admin_role() -> None:
+    resolver = BearerTokenSecurityContextResolver(
+        (
+            ApiPrincipal(
+                token="ordinary-user-token",
+                security_context=SecurityContext(
+                    subject_id="ordinary-user",
+                    roles=("demo-user",),
+                    clearance=DataClassification.CONFIDENTIAL,
+                    authenticated=True,
+                ),
+            ),
+        )
+    )
+    app = _create_app(
+        object(),
+        run_store=InMemoryAgentRunStore(),
+        security_context_resolver=resolver,
+        model_configuration_service=_service(),
+    )
+
+    response = TestClient(app).get(
+        "/api/v1/model-assignments",
+        headers={"Authorization": "Bearer ordinary-user-token"},
+    )
+
+    assert response.status_code == 403
 
 
 class Catalog:

@@ -6,6 +6,7 @@ import {
   getInvestigation,
   openDocument,
   resumeRun,
+  setApiAccessToken,
 } from "./api.js";
 import { mountModelConfiguration } from "./model-configuration.js";
 import { renderAgentAnswer } from "./markdown.js";
@@ -15,6 +16,7 @@ const composerForm = document.querySelector("#composer-form");
 const composerMessage = document.querySelector("#composer-message");
 const composerButton = document.querySelector("#composer-button");
 const userClearance = document.querySelector("#user-clearance");
+const apiAccessToken = document.querySelector("#api-access-token");
 const responseLanguage = document.querySelector("#response-language");
 const newInvestigationButton = document.querySelector("#new-investigation-button");
 const history = document.querySelector("#conversation-history");
@@ -58,6 +60,7 @@ composerMessage.addEventListener("keydown", (event) => {
 
 userClearance.addEventListener("change", persistUiState);
 responseLanguage.addEventListener("change", persistUiState);
+apiAccessToken?.addEventListener("input", () => setApiAccessToken(apiAccessToken.value));
 
 newInvestigationButton.addEventListener("click", () => {
   if (isSubmitting) return;
@@ -66,9 +69,13 @@ newInvestigationButton.addEventListener("click", () => {
   composerMessage.focus();
 });
 
-exportPdfButton.addEventListener("click", () => {
+exportPdfButton.addEventListener("click", async () => {
   if (currentInvestigationId) {
-    downloadInvestigationPdf(currentInvestigationId, userClearance.value);
+    try {
+      await downloadInvestigationPdf(currentInvestigationId, userClearance.value);
+    } catch (error) {
+      showError(publicError(error, "The PDF export could not be downloaded."));
+    }
   } else if (hasExportableConversation) {
     downloadTranscriptPdf(visibleTranscript);
   }

@@ -52,9 +52,10 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     RoutedTroubleshootingAgentFactory,
     TroubleshootingRunService,
 )
-from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
+from industrial_ai_agent.infrastructure.api.schemas import DemoUserClearance
 from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
     ModelCatalogConfiguration,
@@ -68,6 +69,25 @@ from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     McpLangChainToolProvider,
     McpServerConfiguration,
 )
+
+
+class _StaticSecurityContextResolver:
+    def __init__(self, context: SecurityContext) -> None:
+        self._context = context
+
+    def resolve(self, authorization, requested_clearance: DemoUserClearance):
+        del authorization
+        return SecurityContext(
+            subject_id=self._context.subject_id,
+            roles=self._context.roles,
+            clearance=DataClassification[requested_clearance.name],
+            authenticated=True,
+        )
+
+    def require_role(self, authorization, role: str):
+        del authorization, role
+        return self._context
+
 
 _ACCEPTANCE_MODEL_ID = ModelId("acceptance_s04")
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -311,7 +331,25 @@ def _client() -> tuple[TestClient, _AcceptanceAgentFactory, InMemoryAgentRunStor
         agent_factory=factory,
     )
     store = InMemoryAgentRunStore()
-    return TestClient(create_app(service, run_store=store)), factory, store
+    resolver = _StaticSecurityContextResolver(
+        SecurityContext(
+            subject_id="acceptance-test",
+            roles=("test-engineer",),
+            clearance=DataClassification.CONFIDENTIAL,
+            authenticated=True,
+        )
+    )
+    return (
+        TestClient(
+            create_app(
+                service,
+                run_store=store,
+                security_context_resolver=resolver,
+            )
+        ),
+        factory,
+        store,
+    )
 
 
 def test_acceptance_model_is_not_a_production_catalog_entry() -> None:

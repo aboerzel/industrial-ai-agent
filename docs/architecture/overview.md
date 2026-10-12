@@ -266,9 +266,16 @@ identifier-only requests fall back to English. The resolved value is stored with
 durable run record and the LangGraph checkpoint, and the same explicit language
 instruction remains in the message history for every model iteration and HITL resume.
 Final-output normalization translates model drafts into that language when needed. A
-deterministic final-egress check replaces clearly mismatched answer text with a localized
-safe response and omits mismatched model-generated next steps. Tool results and source
-documents are not translated and cannot alter the selected response language.
+deterministic fail-closed check then validates the model-authored answer and next steps
+through an injected offline Lingua adapter, while excluding URLs, structural technical
+identifiers, and closed structured values. Markdown delimiters do not exempt their
+contents. Mixed, unsupported, or uncertain prose is rejected. A mismatch permits at
+most one bounded structured-output correction call; if that still fails the language
+contract, final egress replaces the answer with a
+localized safe response and omits model-generated next steps. Investigation findings are
+rendered afterward from authorized observations by response-language-aware deterministic
+code, so a transient model finding cannot discard an otherwise valid answer. Tool results
+and source documents are not translated and cannot alter the selected response language.
 
 Runtime and Observability MCP are intentionally separate evidence sources:
 
@@ -427,13 +434,17 @@ wildcard, authentication, TLS, rate limiting, or streaming endpoint. Its explici
 `reject` decision contract for a persisted pending action.
 Swagger UI at `/docs` remains the generated API contract explorer.
 
-The browser clearance selector is deliberately a local-demo simulation of an already
-authenticated user's clearance, not an authentication or authorization mechanism. A
-production adapter must derive `SecurityContext` from a trusted server-side identity.
-The selector never sets run classification, MCP identity or permissions, RLS clearance,
-or model-egress eligibility. Unknown free text without a documented demo identifier is
-conservatively resolved as `RESTRICTED_TROUBLESHOOTING`: unknown sensitivity never
-authorizes public-cloud model processing.
+The browser sends an opaque bearer token that the FastAPI adapter maps to a server-owned
+principal, maximum clearance, and roles. The token remains in browser memory only. The
+clearance selector may narrow the authenticated maximum for a request but can never
+raise it. FastAPI constructs the run-store adapter with that request-specific
+`SecurityContext`; its transaction-local `app.clearance` makes PostgreSQL RLS the first
+and authoritative record-visibility boundary. Python visibility checks remain
+defense-in-depth only. Model-configuration endpoints require `model-admin`. These API
+roles do not set run classification, MCP identity or permissions, or model-egress
+eligibility. Unknown free text without a documented demo identifier is conservatively
+resolved as `RESTRICTED_TROUBLESHOOTING`: unknown sensitivity never authorizes
+public-cloud model processing.
 
 Compose publishes host-facing demo and diagnostic ports only on `127.0.0.1`; services
 communicating only within Compose, including the OTel Collector, have no host port.
@@ -468,8 +479,9 @@ sequenceDiagram
     participant Telemetry as OpenTelemetry
 
     User->>UI: Troubleshooting request
-    UI->>API: POST /api/v1/runs
-    API->>Run: Create durable run and server-owned context
+    UI->>API: Bearer token + requested clearance + request
+    API->>API: Authenticate principal; reject clearance elevation
+    API->>Run: Create request-scoped RLS store and durable run
     Run->>Policy: Resolve classification and run policy
     Policy->>Resolver: consumer_id + trusted classification
     Resolver-->>Run: Authorized model_id or normalized denial
@@ -734,7 +746,8 @@ The catalog records individual capabilities and may record an
 otherwise supported capabilities in the *same* request. Requirements are therefore
 defined per concrete LLM call rather than as a flat workflow union. The agent's tool
 decision calls require `text` + `tool_calling`; its separate optional final-output
-normalization requires `text` + `structured_output`; a plain answer requires `text`.
+normalization and at most one bounded response-language correction each require `text` +
+`structured_output`; a plain answer requires `text`.
 A model that supports Tool Calling and Structured Output individually but not together
 remains compatible with that sequence. The final capability guard repeats the same
 per-request validation immediately before provider execution.

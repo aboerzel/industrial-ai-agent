@@ -59,7 +59,8 @@ from industrial_ai_agent.application.model_configuration import (
 )
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.demo_security import (
-    DemoSecurityContextResolver,
+    ApiAuthorizationError,
+    SecurityContextResolver,
 )
 from industrial_ai_agent.infrastructure.api.failure_diagnostics import summarize_failure
 from industrial_ai_agent.infrastructure.api.investigation_pdf import (
@@ -144,7 +145,9 @@ class _ApiRunError(Exception):
 def create_app(
     run_service: AgentRunService,
     *,
-    run_store: AgentRunStore,
+    run_store: AgentRunStore | None,
+    security_context_resolver: SecurityContextResolver,
+    run_store_factory: Callable[[SecurityContext], AgentRunStore] | None = None,
     allowed_origins: tuple[str, ...] = (),
     telemetry: Telemetry | None = None,
     document_content_reader: AuthorizedDocumentContentReader | None = None,
@@ -162,12 +165,15 @@ def create_app(
     )
     if execution_timeout_seconds <= 0:
         raise ValueError("execution_timeout_seconds must be positive")
+    if (run_store is None) == (run_store_factory is None):
+        raise ValueError("Configure exactly one run store or request-scoped factory")
     app.state.run_service = run_service
     app.state.execution_timeout_seconds = execution_timeout_seconds
     app.state.run_store = run_store
+    app.state.run_store_factory = run_store_factory
     app.state.telemetry = telemetry
     app.state.classification_policy = AgentRunClassificationPolicy()
-    app.state.demo_security_context_resolver = DemoSecurityContextResolver()
+    app.state.security_context_resolver = security_context_resolver
     app.state.document_content_reader = document_content_reader
     app.state.model_configuration_service = model_configuration_service
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
@@ -178,7 +184,11 @@ def create_app(
             allow_origins=list(allowed_origins),
             allow_credentials=False,
             allow_methods=["GET", "POST", "PUT"],
-            allow_headers=["Content-Type", "X-Model-Configuration-Action"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "X-Model-Configuration-Action",
+            ],
         )
 
     @app.get(
@@ -215,6 +225,7 @@ def create_app(
         summary="List configured model catalog entries",
     )
     async def list_models(request: Request) -> tuple[ModelCatalogResponse, ...]:
+        _require_model_admin(request)
         service = _model_configuration_service(request)
         return tuple(
             ModelCatalogResponse(
@@ -245,6 +256,7 @@ def create_app(
     async def list_model_assignments(
         request: Request,
     ) -> tuple[ModelAssignmentResponse, ...]:
+        _require_model_admin(request)
         return tuple(
             _model_assignment_response(assignment)
             for assignment in _model_configuration_service(request).list_assignments()
@@ -258,6 +270,7 @@ def create_app(
     async def list_model_consumers(
         request: Request,
     ) -> tuple[ModelConsumerResponse, ...]:
+        _require_model_admin(request)
         return tuple(
             ModelConsumerResponse(
                 consumer_id=consumer.consumer_id.value,
@@ -286,6 +299,7 @@ def create_app(
     async def assign_model(
         payload: AssignModelRequest, request: Request
     ) -> ModelAssignmentResponse:
+        _require_model_admin(request)
         service = _model_configuration_service(request)
         consumer_id = ModelConsumerId(payload.consumer_id)
         classification = DataClassification[payload.data_classification.value]
@@ -360,11 +374,10 @@ def create_app(
         response_language = payload.response_language or detect_response_language(
             payload.message
         )
-        security_context = _demo_security_context(request).resolve(
-            payload.user_clearance
-        )
+        security_context = _security_context(request, payload.user_clearance)
+        store = _run_store(request, security_context)
         previous_runs = (
-            await _run_store(request).list_investigation(payload.investigation_id)
+            await store.list_investigation(payload.investigation_id)
             if payload.investigation_id is not None
             else ()
         )
@@ -395,6 +408,7 @@ def create_app(
             investigation_id=payload.investigation_id,
             previous_runs=previous_runs,
             document_security_context=security_context,
+            store=store,
         )
 
     @runs.post(
@@ -411,6 +425,7 @@ def create_app(
     async def create_internal_diagnostic(
         payload: InternalDiagnosticRequest, request: Request
     ) -> RunResponse:
+        security_context = _security_context(request, DemoUserClearance.INTERNAL)
         target = InternalDiagnosticTarget(
             product_id=payload.product_id, station_id=payload.station_id
         )
@@ -429,9 +444,8 @@ def create_app(
             message=internal_diagnostic_message(target),
             policy=policy,
             response_language=ResponseLanguage.EN,
-            document_security_context=_demo_security_context(request).resolve(
-                DemoUserClearance.INTERNAL
-            ),
+            document_security_context=security_context,
+            store=_run_store(request, security_context),
         )
 
     @runs.get(
@@ -445,8 +459,8 @@ def create_app(
         request: Request,
         user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
     ) -> RunResponse:
-        record = await _run_store(request).get(run_id)
-        security_context = _demo_security_context(request).resolve(user_clearance)
+        security_context = _security_context(request, user_clearance)
+        record = await _run_store(request, security_context).get(run_id)
         if record is None or not _is_run_visible(record, security_context):
             _raise_api_run_error(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -552,11 +566,9 @@ def create_app(
     async def resume_run(
         run_id: UUID, payload: ResumeRunRequest, request: Request
     ) -> RunResponse:
-        store = _run_store(request)
+        security_context = _security_context(request, payload.user_clearance)
+        store = _run_store(request, security_context)
         existing = await store.get(run_id)
-        security_context = _demo_security_context(request).resolve(
-            payload.user_clearance
-        )
         if not _is_run_resumable_by(existing, security_context):
             _raise_api_run_error(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -699,8 +711,20 @@ def _run_service(request: Request) -> AgentRunService:
     return request.app.state.run_service
 
 
-def _run_store(request: Request) -> AgentRunStore:
-    return request.app.state.run_store
+def _run_store(
+    request: Request, security_context: SecurityContext | None = None
+) -> AgentRunStore:
+    factory: Callable[[SecurityContext], AgentRunStore] | None = (
+        request.app.state.run_store_factory
+    )
+    if factory is not None:
+        if security_context is None:
+            raise RuntimeError("A security context is required for the RLS run store")
+        return factory(security_context)
+    store: AgentRunStore | None = request.app.state.run_store
+    if store is None:
+        raise RuntimeError("Agent run store is not configured")
+    return store
 
 
 def _model_configuration_service(request: Request) -> ModelConfigurationService:
@@ -798,8 +822,42 @@ def _execution_timeout_seconds(request: Request) -> float:
     return request.app.state.execution_timeout_seconds
 
 
-def _demo_security_context(request: Request) -> DemoSecurityContextResolver:
-    return request.app.state.demo_security_context_resolver
+def _security_context(
+    request: Request, requested_clearance: DemoUserClearance
+) -> SecurityContext:
+    resolver: SecurityContextResolver = (
+        request.app.state.security_context_resolver
+    )
+    try:
+        return resolver.resolve(
+            request.headers.get("authorization"), requested_clearance
+        )
+    except ApiAuthorizationError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "access_denied",
+                "message": "The request is not authorized for this clearance.",
+            },
+        ) from None
+
+
+def _require_model_admin(request: Request) -> SecurityContext:
+    resolver: SecurityContextResolver = (
+        request.app.state.security_context_resolver
+    )
+    try:
+        return resolver.require_role(
+            request.headers.get("authorization"), "model-admin"
+        )
+    except ApiAuthorizationError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "access_denied",
+                "message": "Model configuration requires an authorized administrator.",
+            },
+        ) from None
 
 
 def _authorized_document_content(
@@ -812,7 +870,7 @@ def _authorized_document_content(
     )
     document = (
         reader.get_document(
-            document_id, _demo_security_context(request).resolve(user_clearance)
+            document_id, _security_context(request, user_clearance)
         )
         if reader is not None
         else None
@@ -879,8 +937,8 @@ async def _start_run(
     investigation_id: UUID | None = None,
     previous_runs: tuple[StoredAgentRun, ...] | None = None,
     document_security_context: SecurityContext,
+    store: AgentRunStore,
 ) -> RunResponse:
-    store = _run_store(request)
     run_id = uuid4()
     resolved_previous_runs = (
         previous_runs
@@ -1131,8 +1189,10 @@ async def _authorized_investigation(
     investigation_id: UUID,
     user_clearance: DemoUserClearance,
 ) -> InvestigationResponse | None:
-    security_context = _demo_security_context(request).resolve(user_clearance)
-    records = await _run_store(request).list_investigation(investigation_id)
+    security_context = _security_context(request, user_clearance)
+    records = await _run_store(request, security_context).list_investigation(
+        investigation_id
+    )
     visible = tuple(
         record for record in records if _is_run_visible(record, security_context)
     )

@@ -27,11 +27,15 @@ from industrial_ai_agent.agent.run_classification_policy import (
 from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
 from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.app import create_app
+from industrial_ai_agent.infrastructure.api.demo_security import (
+    ApiPrincipal,
+    BearerTokenSecurityContextResolver,
+)
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
     _safe_tool_names,
 )
-from industrial_ai_agent.infrastructure.api.schemas import RunStatus
+from industrial_ai_agent.infrastructure.api.schemas import DemoUserClearance, RunStatus
 from industrial_ai_agent.infrastructure.internal_diagnostic_scope import (
     PostgreSqlInternalDiagnosticScopeValidator,
 )
@@ -41,6 +45,24 @@ from industrial_ai_agent.infrastructure.persistence.model_assignments import (
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlSessionFactory,
 )
+
+
+class _StaticSecurityContextResolver:
+    def __init__(self, context: SecurityContext) -> None:
+        self._context = context
+
+    def resolve(self, authorization, requested_clearance: DemoUserClearance):
+        del authorization
+        return SecurityContext(
+            subject_id=self._context.subject_id,
+            roles=self._context.roles,
+            clearance=DataClassification[requested_clearance.name],
+            authenticated=True,
+        )
+
+    def require_role(self, authorization, role: str):
+        del authorization, role
+        return self._context
 
 
 def test_model_assignment_repository_round_trips_stable_model_id() -> None:
@@ -566,6 +588,52 @@ def test_agent_runtime_rls_filters_each_clearance_level() -> None:
     }
 
 
+def test_fastapi_authentication_and_request_scoped_rls_both_deny_elevation() -> None:
+    assert DATABASE_URL is not None
+    factory = PostgreSqlSessionFactory(DATABASE_URL)
+    run_id = uuid4()
+    confidential = _context(DataClassification.CONFIDENTIAL)
+    asyncio.run(
+        PostgreSqlAgentRunStore(factory, confidential).create(
+            run_id,
+            request_text="Confidential RLS boundary test",
+            data_classification=DataClassification.CONFIDENTIAL,
+        )
+    )
+    resolver = BearerTokenSecurityContextResolver(
+        (
+            ApiPrincipal("public-token", _context(DataClassification.PUBLIC)),
+            ApiPrincipal("confidential-token", confidential),
+        )
+    )
+    app = create_app(
+        FixedRunService(),
+        run_store=None,
+        run_store_factory=lambda context: PostgreSqlAgentRunStore(factory, context),
+        security_context_resolver=resolver,
+    )
+    client = TestClient(app)
+    try:
+        claimed_elevation = client.get(
+            f"/api/v1/runs/{run_id}?user_clearance=CONFIDENTIAL",
+            headers={"Authorization": "Bearer public-token"},
+        )
+        public_rls_read = client.get(
+            f"/api/v1/runs/{run_id}?user_clearance=PUBLIC",
+            headers={"Authorization": "Bearer public-token"},
+        )
+        authorized_read = client.get(
+            f"/api/v1/runs/{run_id}?user_clearance=CONFIDENTIAL",
+            headers={"Authorization": "Bearer confidential-token"},
+        )
+    finally:
+        factory.dispose()
+
+    assert claimed_elevation.status_code == 403
+    assert public_rls_read.status_code == 404
+    assert authorized_read.status_code == 200
+
+
 def test_fastapi_run_survives_application_recreation() -> None:
     assert DATABASE_URL is not None
     first_factory = PostgreSqlSessionFactory(DATABASE_URL)
@@ -574,6 +642,9 @@ def test_fastapi_run_survives_application_recreation() -> None:
             FixedRunService(),
             run_store=PostgreSqlAgentRunStore(
                 first_factory, _context(DataClassification.CONFIDENTIAL)
+            ),
+            security_context_resolver=_StaticSecurityContextResolver(
+                _context(DataClassification.CONFIDENTIAL)
             ),
         )
         created = TestClient(first_app).post(
@@ -593,6 +664,9 @@ def test_fastapi_run_survives_application_recreation() -> None:
             FixedRunService(),
             run_store=PostgreSqlAgentRunStore(
                 second_factory, _context(DataClassification.CONFIDENTIAL)
+            ),
+            security_context_resolver=_StaticSecurityContextResolver(
+                _context(DataClassification.CONFIDENTIAL)
             ),
         )
         restored = TestClient(second_app).get(f"/api/v1/runs/{run_id}")

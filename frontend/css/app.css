@@ -149,6 +149,19 @@ h3 { margin-bottom: 8px; font-size: 0.96rem; }
   letter-spacing: 0;
 }
 
+.clearance-control input {
+  width: 150px;
+  min-height: 36px;
+  border: 1px solid #a6b5b0;
+  border-radius: 4px;
+  padding: 5px 9px;
+  color: #233231;
+  background: #fcfdfd;
+  font-size: 0.8rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 textarea {
   width: 100%;
   min-height: 88px;
@@ -384,7 +397,7 @@ select:focus, textarea:focus {
   .toolbar-controls { align-items: stretch; flex-direction: column; }
   .toolbar-selectors { width: 100%; }
   .clearance-control { flex: 1 1 145px; }
-  .clearance-control select { width: 100%; }
+  .clearance-control select, .clearance-control input { width: 100%; }
   .toolbar-actions { justify-content: space-between; }
   .monitoring-menu-panel { right: auto; left: 0; width: min(330px, calc(100vw - 32px)); }
   .model-assignment-row { grid-template-columns: 1fr; gap: 6px; padding: 12px 0; }

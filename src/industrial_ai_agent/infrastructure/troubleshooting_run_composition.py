@@ -45,6 +45,9 @@ from industrial_ai_agent.infrastructure.llm.configuration import (
     load_model_catalog,
 )
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
+from industrial_ai_agent.infrastructure.lingua_response_language_detector import (
+    LinguaResponseLanguageDetector,
+)
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
 )
@@ -98,6 +101,7 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
         self._mcp_tool_provider_factory = mcp_tool_provider_factory
         self._authorizer = authorizer
         self._telemetry = telemetry
+        self._response_language_detector = LinguaResponseLanguageDetector()
 
     def open_agent(
         self,
@@ -167,6 +171,7 @@ class _LangGraphTroubleshootingAgentFactory(RoutedTroubleshootingAgentFactory):
                     run_policy.run_profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
                 ),
                 investigation_type=_investigation_type_for(run_policy),
+                response_language_detector=self._response_language_detector,
             )
 
 

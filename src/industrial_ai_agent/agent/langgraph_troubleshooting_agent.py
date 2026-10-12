@@ -51,6 +51,7 @@ from industrial_ai_agent.agent.model_egress import (
 )
 from industrial_ai_agent.agent.response_language import (
     ResponseLanguage,
+    ResponseLanguageDetector,
     detect_response_language,
     is_response_language_compliant,
     response_language_instruction,
@@ -315,6 +316,7 @@ class LangGraphTroubleshootingAgent:
         normalize_structured_final_output: bool = True,
         requires_verified_recovery: bool = False,
         investigation_type: InvestigationType | None = None,
+        response_language_detector: ResponseLanguageDetector | None = None,
     ) -> None:
         self._checkpointer = checkpointer
         self._run_classification = run_classification
@@ -324,6 +326,7 @@ class LangGraphTroubleshootingAgent:
         self._normalize_structured_final_output = normalize_structured_final_output
         self._requires_verified_recovery = requires_verified_recovery
         self._investigation_type = investigation_type
+        self._response_language_detector = response_language_detector
 
     async def request_tool_selection_via_mcp(
         self,
@@ -725,7 +728,11 @@ class LangGraphTroubleshootingAgent:
                     final_output = normalized_output
                     final_messages.append(normalized_message)
                 response_language = ResponseLanguage(state["response_language"])
-                if _has_response_language_mismatch(final_output, response_language):
+                if _has_response_language_mismatch(
+                    final_output,
+                    response_language,
+                    self._response_language_detector,
+                ):
                     corrected_message = normalizer.invoke(
                         _final_output_language_correction_messages(
                             final_output,
@@ -740,7 +747,9 @@ class LangGraphTroubleshootingAgent:
                         final_output = corrected_output
                         final_messages.append(corrected_message)
             final_output = _with_safe_narrative(
-                final_output, ResponseLanguage(state["response_language"])
+                final_output,
+                ResponseLanguage(state["response_language"]),
+                self._response_language_detector,
             )
             final_output.require_no_action_sections()
             final_output.require_no_investigation_summary_sections()
@@ -2673,11 +2682,14 @@ def _resolve_investigation_steps(
     if len(expected_actions) != len(executed_tool_calls):
         raise FinalAgentOutputContractError("Executed tool trajectory is invalid")
     expected_steps = tuple(range(1, len(expected_actions) + 1))
-    has_matching_trajectory = (
-        len(proposed_steps) == len(expected_actions)
-        and tuple(step.step for step in proposed_steps) == expected_steps
-        and tuple(step.action for step in proposed_steps) == expected_actions
-    )
+    if proposed_steps and (
+        len(proposed_steps) != len(expected_actions)
+        or tuple(step.step for step in proposed_steps) != expected_steps
+        or tuple(step.action for step in proposed_steps) != expected_actions
+    ):
+        raise FinalAgentOutputContractError(
+            "Model-proposed investigation trajectory does not match executed tools"
+        )
 
     def finding_for_call(index: int, action: str, call: dict[str, object]) -> str:
         tool_call_id = call.get("tool_call_id")
@@ -2691,11 +2703,6 @@ def _resolve_investigation_steps(
         )
         return (
             _finding_from_authorized_observation(action, observation, response_language)
-            or (
-                proposed_steps[index - 1].finding
-                if not has_stable_correlation and has_matching_trajectory
-                else None
-            )
             or _fallback_investigation_finding(action, response_language)
         )
 
@@ -2975,7 +2982,9 @@ def _narrative_final_output(text: str) -> FinalAgentOutput:
 
 
 def _with_safe_narrative(
-    output: FinalAgentOutput, response_language: ResponseLanguage
+    output: FinalAgentOutput,
+    response_language: ResponseLanguage,
+    detector: ResponseLanguageDetector | None,
 ) -> FinalAgentOutput:
     """Replace an unsafe model narrative with a localized bounded response.
 
@@ -2986,7 +2995,9 @@ def _with_safe_narrative(
     evidence-neutral sentence while structured fields stay available for deterministic
     trajectory validation.
     """
-    has_language_mismatch = _has_response_language_mismatch(output, response_language)
+    has_language_mismatch = _has_response_language_mismatch(
+        output, response_language, detector
+    )
     if not has_language_mismatch and not (
         output.forbidden_action_sections()
         or output.forbidden_investigation_summary_sections()
@@ -3005,15 +3016,25 @@ def _with_safe_narrative(
 
 
 def _has_response_language_mismatch(
-    output: FinalAgentOutput, response_language: ResponseLanguage
+    output: FinalAgentOutput,
+    response_language: ResponseLanguage,
+    detector: ResponseLanguageDetector | None,
 ) -> bool:
+    """Validate only model-authored fields that survive the public projection.
+
+    Investigation findings are deliberately excluded here. The graph replaces them
+    below with response-language-aware findings derived from authorized observations;
+    allowing a transient model finding to trigger correction would discard an otherwise
+    valid answer for text that is never published.
+    """
+    if detector is None:
+        return False
     user_facing_text = (
         output.answer,
-        *(step.finding for step in output.investigation_steps),
         *output.next_steps,
     )
     return any(
-        not is_response_language_compliant(text, response_language)
+        not is_response_language_compliant(text, response_language, detector)
         for text in user_facing_text
     )
 

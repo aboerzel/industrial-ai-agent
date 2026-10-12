@@ -49,7 +49,8 @@ Consumer capability requirements are application policy separate from catalog me
 They describe one concrete provider invocation, not the union of capabilities used
 somewhere in a workflow. The implemented `agent` uses `text` + `tool_calling` for each
 tool-decision call, `text` + `structured_output` for its separate optional final-output
-normalization call, and `text` for a plain-text call. The already implemented MCP-side
+normalization call and at most one bounded response-language correction call, and `text`
+for a plain-text call. The already implemented MCP-side
 RCA explanation uses the specialized `rca.reasoning` consumer and requires `text` +
 `structured_output` in its one structured invocation. Future specialized requirements
 are added only with their workflow.

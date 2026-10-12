@@ -8,7 +8,7 @@ This is not a chatbot demo. The model is a replaceable component inside determin
 
 ![Industrial AI Agent browser demo showing a classified troubleshooting investigation](docs/assets/Troubleshooting-1.png)
 
-*The local browser demo shows a simulated user access level, the resulting classified run, a structured investigation, evidence-based findings, a clearly non-confirmed likely-cause hypothesis, and recommended investigation actions.*
+*The local browser demo uses a server-authenticated maximum clearance and a selectable lower working clearance, and shows the resulting classified run, structured investigation, evidence-based findings, clearly non-confirmed likely-cause hypothesis, and recommended investigation actions.*
 
 ## Why Industrial AI Needs More Than an LLM
 
@@ -330,12 +330,15 @@ Grafana keeps anonymous local dashboard access as a Viewer, not an Admin. Do not
 credentials to the repository. The frontend is a separate static client and communicates
 only with the FastAPI JSON API.
 
-The UI clearance selector simulates the clearance of an already authenticated user for
-this local demo. It is not a production authentication or authorization interface. A
-production integration must derive clearance from a trusted server-side identity; run
-classification, MCP permissions, PostgreSQL RLS, and model egress remain deterministic
-server-side boundaries. Unknown free text is conservatively `RESTRICTED`: unknown
-sensitivity never authorizes external model processing.
+The local API authenticates the browser with an environment-configured opaque bearer
+token. The token resolves to a server-owned maximum clearance; the UI selector may only
+narrow that clearance for a request and can never raise it. The token is held in browser
+memory only. Every run-store request receives the resulting `SecurityContext`, and
+PostgreSQL RLS remains the authoritative visibility boundary. Model-configuration routes
+additionally require the server-owned `model-admin` role. Run classification, MCP
+permissions, and model egress remain separate deterministic checks. Unknown free text is
+conservatively `RESTRICTED`: unknown sensitivity never authorizes external model
+processing.
 
 For service ports, MCP access, smoke checks, and detailed local setup, use the existing [Architecture Overview](docs/architecture/overview.md), [Observability guide](docs/architecture/observability.md), and the linked evaluation and implementation guides rather than treating this README as an operations manual.
 

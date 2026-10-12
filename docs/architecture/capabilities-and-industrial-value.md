@@ -40,8 +40,9 @@ within an approved local model environment. The other levels may go to an extern
 only when that configured model is explicitly approved for the relevant protection level.
 Unknown free-form demo requests are conservatively `RESTRICTED`; unknown sensitivity
 never authorizes external model processing.
-The local UI selector only simulates an already authenticated user's clearance; it is not
-a production identity interface.
+The local API authenticates the browser with an opaque bearer token. Its server-owned
+principal defines the maximum clearance; the UI selector can only narrow it. Each
+request-specific context is applied to PostgreSQL RLS before records are returned.
 
 ### Cost and efficiency
 

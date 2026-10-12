@@ -4,14 +4,17 @@
 
 FastAPI is the external HTTP Application Boundary for the local/demo Industrial AI
 Agent. It publishes the versioned public contract and generated OpenAPI without becoming
-an agent framework, an MCP client, a model router, or an authorization decision maker.
+an agent framework, an MCP client, or a model router. It authenticates HTTP credentials
+and enforces the injected authorization policy at the adapter boundary.
 Swagger UI is at `/docs` and OpenAPI is at `/openapi.json`.
 
 The browser UI in `frontend/` is a separate static HTTP/JSON client. It neither imports
 backend code nor selects a provider, model, MCP identity, classification, or permission.
-The clearance selector is a demo simulation of an authenticated user's clearance. It is
-not production identity-bound authorization: `user_clearance` supplies a demo context
-only; a production adapter must derive `SecurityContext` from a verified identity.
+The local API authenticates the browser with an opaque bearer token configured only on
+the server. The verified token establishes a maximum clearance and roles.
+`user_clearance` may narrow that maximum for one request but can never raise it. The API
+creates its PostgreSQL run-store adapter from that request-specific `SecurityContext`, so
+RLS—not a later Python filter—is the authoritative record-visibility boundary.
 
 ## Current API Surface
 
@@ -24,12 +27,12 @@ capabilities or MCP tools:
 | `GET /ready` | Operational readiness: authenticated MCP `initialize` plus `tools/list` for every Factory, Knowledge, and Hardware capability required by Agent API. Returns 503 until all are ready. |
 | `POST /api/v1/runs` | Create a server-classified free-form troubleshooting or recovery run. |
 | `POST /api/v1/diagnostics` | Start the bounded, read-only INTERNAL diagnostic entry point. |
-| `GET /api/v1/runs/{run_id}` | Retrieve one persisted run only when visible to the supplied demo clearance. |
+| `GET /api/v1/runs/{run_id}` | Retrieve one persisted run only when visible through the authenticated request's RLS context. |
 | `GET /api/v1/investigations/{investigation_id}` | Retrieve the authorized visible history of an investigation. |
 | `GET /api/v1/investigations/{investigation_id}/pdf` | Export that already authorized visible history as a PDF. |
 | `GET /api/v1/documents/{document_id}` and `/download` | Open or download one currently authorized cataloged document. |
 | `POST /api/v1/runs/{run_id}/resume` | Approve or reject a pending protected action and continue its persisted thread. |
-| `GET /api/v1/models`, `/model-consumers`, `/model-assignments`; `PUT /api/v1/model-assignments` | Read catalog/configuration metadata and persist an operator model assignment. |
+| `GET /api/v1/models`, `/model-consumers`, `/model-assignments`; `PUT /api/v1/model-assignments` | Read or change model configuration only with the server-owned `model-admin` role. |
 
 This is an architectural surface, not a replacement for generated OpenAPI. All public
 schemas are Pydantic models with strict validation and project public projections rather

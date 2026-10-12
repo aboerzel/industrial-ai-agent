@@ -48,13 +48,143 @@ from industrial_ai_agent.agent.user_severity import (
 )
 from industrial_ai_agent.application.document_content import AuthorizedDocumentContent
 from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
-from industrial_ai_agent.domain.security import DataClassification
-from industrial_ai_agent.infrastructure.api.app import create_app as _create_app
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
+from industrial_ai_agent.infrastructure.api.app import (
+    create_app as _create_production_app,
+)
+from industrial_ai_agent.infrastructure.api.demo_security import (
+    ApiPrincipal,
+    BearerTokenSecurityContextResolver,
+)
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
-from industrial_ai_agent.infrastructure.api.schemas import RunResponse, RunStatus
+from industrial_ai_agent.infrastructure.api.schemas import (
+    DemoUserClearance,
+    RunResponse,
+    RunStatus,
+)
 from industrial_ai_agent.infrastructure.troubleshooting_run_composition import (
     create_default_troubleshooting_run_service,
 )
+
+
+class _StaticSecurityContextResolver:
+    def __init__(self, context: SecurityContext) -> None:
+        self._context = context
+
+    def resolve(self, authorization, requested_clearance: DemoUserClearance):
+        del authorization
+        return SecurityContext(
+            subject_id=self._context.subject_id,
+            roles=self._context.roles,
+            clearance=DataClassification[requested_clearance.name],
+            authenticated=True,
+        )
+
+    def require_role(self, authorization, role: str):
+        del authorization
+        assert role in self._context.roles
+        return self._context
+
+
+_TEST_SECURITY_RESOLVER = _StaticSecurityContextResolver(
+    SecurityContext(
+        subject_id="api-unit-test",
+        roles=("test-engineer", "model-admin"),
+        clearance=DataClassification.RESTRICTED,
+        authenticated=True,
+    )
+)
+
+
+def _create_app(*args, **kwargs):
+    kwargs.setdefault("security_context_resolver", _TEST_SECURITY_RESOLVER)
+    return _create_production_app(*args, **kwargs)
+
+
+def test_http_clearance_is_bounded_by_authenticated_server_principal() -> None:
+    resolver = BearerTokenSecurityContextResolver(
+        (
+            ApiPrincipal(
+                token="internal-test-token",
+                security_context=SecurityContext(
+                    subject_id="internal-user",
+                    roles=("demo-user",),
+                    clearance=DataClassification.INTERNAL,
+                    authenticated=True,
+                ),
+            ),
+        )
+    )
+    contexts: list[SecurityContext] = []
+    store = InMemoryAgentRunStore()
+
+    def store_for(context: SecurityContext):
+        contexts.append(context)
+        return store
+
+    app = _create_production_app(
+        FakeRunService(result=_success_result()),
+        run_store=None,
+        run_store_factory=store_for,
+        security_context_resolver=resolver,
+    )
+    client = TestClient(app)
+
+    denied = client.post(
+        "/api/v1/runs",
+        headers={"Authorization": "Bearer internal-test-token"},
+        json={"message": "Investigate P4711.", "user_clearance": "RESTRICTED"},
+    )
+    allowed = client.post(
+        "/api/v1/runs",
+        headers={"Authorization": "Bearer internal-test-token"},
+        json={"message": "Which stations are available?", "user_clearance": "PUBLIC"},
+    )
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert contexts
+    assert all(context.clearance is DataClassification.PUBLIC for context in contexts)
+
+
+def test_http_requests_without_valid_credentials_fail_before_store_access() -> None:
+    resolver = BearerTokenSecurityContextResolver(
+        (
+            ApiPrincipal(
+                token="public-test-token",
+                security_context=SecurityContext(
+                    subject_id="public-user",
+                    roles=("demo-user",),
+                    clearance=DataClassification.PUBLIC,
+                    authenticated=True,
+                ),
+            ),
+        )
+    )
+    store_accessed = False
+
+    def store_for(context: SecurityContext):
+        del context
+        nonlocal store_accessed
+        store_accessed = True
+        return InMemoryAgentRunStore()
+
+    client = TestClient(
+        _create_production_app(
+            FakeRunService(result=_success_result()),
+            run_store=None,
+            run_store_factory=store_for,
+            security_context_resolver=resolver,
+        )
+    )
+
+    response = client.post(
+        "/api/v1/runs",
+        json={"message": "Which stations are available?", "user_clearance": "PUBLIC"},
+    )
+
+    assert response.status_code == 403
+    assert store_accessed is False
 
 
 class FakeRunService:
@@ -384,7 +514,7 @@ def test_cors_allows_model_configuration_audit_header() -> None:
             "Origin": origin,
             "Access-Control-Request-Method": "PUT",
             "Access-Control-Request-Headers": (
-                "content-type,x-model-configuration-action"
+                "authorization,content-type,x-model-configuration-action"
             ),
         },
     )
@@ -395,6 +525,7 @@ def test_cors_allows_model_configuration_audit_header() -> None:
         "x-model-configuration-action"
         in response.headers["access-control-allow-headers"].lower()
     )
+    assert "authorization" in response.headers["access-control-allow-headers"].lower()
 
 
 def test_cors_rejects_unconfigured_origin() -> None:

@@ -952,6 +952,8 @@ test("uses one workspace heading and accessible compact actions in the shipped p
   assert.doesNotMatch(index, /Active investigation/);
   assert.doesNotMatch(index, /investigation-metadata|investigation-runs|investigation-tools/);
   assert.match(index, /class="toolbar-selectors"/);
+  assert.match(index, /id="api-access-token"[^>]*type="password"/);
+  assert.match(index, /id="api-access-token"[^>]*autocomplete="off"/);
   assert.match(index, /class="toolbar-actions"/);
   assert.match(index, /id="composer-button" type="submit" aria-label="Send message" title="Send message"/);
   assert.match(index, /id="model-configuration-button"[^>]*aria-label="Model configuration"/);

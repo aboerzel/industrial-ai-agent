@@ -53,6 +53,7 @@ from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
 )
+from industrial_ai_agent.infrastructure.api.schemas import DemoUserClearance
 from industrial_ai_agent.infrastructure.llm.langchain_adapter import LLMClientChatModel
 from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
     DEFAULT_ALLOWED_FACTORY_TOOLS,
@@ -69,6 +70,24 @@ from industrial_ai_agent.infrastructure.persistence.models import (
 from industrial_ai_agent.infrastructure.persistence.postgres import (
     PostgreSqlSessionFactory,
 )
+
+
+class _StaticSecurityContextResolver:
+    def __init__(self, context: SecurityContext) -> None:
+        self._context = context
+
+    def resolve(self, authorization, requested_clearance: DemoUserClearance):
+        del authorization
+        return SecurityContext(
+            subject_id=self._context.subject_id,
+            roles=self._context.roles,
+            clearance=DataClassification[requested_clearance.name],
+            authenticated=True,
+        )
+
+    def require_role(self, authorization, role: str):
+        del authorization, role
+        return self._context
 
 DATABASE_URL = os.getenv("FACTORY_DATABASE_URL")
 MODEL_ID = ModelId("local_quality")
@@ -242,6 +261,7 @@ def _application(
             create_app(
                 _service(factory),
                 run_store=PostgreSqlAgentRunStore(session_factory, context),
+                security_context_resolver=_StaticSecurityContextResolver(context),
             )
         ),
         session_factory,

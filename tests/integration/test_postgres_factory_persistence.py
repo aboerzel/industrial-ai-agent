@@ -6,7 +6,7 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import create_engine, select, text
 
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
@@ -107,6 +107,69 @@ def test_application_role_has_no_rls_bypass_attribute() -> None:
         session_factory.dispose()
 
     assert bypass_rls is False
+
+
+def test_missing_transaction_clearance_fails_closed_at_rls_boundary() -> None:
+    assert DATABASE_URL is not None
+    engine = create_engine(DATABASE_URL)
+    try:
+        with engine.connect() as connection:
+            counts = tuple(
+                int(
+                    connection.execute(
+                        text(f"SELECT count(*) FROM {table}")
+                    ).scalar_one()
+                )
+                for table in (
+                    "product",
+                    "machine_state",
+                    "document_catalog",
+                    "agent_runtime.agent_runs",
+                )
+            )
+    finally:
+        engine.dispose()
+
+    assert counts == (0, 0, 0, 0)
+
+
+def test_classified_tables_force_rls_and_are_not_owned_by_application_role() -> None:
+    assert DATABASE_URL is not None
+    classified_tables = (
+        "factory",
+        "station",
+        "product",
+        "production_order",
+        "product_event",
+        "machine_state",
+        "alarm_event",
+        "quality_inspection",
+        "maintenance_event",
+        "maintenance_ticket",
+        "process_parameter",
+        "document_catalog",
+        "agent_runtime.agent_runs",
+    )
+    session_factory = PostgreSqlSessionFactory(DATABASE_URL)
+    try:
+        with session_factory.connection(
+            _context(DataClassification.RESTRICTED)
+        ) as connection:
+            boundaries = tuple(
+                connection.execute(
+                    text(
+                        "SELECT c.relrowsecurity, c.relforcerowsecurity, "
+                        "pg_get_userbyid(c.relowner) <> current_user "
+                        "FROM pg_class c WHERE c.oid = to_regclass(:table_name)"
+                    ),
+                    {"table_name": table},
+                ).one()
+                for table in classified_tables
+            )
+    finally:
+        session_factory.dispose()
+
+    assert all(tuple(boundary) == (True, True, True) for boundary in boundaries)
 
 
 def test_schema_seed_and_repository_mapping_are_available_to_application_role() -> None:

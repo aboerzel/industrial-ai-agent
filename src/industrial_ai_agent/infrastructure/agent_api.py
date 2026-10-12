@@ -21,6 +21,9 @@ from industrial_ai_agent.infrastructure.agent_api_readiness import (
     create_default_agent_api_readiness_check,
 )
 from industrial_ai_agent.infrastructure.api.app import create_app
+from industrial_ai_agent.infrastructure.api.demo_security import (
+    BearerTokenSecurityContextResolver,
+)
 from industrial_ai_agent.infrastructure.api.observed_run_store import (
     ObservedAgentRunStore,
 )
@@ -115,13 +118,16 @@ def create_default_app():
         ),
     )
     model_configuration_service.ensure_default_assignments()
+    runtime_session_factory = PostgreSqlSessionFactory(database_url)
     return create_app(
         observed_run_service(run_service, telemetry),
-        run_store=ObservedAgentRunStore(
-            PostgreSqlAgentRunStore(
-                PostgreSqlSessionFactory(database_url), DEMO_RUNTIME_SECURITY_CONTEXT
-            ),
+        run_store=None,
+        run_store_factory=lambda security_context: ObservedAgentRunStore(
+            PostgreSqlAgentRunStore(runtime_session_factory, security_context),
             telemetry,
+        ),
+        security_context_resolver=BearerTokenSecurityContextResolver.from_environment(
+            os.environ
         ),
         allowed_origins=frontend_origins,
         telemetry=telemetry,

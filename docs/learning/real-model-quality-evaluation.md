@@ -49,9 +49,12 @@ content.
 
 The final language closure follows the persisted `response_language` from API request to
 run state, model iterations, finalization, public error projection, investigation history,
-and PDF report. Public terminal/error messages are deterministic translations; the model
-is not retried or post-processed to repair language. A technically healthy run without a
-final answer has language `NOT_EVALUATED`, not a language failure.
+and PDF report. Final-output normalization translates model-authored public fields when
+needed. A deterministic fail-closed check may request at most one bounded structured
+language correction before replacing a persistent or unclassifiable mismatch with the
+localized safe response. Public terminal/error messages and published investigation
+findings use deterministic response-language-aware projections. A technically healthy run
+without a final answer has language `NOT_EVALUATED`, not a language failure.
 
 Run the local Qwen 3.5 9B baseline after Ollama and the local MCP dependencies are
 available:

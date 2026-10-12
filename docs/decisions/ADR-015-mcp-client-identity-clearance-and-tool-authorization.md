@@ -135,8 +135,11 @@ authenticated bearer token. A `run_id`, trace context, or any client header does
 establish RCA access. Runtime RLS remains the first evidence gate, so inaccessible and
 missing runs remain a neutral unavailable result.
 
-The browser UI clearance selector is a separate local-demo simulation of an already
-authenticated user's clearance. It is not accepted by MCP and is not a production
-identity interface. A future production API adapter must derive its `SecurityContext`
-from trusted server-side identity; MCP identity, permissions, RLS, and model egress
-remain independently deterministic.
+The FastAPI browser boundary now uses the same server-owned principle: an opaque bearer
+token resolves to a fixed maximum clearance and roles. The browser's `user_clearance`
+value may only narrow that maximum and cannot establish or elevate identity. Each HTTP
+request creates its run-store adapter from the resulting `SecurityContext`, so
+transaction-local PostgreSQL RLS is authoritative before any run record reaches Python.
+Model-configuration reads and writes additionally require `model-admin`. The local UI
+keeps its token in memory only. MCP identity, permissions, RLS, and model egress remain
+independently deterministic.

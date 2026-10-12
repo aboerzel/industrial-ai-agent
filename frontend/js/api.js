@@ -1,4 +1,13 @@
 const API_BASE_URL = "http://localhost:8000";
+let apiAccessToken = "";
+
+export function setApiAccessToken(token) {
+  apiAccessToken = typeof token === "string" ? token.trim() : "";
+}
+
+function authorizationHeaders() {
+  return apiAccessToken ? { Authorization: `Bearer ${apiAccessToken}` } : {};
+}
 
 export class ApiClientError extends Error {
   constructor(status, code, message, investigationId = null) {
@@ -77,11 +86,19 @@ export async function getInvestigation(investigationId, userClearance) {
     {}, isInvestigationResponse);
 }
 
-export function downloadInvestigationPdf(investigationId, userClearance) {
+export async function downloadInvestigationPdf(investigationId, userClearance) {
   const suffix = new URLSearchParams({ user_clearance: userClearance });
-  window.location.assign(
-    `${API_BASE_URL}/api/v1/investigations/${encodeURIComponent(investigationId)}/pdf?${suffix}`,
-  );
+  const path = `/api/v1/investigations/${encodeURIComponent(investigationId)}/pdf?${suffix}`;
+  const responseDocument = await requestBinary(path, "investigation.pdf");
+  const objectUrl = URL.createObjectURL(responseDocument.content);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = responseDocument.filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  revokeObjectUrlLater(objectUrl);
 }
 
 export async function openDocument(documentId, userClearance) {
@@ -107,9 +124,15 @@ export async function downloadDocument(documentId, userClearance) {
 async function requestDocument(documentId, userClearance, download) {
   const suffix = new URLSearchParams({ user_clearance: userClearance });
   const path = `/api/v1/documents/${encodeURIComponent(documentId)}${download ? "/download" : ""}?${suffix}`;
+  return requestBinary(path, "document");
+}
+
+async function requestBinary(path, fallbackFilename) {
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { headers: { Accept: "*/*" } });
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: { Accept: "*/*", ...authorizationHeaders() },
+    });
   } catch {
     throw new ApiClientError(0, "backend_unreachable", "The local agent API is not reachable. Start the FastAPI server and try again.");
   }
@@ -124,13 +147,16 @@ async function requestDocument(documentId, userClearance, download) {
   }
   return {
     content: await response.blob(),
-    filename: filenameFromContentDisposition(response.headers.get("content-disposition")),
+    filename: filenameFromContentDisposition(
+      response.headers.get("content-disposition"),
+      fallbackFilename,
+    ),
   };
 }
 
-function filenameFromContentDisposition(header) {
+function filenameFromContentDisposition(header, fallbackFilename = "document") {
   const match = /filename="([^"\\]+)"/.exec(header ?? "");
-  return match?.[1] ?? "document";
+  return match?.[1] ?? fallbackFilename;
 }
 
 function revokeObjectUrlLater(objectUrl) {
@@ -145,6 +171,7 @@ async function request(path, options = {}, validator = isRunResponse) {
       ...options,
       headers: {
         Accept: "application/json",
+        ...authorizationHeaders(),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...options.headers,
       },

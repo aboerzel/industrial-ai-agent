@@ -5,6 +5,7 @@ import pytest
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
 from industrial_ai_agent.agent.response_language import (
+    DetectedResponseLanguage,
     ResponseLanguage,
     detect_response_language,
     is_response_language_compliant,
@@ -12,6 +13,12 @@ from industrial_ai_agent.agent.response_language import (
 )
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
+from industrial_ai_agent.infrastructure.lingua_response_language_detector import (
+    LinguaResponseLanguageDetector,
+)
+
+
+_DETECTOR = LinguaResponseLanguageDetector()
 
 
 @pytest.mark.parametrize(
@@ -62,12 +69,66 @@ def test_detect_response_language_uses_a_stable_english_fallback(
             True,
         ),
         ("S04: RUNNING", ResponseLanguage.EN, True),
+        ("Station S04 ist RUNNING.", ResponseLanguage.EN, False),
+        ("Please inspect S04 immediately.", ResponseLanguage.DE, False),
+        ("Please inspect S04 immediately.", ResponseLanguage.EN, True),
+        ("Bitte kontrolliere S04 sofort.", ResponseLanguage.EN, False),
+        ("Bitte kontrolliere S04 sofort.", ResponseLanguage.DE, True),
+        ("The station ist RUNNING.", ResponseLanguage.EN, False),
+        ("The station mit QUALITY-09.", ResponseLanguage.EN, False),
+        ("Munich is running.", ResponseLanguage.EN, True),
+        ("Gerät geprüft.", ResponseLanguage.DE, True),
+        ("`MÜNCHEN-01`: RUNNING", ResponseLanguage.EN, True),
+        ("MÜNCHEN-ID: RUNNING", ResponseLanguage.EN, True),
+        ("get_machine_status: RUNNING", ResponseLanguage.DE, True),
+        ("Veuillez inspecter S04 immédiatement.", ResponseLanguage.EN, False),
+        ("No funciona S04.", ResponseLanguage.EN, False),
+        ("The estación S04 está activa.", ResponseLanguage.EN, False),
+        ("Проверьте станцию S04.", ResponseLanguage.DE, False),
+        ("```text\nIch kenne die Station S04.\n```", ResponseLanguage.EN, False),
+        ("```text\nIch kenne die Station S04.\n```", ResponseLanguage.DE, True),
+        (
+            "### Likely Root Cause\n\nDie Station meldet einen Qualitätsfehler.",
+            ResponseLanguage.DE,
+            True,
+        ),
+        ("**Ich kenne die Station S04.**", ResponseLanguage.EN, False),
+        ("DIE STATION IST AKTIV.", ResponseLanguage.EN, False),
+        ("DIE1 STATION2 IST3 JETZT4 AKTIV5.", ResponseLanguage.EN, False),
+        ("... !!!", ResponseLanguage.EN, False),
+        ("https://example.invalid/S04", ResponseLanguage.EN, True),
     ),
 )
-def test_response_language_compliance_rejects_clear_mismatches(
+def test_response_language_compliance_is_fail_closed_with_technical_exceptions(
     text: str, selected_language: ResponseLanguage, expected: bool
 ) -> None:
-    assert is_response_language_compliant(text, selected_language) is expected
+    assert (
+        is_response_language_compliant(text, selected_language, _DETECTOR) is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    (
+        (
+            "The authorized investigation is complete and the station is operational.",
+            DetectedResponseLanguage.EN,
+        ),
+        (
+            "Die autorisierte Untersuchung ist abgeschlossen und die Station ist "
+            "betriebsbereit.",
+            DetectedResponseLanguage.DE,
+        ),
+        (
+            "Veuillez contrôler immédiatement la station concernée.",
+            DetectedResponseLanguage.OTHER,
+        ),
+    ),
+)
+def test_lingua_adapter_identifies_supported_and_unsupported_prose(
+    text: str, expected: DetectedResponseLanguage
+) -> None:
+    assert _DETECTOR.detect(text) is expected
 
 
 def test_run_store_preserves_response_language_across_approval_lifecycle() -> None:

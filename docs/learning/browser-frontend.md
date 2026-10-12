@@ -128,5 +128,9 @@ telemetry, model routing, or the agent loop.
 When a response is `waiting_for_approval`, the UI renders the action, summary,
 arguments, run ID, and status. It disables both decision buttons before calling the
 resume API through `frontend/js/api.js`, so a double click cannot issue a second
-browser action. The browser still cannot set classification, profile, provider, MCP
-server, or egress policy. Streaming and authentication remain future work.
+browser action. The API client sends the operator-entered bearer token in the
+`Authorization` header and retains it only in memory. The server derives the maximum
+clearance and roles from that token; the selector can only request a lower or equal
+working clearance. The browser still cannot set classification, profile, provider, MCP
+server, or egress policy. Streaming and production-grade federated authentication remain
+future work.

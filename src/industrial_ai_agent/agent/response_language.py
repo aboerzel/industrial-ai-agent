@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from typing import Protocol
 
 
 class ResponseLanguage(StrEnum):
@@ -15,6 +16,22 @@ class ResponseLanguage(StrEnum):
     @property
     def display_name(self) -> str:
         return "German" if self is ResponseLanguage.DE else "English"
+
+
+class DetectedResponseLanguage(StrEnum):
+    """Provider-independent result of local natural-language identification."""
+
+    DE = "DE"
+    EN = "EN"
+    OTHER = "OTHER"
+    MIXED = "MIXED"
+    UNKNOWN = "UNKNOWN"
+
+
+class ResponseLanguageDetector(Protocol):
+    """Inner port for deterministic, offline response-language identification."""
+
+    def detect(self, text: str) -> DetectedResponseLanguage: ...
 
 
 _GERMAN_TOKENS = frozenset(
@@ -66,52 +83,40 @@ _ENGLISH_TOKENS = frozenset(
     }
 )
 _WORD_PATTERN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ0-9]+")
-_HAN_PATTERN = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
-_GERMAN_RESPONSE_MARKERS = frozenset(
-    {
-        "aktuell",
-        "beide",
-        "betrieb",
-        "der",
-        "die",
-        "fehler",
-        "folgende",
-        "für",
-        "ich",
-        "ist",
-        "kenne",
-        "laufenden",
-        "mit",
-        "benötigt",
-        "ohne",
-        "sind",
-        "stationen",
-        "untersuchung",
-        "weitere",
-        "wurde",
-    }
+_RESPONSE_URL_PATTERN = re.compile(
+    r"(?:https?://|www\.)\S+|\b[^\s@]+@[^\s@]+\b", re.IGNORECASE
 )
-_ENGLISH_RESPONSE_MARKERS = frozenset(
+_RESPONSE_FENCE_PATTERN = re.compile(
+    r"(?m)^[ \t]*```[A-Za-z0-9_+.-]*[ \t]*$"
+)
+_RESPONSE_STRUCTURAL_HEADING_PATTERN = re.compile(
+    r"(?im)^[ \t]{0,3}#{1,6}[ \t]+Likely Root Cause[ \t]*$"
+)
+_RESPONSE_MARKDOWN_DELIMITER_PATTERN = re.compile(r"`+")
+_RESPONSE_TOKEN_PATTERN = re.compile(r"[^\W_]+(?:[-_.:/][^\W_]+)*", re.UNICODE)
+_TECHNICAL_RESPONSE_TOKENS = frozenset(
     {
-        "active",
-        "and",
-        "are",
-        "both",
-        "currently",
-        "faults",
-        "following",
-        "for",
-        "further",
-        "investigation",
-        "is",
-        "know",
-        "needs",
-        "operating",
-        "stations",
-        "the",
-        "were",
-        "with",
-        "without",
+        "BLOCKED",
+        "CLOSED",
+        "ERROR",
+        "FAILED",
+        "FAULTED",
+        "IDLE",
+        "NOT_REQUIRED",
+        "OK",
+        "OPEN",
+        "PENDING",
+        "RUNNING",
+        "STOPPED",
+        "SUCCEEDED",
+        "UNKNOWN",
+        "API",
+        "HTTP",
+        "HTTPS",
+        "LLM",
+        "MCP",
+        "PLC",
+        "RLS",
     }
 )
 
@@ -138,27 +143,57 @@ def response_language_instruction(response_language: ResponseLanguage) -> str:
 
 
 def is_response_language_compliant(
-    text: str, response_language: ResponseLanguage
+    text: str,
+    response_language: ResponseLanguage,
+    detector: ResponseLanguageDetector,
 ) -> bool:
-    """Reject prose that is clearly written in another supported language.
+    """Accept only selected-language prose or language-neutral technical content.
 
-    Technical identifiers and terse structured values may contain no natural-language
-    markers, so unknown text remains valid. A mismatch requires at least two markers
-    from the opposite language unless a German-specific character makes the signal
-    unambiguous.
+    Unknown natural-language prose fails closed. URLs, identifiers, and closed uppercase
+    status values remain language-neutral. Markdown code delimiters do not make prose
+    exempt from the user-facing language contract.
     """
     if not text.strip():
-        return True
-    if _HAN_PATTERN.search(text):
         return False
-    tokens = tuple(token.casefold() for token in _WORD_PATTERN.findall(text))
-    german_score = sum(token in _GERMAN_RESPONSE_MARKERS for token in tokens)
-    english_score = sum(token in _ENGLISH_RESPONSE_MARKERS for token in tokens)
-    if any(character in text for character in "äöüßÄÖÜ"):
-        german_score += 2
-    if response_language is ResponseLanguage.EN:
-        return german_score < 2 or english_score >= german_score
-    return english_score < 2 or german_score >= english_score
+    prose, removed_urls = _strip_language_neutral_urls(text)
+    prose = _RESPONSE_FENCE_PATTERN.sub(" ", prose)
+    prose = _RESPONSE_STRUCTURAL_HEADING_PATTERN.sub(" ", prose)
+    prose = _RESPONSE_MARKDOWN_DELIMITER_PATTERN.sub(" ", prose)
+    tokens = _RESPONSE_TOKEN_PATTERN.findall(prose)
+    natural_language_tokens = tuple(
+        token for token in tokens if not _is_technical_response_token(token)
+    )
+    if not natural_language_tokens:
+        return bool(tokens or removed_urls) and len(tokens) <= 4
+    detected = detector.detect(" ".join(natural_language_tokens))
+    return detected.value == response_language.value
+
+
+def _is_technical_response_token(token: str) -> bool:
+    cased_characters = tuple(character for character in token if character.isalpha())
+    return (
+        token in _TECHNICAL_RESPONSE_TOKENS
+        or (
+            any(character.isdigit() for character in token)
+            and (
+                not cased_characters
+                or token.isupper()
+                or any(separator in token for separator in "-_.:/")
+            )
+        )
+        or "_" in token
+        or "/" in token
+        or (
+            any(separator in token for separator in "-.:")
+            and len(cased_characters) >= 2
+            and all(character.isupper() for character in cased_characters)
+        )
+    )
+
+
+def _strip_language_neutral_urls(text: str) -> tuple[str, bool]:
+    stripped, count = _RESPONSE_URL_PATTERN.subn(" ", text)
+    return stripped, count > 0
 
 
 def user_facing_error_message(

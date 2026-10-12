@@ -210,10 +210,12 @@ ADR-009 remains authoritative for classification and final egress authorization.
 may be inherited monotonically for an identifierless follow-up; inaccessible context
 cannot be inherited, an explicit higher target escalates, and unknown context remains
 conservative. Direct run retrieval, investigation retrieval, PDF/document visibility,
-and resume authorization all enforce the supplied demo clearance. Resume checks
-authorization before `claim_resume`, then continues the same checkpointed thread with
-the persisted model and classification binding. The demo records approval clearance, not
-a real authenticated identity; production identity-bound authorization remains absent.
+and resume authorization all enforce a server-authenticated maximum clearance. A client
+may request only an equal or lower working clearance. Each run-store adapter receives
+that request-specific context so PostgreSQL RLS filters records before Python sees them.
+Resume checks authorization before `claim_resume`, then continues the same checkpointed
+thread with the persisted model and classification binding. The local demo uses opaque
+bearer tokens; production-grade federated identity remains future work.
 
 The deployed runtime uses Factory and Knowledge MCP for general troubleshooting and
 Hardware MCP for the bounded recovery profile. Runtime and Observability MCP are
