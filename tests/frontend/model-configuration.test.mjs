@@ -6,6 +6,7 @@ import {
   mountModelConfiguration,
   renderConfiguration,
 } from "../../frontend/js/model-configuration.js";
+import { invalidateSecurityContext } from "../../frontend/js/api.js?v=20261013-2";
 
 const CATALOG = [
   model("local_quality", "Local Qwen 3.5 9B", "LOCAL", "RESTRICTED", ["text", "tool_calling", "structured_output"]),
@@ -294,6 +295,33 @@ test("opens, loads, closes, and reopens the production model configuration dialo
     assert.equal(dialog.open, true);
     assert.equal(requests.length, 3);
     assert.ok(requests.every((request) => request.method === "GET"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("context transition clears model dialog state and rejects its old load", async () => {
+  const dom = new JSDOM("<button id='open'></button><dialog><button id='model-configuration-close'></button><div id='model-configuration-content'></div><p id='model-configuration-save-status'></p></dialog>");
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  const dialog = document.querySelector("dialog");
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; };
+  const originalFetch = globalThis.fetch;
+  const pending = [];
+  globalThis.fetch = (url, options) => new Promise((resolve) => { pending.push({ url, resolve, signal: options.signal }); });
+  try {
+    mountModelConfiguration({ button: document.querySelector("#open"), dialog });
+    document.querySelector("#open").click();
+    invalidateSecurityContext();
+    assert.equal(dialog.open, false);
+    assert.equal(dialog.querySelector("#model-configuration-content").textContent, "");
+    for (const request of pending) {
+      assert.equal(request.signal.aborted, true);
+      request.resolve(jsonResponse(request.url.endsWith("/models") ? CATALOG : request.url.endsWith("/model-consumers") ? CONSUMERS : []));
+    }
+    await settle();
+    assert.equal(dialog.querySelector("#model-configuration-content").textContent, "");
   } finally {
     globalThis.fetch = originalFetch;
   }

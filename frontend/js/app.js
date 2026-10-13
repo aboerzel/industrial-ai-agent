@@ -4,10 +4,13 @@ import {
   downloadDocument,
   downloadInvestigationPdf,
   getInvestigation,
+  getSecurityContextGeneration,
+  invalidateSecurityContext,
+  isCurrentSecurityContext,
   openDocument,
   resumeRun,
-} from "./api.js?v=20261013-1";
-import { mountModelConfiguration } from "./model-configuration.js?v=20261013-1";
+} from "./api.js?v=20261013-2";
+import { mountModelConfiguration } from "./model-configuration.js?v=20261013-2";
 import { renderAgentAnswer } from "./markdown.js?v=20261013-1";
 import { downloadTranscriptPdf } from "./transcript-pdf.js?v=20261013-1";
 
@@ -33,6 +36,7 @@ let pendingAgentTurn = null;
 let pendingTranscriptTurn = null;
 let latestSubmissionId = 0;
 let visibleTranscript = [];
+let selectedClearance = userClearance.value;
 
 if (modelConfigurationButton && modelConfigurationDialog) {
   mountModelConfiguration({ button: modelConfigurationButton, dialog: modelConfigurationDialog });
@@ -56,8 +60,35 @@ composerMessage.addEventListener("keydown", (event) => {
   composerForm.requestSubmit();
 });
 
-userClearance.addEventListener("change", persistUiState);
+userClearance.addEventListener("change", () => {
+  if (userClearance.value === selectedClearance) return;
+  selectedClearance = userClearance.value;
+  invalidateSecurityContext("clearance");
+});
 responseLanguage.addEventListener("change", persistUiState);
+
+window.addEventListener("securitycontextchange", (event) => {
+  const investigationId = currentInvestigationId;
+  latestSubmissionId += 1;
+  isSubmitting = false;
+  composerMessage.value = "";
+  renderEmptyInvestigation();
+  document.querySelectorAll(".reference-popover").forEach((menu) => menu.remove());
+  if (event.detail?.reason === "navigation") {
+    // Persist only a reference; restoration must retrieve it under current authority.
+    persistActiveInvestigation(investigationId);
+  } else if (event.detail?.reason === "clearance" && investigationId) {
+    currentInvestigationId = investigationId;
+    const generation = getSecurityContextGeneration();
+    void reloadInvestigation().catch(() => {
+      if (isCurrentSecurityContext(generation)) renderEmptyInvestigation();
+    });
+  }
+});
+window.addEventListener("pagehide", () => invalidateSecurityContext("navigation"));
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) void restoreActiveInvestigation();
+});
 
 newInvestigationButton.addEventListener("click", () => {
   if (isSubmitting) return;
@@ -67,10 +98,12 @@ newInvestigationButton.addEventListener("click", () => {
 });
 
 exportPdfButton.addEventListener("click", async () => {
+  const generation = getSecurityContextGeneration();
   if (currentInvestigationId) {
     try {
       await downloadInvestigationPdf(currentInvestigationId, userClearance.value);
     } catch (error) {
+      if (!isCurrentSecurityContext(generation)) return;
       showError(publicError(error, "The PDF export could not be downloaded."));
     }
   } else if (hasExportableConversation) {
@@ -81,6 +114,7 @@ exportPdfButton.addEventListener("click", async () => {
 void restoreActiveInvestigation();
 
 async function restoreActiveInvestigation() {
+  const generation = getSecurityContextGeneration();
   const activeInvestigation = readActiveInvestigation();
   if (!activeInvestigation) {
     renderEmptyInvestigation();
@@ -89,6 +123,7 @@ async function restoreActiveInvestigation() {
 
   currentInvestigationId = activeInvestigation.investigationId;
   userClearance.value = activeInvestigation.userClearance;
+  selectedClearance = userClearance.value;
   responseLanguage.value = activeInvestigation.responseLanguage;
   if (!activeInvestigation.investigationId) {
     renderEmptyInvestigation();
@@ -97,6 +132,7 @@ async function restoreActiveInvestigation() {
   try {
     await reloadInvestigation();
   } catch {
+    if (!isCurrentSecurityContext(generation)) return;
     clearActiveInvestigation();
     renderEmptyInvestigation();
   }
@@ -113,6 +149,7 @@ async function submitRequest(message = composerMessage.value.trim()) {
 
   const isNewInvestigation = currentInvestigationId === null;
   const submission = {
+    generation: getSecurityContextGeneration(),
     id: ++latestSubmissionId,
     investigationId: currentInvestigationId,
     clearance: userClearance.value,
@@ -144,6 +181,7 @@ async function submitRequest(message = composerMessage.value.trim()) {
     }
     renderPendingFailure(error, submission.language);
   } finally {
+    if (submission.id !== latestSubmissionId || !isCurrentSecurityContext(submission.generation)) return;
     isSubmitting = false;
     syncControls();
   }
@@ -204,9 +242,11 @@ async function refreshTerminalInvestigation(result, submission) {
 
 async function reloadInvestigation() {
   if (!currentInvestigationId) return;
-  renderInvestigation(
-    await getInvestigation(currentInvestigationId, userClearance.value),
-  );
+  const generation = getSecurityContextGeneration();
+  const investigationId = currentInvestigationId;
+  const investigation = await getInvestigation(investigationId, userClearance.value);
+  if (!isCurrentSecurityContext(generation) || investigationId !== currentInvestigationId) return;
+  renderInvestigation(investigation);
 }
 
 function renderEmptyInvestigation() {
@@ -245,14 +285,18 @@ function renderInvestigation(investigation) {
 }
 
 function persistActiveInvestigation(investigationId) {
-  window.sessionStorage.setItem(
-    ACTIVE_INVESTIGATION_STORAGE_KEY,
-    JSON.stringify({
-      investigationId,
-      userClearance: userClearance.value,
-      responseLanguage: responseLanguage.value,
-    }),
-  );
+  try {
+    window.sessionStorage.setItem(
+      ACTIVE_INVESTIGATION_STORAGE_KEY,
+      JSON.stringify({
+        investigationId,
+        userClearance: userClearance.value,
+        responseLanguage: responseLanguage.value,
+      }),
+    );
+  } catch {
+    // Optional navigation storage must never prevent clearing protected UI state.
+  }
 }
 
 function clearActiveInvestigation() {
@@ -615,9 +659,11 @@ function createDocumentAction(label, icon, action) {
   button.disabled = isSubmitting;
   button.addEventListener("click", async () => {
     if (isSubmitting) return;
+    const generation = getSecurityContextGeneration();
     try {
       await action();
     } catch (error) {
+      if (!isCurrentSecurityContext(generation)) return;
       showError(publicError(error, "The document could not be retrieved."));
     }
   });
@@ -771,10 +817,13 @@ function renderApproval(turn) {
 }
 
 async function decide(runId, decision) {
+  const generation = getSecurityContextGeneration();
   try {
     await resumeRun(runId, decision, userClearance.value);
+    if (!isCurrentSecurityContext(generation)) return;
     await reloadInvestigation();
   } catch (error) {
+    if (!isCurrentSecurityContext(generation)) return;
     showError(publicError(error, "The decision could not be submitted."));
     setStatus("failed");
   }

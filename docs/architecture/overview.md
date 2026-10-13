@@ -469,6 +469,31 @@ eligibility. Unknown free text without a documented demo identifier is conservat
 resolved as `RESTRICTED_TROUBLESHOOTING`: unknown sensitivity never authorizes
 public-cloud model processing.
 
+The browser API adapter owns a security-context generation and abort signal. Any
+clearance change (upgrade or downgrade) synchronously invalidates old requests and
+purges the conversation DOM, pending turns, export transcript, draft, model dialog,
+and document Blob URLs before reloading the active investigation under the new requested
+clearance. Every JSON/binary response is checked after retrieval and body parsing;
+generation checks reject late responses even if abort is ignored. API requests bypass
+the browser response cache. HTTP 401 invalidates the session view. `pagehide` purges
+active state; a Back/Forward-cache restoration fetches fresh authorized data on
+`pageshow`. Normal reloads retain only an investigation ID and UI preferences in
+`sessionStorage`, never conversation content. Those values are navigation preferences,
+not identity or authority. Gateway identity changes require navigation in this demo;
+there is no in-page identity/tenant/role switch or stream. Backend authorization remains
+authoritative. Already exported files cannot be recalled by clearing browser state.
+
+```mermaid
+flowchart LR
+    Change["Clearance change / session invalidation / navigation"] --> Cancel["Advance context generation<br/>abort old API requests"]
+    Cancel --> Purge["Purge sensitive UI / transcript / Blob URLs"]
+    Purge --> Fetch["Fresh fetch via authenticated gateway<br/>new requested clearance"]
+    Fetch --> Authorize["Backend authoritative authorization"]
+    Authorize -->|"allowed + current generation"| Render["Render freshly authorized data"]
+    Authorize -->|"denied"| Empty["Remain empty"]
+    Cancel --> Late["Discard late old-context responses"]
+```
+
 Compose publishes host-facing demo and diagnostic ports only on `127.0.0.1`; services
 communicating only within Compose, including the OTel Collector, have no host port.
 Grafana anonymous local access is restricted to Viewer. Persistent assignments select one

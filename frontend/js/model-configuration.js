@@ -2,8 +2,10 @@ import {
   getModelAssignments,
   getModelCatalog,
   getModelConsumers,
+  getSecurityContextGeneration,
+  isCurrentSecurityContext,
   saveModelConfiguration,
-} from "./api.js?v=20261013-1";
+} from "./api.js?v=20261013-2";
 
 const CLASSIFICATIONS = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"];
 const CLASSIFICATION_RANK = Object.fromEntries(CLASSIFICATIONS.map((item, index) => [item, index]));
@@ -16,6 +18,11 @@ export function mountModelConfiguration({ button, dialog }) {
   const content = dialog.querySelector("#model-configuration-content");
   const close = dialog.querySelector("#model-configuration-close");
   const saveStatus = dialog.querySelector("#model-configuration-save-status");
+  window.addEventListener("securitycontextchange", () => {
+    content.replaceChildren();
+    setSaveStatus(saveStatus, "");
+    if (dialog.open) dialog.close();
+  });
   button.addEventListener("click", async () => {
     dialog.showModal();
     await loadConfiguration(content, saveStatus);
@@ -25,14 +32,17 @@ export function mountModelConfiguration({ button, dialog }) {
 }
 
 export async function loadConfiguration(content, saveStatus = null) {
+  const generation = getSecurityContextGeneration();
   content.replaceChildren(status("Loading configured models..."));
   setSaveStatus(saveStatus, "");
   try {
     const [catalog, consumers, assignments] = await Promise.all([
       getModelCatalog(), getModelConsumers(), getModelAssignments(),
     ]);
+    if (!isCurrentSecurityContext(generation)) return;
     renderConfiguration(content, { catalog, consumers, assignments }, saveStatus);
   } catch (error) {
+    if (!isCurrentSecurityContext(generation)) return;
     content.replaceChildren(status(error?.message ?? "Model configuration could not be loaded.", "error"));
   }
 }
@@ -76,6 +86,7 @@ function gridHeader() {
 }
 
 function renderAssignmentRow(consumer, classification, catalog, assignment, saveStatus) {
+  const securityGeneration = getSecurityContextGeneration();
   let confirmedAssignment = assignment ?? { selection_mode: "MANUAL", model_id: null, selection_policy: null };
   let queuedConfiguration = null;
   let saving = false;
@@ -145,12 +156,13 @@ function renderAssignmentRow(consumer, classification, catalog, assignment, save
     void saveNext();
   };
   const saveNext = async () => {
-    if (saving || !queuedConfiguration) return;
+    if (!isCurrentSecurityContext(securityGeneration) || saving || !queuedConfiguration) return;
     saving = true;
     const request = queuedConfiguration;
     queuedConfiguration = null;
     try {
       const persisted = await saveModelConfiguration(consumer.consumer_id, classification, request.configuration, request.action);
+      if (!isCurrentSecurityContext(securityGeneration)) return;
       confirmedAssignment = persisted;
       if (request.generation === changeGeneration) {
         feedback.textContent = "";
@@ -158,6 +170,7 @@ function renderAssignmentRow(consumer, classification, catalog, assignment, save
         setSaveStatus(saveStatus, "Saved");
       }
     } catch {
+      if (!isCurrentSecurityContext(securityGeneration)) return;
       if (request.generation === changeGeneration && !queuedConfiguration) {
         feedback.textContent = "";
         restoreConfirmed();
@@ -168,7 +181,7 @@ function renderAssignmentRow(consumer, classification, catalog, assignment, save
       }
     } finally {
       saving = false;
-      if (queuedConfiguration) {
+      if (isCurrentSecurityContext(securityGeneration) && queuedConfiguration) {
         feedback.classList.remove("error");
         feedback.textContent = "";
         setSaveStatus(saveStatus, "Saving...");

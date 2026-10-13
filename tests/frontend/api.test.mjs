@@ -8,10 +8,84 @@ import {
   getRun,
   getInvestigation,
   resumeRun,
+  invalidateSecurityContext,
+  openDocument,
+  SecurityContextChangedError,
   saveModelAssignment,
 } from "../../frontend/js/api.js";
 
 const RUN_ID = "0ca96c57-66f6-4e12-b151-6f7f6ef9c9f8";
+
+test("rejects old-context JSON and binary responses even when fetch ignores abort", async (t) => {
+  for (const operation of [() => getRun(RUN_ID), () => openDocument("synthetic", "CONFIDENTIAL")]) {
+    await t.test("stale response", async () => {
+      const originalFetch = globalThis.fetch;
+      let resolveFetch;
+      let signal;
+      globalThis.fetch = (_url, options) => {
+        signal = options.signal;
+        return new Promise((resolve) => { resolveFetch = resolve; });
+      };
+      try {
+        const pending = operation();
+        const rejection = assert.rejects(pending, SecurityContextChangedError);
+        invalidateSecurityContext();
+        assert.equal(signal.aborted, true);
+        resolveFetch(new Response("synthetic stale response", { status: 200 }));
+        await rejection;
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  }
+});
+
+test("late binary body cannot create a document URL after invalidation", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCreate = URL.createObjectURL;
+  let resolveBody;
+  let created = 0;
+  URL.createObjectURL = () => { created += 1; return "blob:unexpected"; };
+  globalThis.fetch = async () => ({
+    ok: true, status: 200, headers: new Headers(),
+    blob: () => new Promise((resolve) => { resolveBody = resolve; }),
+  });
+  try {
+    const pending = openDocument("synthetic", "CONFIDENTIAL");
+    const rejection = assert.rejects(pending, SecurityContextChangedError);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    invalidateSecurityContext();
+    resolveBody(new Blob(["synthetic secret"]));
+    await rejection;
+    assert.equal(created, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    URL.createObjectURL = originalCreate;
+  }
+});
+
+test("context invalidation revokes previously opened document URLs", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  const originalCreate = URL.createObjectURL;
+  const originalRevoke = URL.revokeObjectURL;
+  const revoked = [];
+  globalThis.fetch = async () => new Response("synthetic document", { status: 200 });
+  globalThis.window = { open: () => null };
+  URL.createObjectURL = () => "blob:synthetic-protected";
+  URL.revokeObjectURL = (url) => revoked.push(url);
+  try {
+    await openDocument("synthetic", "CONFIDENTIAL");
+    globalThis.window = undefined;
+    invalidateSecurityContext();
+    assert.deepEqual(revoked, ["blob:synthetic-protected"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+  }
+});
 
 test("accepts OpenAPI-valid run responses with omitted default fields", async () => {
   const result = await requestRun({

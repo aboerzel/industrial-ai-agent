@@ -1,4 +1,44 @@
 const API_BASE_URL = "";
+let securityContextGeneration = 0;
+let securityContextController = new AbortController();
+const documentUrls = new Set();
+
+export class SecurityContextChangedError extends Error {
+  constructor() {
+    super("The security context changed.");
+    this.name = "SecurityContextChangedError";
+  }
+}
+
+export function getSecurityContextGeneration() {
+  return securityContextGeneration;
+}
+
+export function isCurrentSecurityContext(generation) {
+  return generation === securityContextGeneration;
+}
+
+export function invalidateSecurityContext(reason = "session") {
+  securityContextGeneration += 1;
+  securityContextController.abort();
+  securityContextController = new AbortController();
+  for (const url of documentUrls) URL.revokeObjectURL(url);
+  documentUrls.clear();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new window.CustomEvent("securitycontextchange", { detail: { reason } }));
+  }
+}
+
+function requireCurrentSecurityContext(generation) {
+  if (!isCurrentSecurityContext(generation)) throw new SecurityContextChangedError();
+}
+
+function createDocumentUrl(content, generation) {
+  requireCurrentSecurityContext(generation);
+  const url = URL.createObjectURL(content);
+  documentUrls.add(url);
+  return url;
+}
 
 export class ApiClientError extends Error {
   constructor(status, code, message, investigationId = null) {
@@ -78,10 +118,11 @@ export async function getInvestigation(investigationId, userClearance) {
 }
 
 export async function downloadInvestigationPdf(investigationId, userClearance) {
+  const generation = getSecurityContextGeneration();
   const suffix = new URLSearchParams({ user_clearance: userClearance });
   const path = `/api/v1/investigations/${encodeURIComponent(investigationId)}/pdf?${suffix}`;
   const responseDocument = await requestBinary(path, "investigation.pdf");
-  const objectUrl = URL.createObjectURL(responseDocument.content);
+  const objectUrl = createDocumentUrl(responseDocument.content, generation);
   const link = document.createElement("a");
   link.href = objectUrl;
   link.download = responseDocument.filename;
@@ -93,15 +134,17 @@ export async function downloadInvestigationPdf(investigationId, userClearance) {
 }
 
 export async function openDocument(documentId, userClearance) {
+  const generation = getSecurityContextGeneration();
   const responseDocument = await requestDocument(documentId, userClearance, false);
-  const objectUrl = URL.createObjectURL(responseDocument.content);
+  const objectUrl = createDocumentUrl(responseDocument.content, generation);
   window.open(objectUrl, "_blank", "noopener");
   revokeObjectUrlLater(objectUrl);
 }
 
 export async function downloadDocument(documentId, userClearance) {
+  const generation = getSecurityContextGeneration();
   const responseDocument = await requestDocument(documentId, userClearance, true);
-  const objectUrl = URL.createObjectURL(responseDocument.content);
+  const objectUrl = createDocumentUrl(responseDocument.content, generation);
   const link = document.createElement("a");
   link.href = objectUrl;
   link.download = document.filename;
@@ -119,16 +162,23 @@ async function requestDocument(documentId, userClearance, download) {
 }
 
 async function requestBinary(path, fallbackFilename) {
+  const generation = getSecurityContextGeneration();
   let response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       headers: { Accept: "*/*" },
+      signal: securityContextController.signal,
+      cache: "no-store",
     });
   } catch {
+    requireCurrentSecurityContext(generation);
     throw new ApiClientError(0, "backend_unreachable", "The local agent API is not reachable. Start the FastAPI server and try again.");
   }
+  requireCurrentSecurityContext(generation);
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
+    requireCurrentSecurityContext(generation);
+    if (response.status === 401) invalidateSecurityContext("authentication");
     const publicError = isApiErrorResponse(payload) ? payload : null;
     throw new ApiClientError(
       response.status,
@@ -136,8 +186,10 @@ async function requestBinary(path, fallbackFilename) {
       errorMessageFor(response.status, publicError?.code, publicError?.message),
     );
   }
+  const content = await response.blob();
+  requireCurrentSecurityContext(generation);
   return {
-    content: await response.blob(),
+    content,
     filename: filenameFromContentDisposition(
       response.headers.get("content-disposition"),
       fallbackFilename,
@@ -151,15 +203,20 @@ function filenameFromContentDisposition(header, fallbackFilename = "document") {
 }
 
 function revokeObjectUrlLater(objectUrl) {
-  const timer = globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  const timer = globalThis.setTimeout(() => {
+    if (documentUrls.delete(objectUrl)) URL.revokeObjectURL(objectUrl);
+  }, 60_000);
   timer?.unref?.();
 }
 
 async function request(path, options = {}, validator = isRunResponse) {
+  const generation = getSecurityContextGeneration();
   let response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
+      signal: securityContextController.signal,
+      cache: "no-store",
       headers: {
         Accept: "application/json",
         ...(options.body ? { "Content-Type": "application/json" } : {}),
@@ -167,6 +224,7 @@ async function request(path, options = {}, validator = isRunResponse) {
       },
     });
   } catch {
+    requireCurrentSecurityContext(generation);
     throw new ApiClientError(
       0,
       "backend_unreachable",
@@ -174,8 +232,11 @@ async function request(path, options = {}, validator = isRunResponse) {
     );
   }
 
+  requireCurrentSecurityContext(generation);
   const payload = await response.json().catch(() => null);
+  requireCurrentSecurityContext(generation);
   if (!response.ok) {
+    if (response.status === 401) invalidateSecurityContext("authentication");
     const publicError = isApiErrorResponse(payload) ? payload : null;
     throw new ApiClientError(
       response.status,

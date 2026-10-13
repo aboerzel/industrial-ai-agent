@@ -915,6 +915,229 @@ test("renders a single-composer investigation workspace", async (t) => {
   });
 });
 
+test("clearance downgrade immediately removes protected conversation and export state", async () => {
+  const protectedInvestigation = structuredClone(INVESTIGATION);
+  protectedInvestigation.turns[0].answer = "SYNTHETIC CONFIDENTIAL CONTENT";
+  protectedInvestigation.turns[0].data_classification = "CONFIDENTIAL";
+  const { document, window, restoreFetch } = await loadApp((url) => {
+    if (String(url).includes("user_clearance=PUBLIC")) {
+      return jsonResponse({ code: "investigation_not_found", message: "Unavailable" }, 404);
+    }
+    return jsonResponse(protectedInvestigation);
+  }, { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+  try {
+    await settle();
+    assert.match(document.querySelector("#conversation-history").textContent, /SYNTHETIC CONFIDENTIAL CONTENT/);
+    const clearance = document.querySelector("#user-clearance");
+    clearance.value = "PUBLIC";
+    clearance.dispatchEvent(new window.Event("change"));
+    assert.doesNotMatch(document.body.textContent, /SYNTHETIC CONFIDENTIAL CONTENT/);
+    assert.equal(document.querySelector("#export-pdf-button").disabled, true);
+    await settle();
+    assert.equal(document.querySelectorAll(".agent-turn").length, 0);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("security transitions remove old data and reload only under the new clearance", async (t) => {
+  for (const [previous, next] of [["RESTRICTED", "PUBLIC"], ["RESTRICTED", "CONFIDENTIAL"], ["PUBLIC", "CONFIDENTIAL"]]) {
+    await t.test(`${previous} -> ${next}`, async () => {
+      const original = structuredClone(INVESTIGATION);
+      original.turns[0].answer = "SYNTHETIC OLD CONTEXT";
+      original.turns[0].data_classification = previous;
+      const fresh = structuredClone(INVESTIGATION);
+      fresh.turns[0].answer = "Fresh authorized response";
+      fresh.turns[0].data_classification = next;
+      const requests = [];
+      let resolveReload;
+      const { document, window, restoreFetch } = await loadApp((url) => {
+        requests.push(String(url));
+        if (requests.length === 1) return jsonResponse(original);
+        return new Promise((resolve) => { resolveReload = resolve; });
+      }, { investigationId: INVESTIGATION_ID, userClearance: previous, responseLanguage: "EN" });
+      try {
+        await settle();
+        document.querySelector("#composer-message").value = "SYNTHETIC OLD DRAFT";
+        changeClearance(document, window, next);
+        assert.doesNotMatch(document.body.textContent, /SYNTHETIC OLD CONTEXT/);
+        assert.equal(document.querySelector("#composer-message").value, "");
+        assert.equal(document.querySelector("#export-pdf-button").disabled, true);
+        assert.match(requests.at(-1), new RegExp(`user_clearance=${next}$`));
+        resolveReload(jsonResponse(fresh));
+        await settle();
+        assert.match(document.body.textContent, /Fresh authorized response/);
+        assert.doesNotMatch(document.body.textContent, /SYNTHETIC OLD CONTEXT/);
+      } finally {
+        restoreFetch();
+      }
+    });
+  }
+});
+
+test("ignores an old submission even after downgrade and upgrade to its original clearance", async () => {
+  let resolveOld;
+  let oldSignal;
+  const { document, window, restoreFetch } = await loadApp((_url, options) => {
+    oldSignal = options.signal;
+    return new Promise((resolve) => { resolveOld = resolve; });
+  });
+  try {
+    document.querySelector("#composer-message").value = "SYNTHETIC OLD REQUEST";
+    submit(document, window);
+    changeClearance(document, window, "PUBLIC");
+    changeClearance(document, window, "RESTRICTED");
+    assert.equal(oldSignal.aborted, true);
+    resolveOld(jsonResponse({ ...runResponse(), answer: "SYNTHETIC LATE SECRET" }));
+    await settle();
+    assert.doesNotMatch(document.body.textContent, /SYNTHETIC (OLD REQUEST|LATE SECRET)/);
+    assert.equal(document.querySelector("#export-pdf-button").disabled, true);
+    assert.equal(JSON.parse(window.sessionStorage.getItem("industrial-ai-agent.active-investigation")).investigationId, null);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("late old-context JSON parsing cannot overwrite a new investigation view", async () => {
+  let resolveOldBody;
+  const fresh = structuredClone(INVESTIGATION);
+  fresh.turns[0].answer = "New PUBLIC response";
+  let calls = 0;
+  const { document, window, restoreFetch } = await loadApp(() => {
+    if (++calls === 1) return { ok: true, status: 200, json: () => new Promise((resolve) => { resolveOldBody = resolve; }) };
+    return jsonResponse(fresh);
+  }, { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+  try {
+    await settle();
+    changeClearance(document, window, "PUBLIC");
+    await settle();
+    const old = structuredClone(INVESTIGATION);
+    old.turns[0].answer = "SYNTHETIC OLD JSON SECRET";
+    resolveOldBody(old);
+    await settle();
+    assert.match(document.body.textContent, /New PUBLIC response/);
+    assert.doesNotMatch(document.body.textContent, /SYNTHETIC OLD JSON SECRET/);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("navigation between gateway identities purges old UI and reauthorizes restored references", async () => {
+  let identity = "A";
+  const original = structuredClone(INVESTIGATION);
+  original.turns[0].answer = "SYNTHETIC IDENTITY A SECRET";
+  const { document, window, restoreFetch } = await loadApp(() => identity === "A"
+    ? jsonResponse(original)
+    : jsonResponse({ code: "investigation_not_found", message: "Unavailable" }, 404),
+  { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+  try {
+    await settle();
+    window.dispatchEvent(new window.PageTransitionEvent("pagehide", { persisted: true }));
+    assert.doesNotMatch(document.body.textContent, /SYNTHETIC IDENTITY A SECRET/);
+    assert.equal(document.querySelector("#export-pdf-button").disabled, true);
+    identity = "B";
+    window.dispatchEvent(new window.PageTransitionEvent("pageshow", { persisted: true }));
+    await settle();
+    assert.doesNotMatch(document.body.textContent, /SYNTHETIC IDENTITY A SECRET/);
+    assert.equal(JSON.parse(window.sessionStorage.getItem("industrial-ai-agent.active-investigation")).investigationId, null);
+  } finally {
+    restoreFetch();
+  }
+});
+
+function changeClearance(document, window, clearance) {
+  const select = document.querySelector("#user-clearance");
+  select.value = clearance;
+  select.dispatchEvent(new window.Event("change"));
+}
+
+test("authentication rejection purges previously visible data", async () => {
+  let rejectSession = false;
+  const original = structuredClone(INVESTIGATION);
+  original.turns[0].answer = "SYNTHETIC EXPIRED SESSION SECRET";
+  const { document, window, restoreFetch } = await loadApp(() => rejectSession
+    ? jsonResponse({ code: "authentication_required", message: "Authentication required" }, 401)
+    : jsonResponse(original),
+  { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+  try {
+    await settle();
+    rejectSession = true;
+    submit(document, window);
+    await settle();
+    assert.doesNotMatch(document.body.textContent, /SYNTHETIC EXPIRED SESSION SECRET/);
+    assert.equal(document.querySelector("#export-pdf-button").disabled, true);
+    assert.equal(JSON.parse(window.sessionStorage.getItem("industrial-ai-agent.active-investigation")).investigationId, null);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("same-identity back navigation restores only freshly authorized data", async () => {
+  const original = structuredClone(INVESTIGATION);
+  original.turns[0].answer = "SYNTHETIC NAVIGATION SECRET";
+  const fresh = structuredClone(original);
+  fresh.turns[0].answer = "Fresh navigation response";
+  let calls = 0;
+  const { document, window, restoreFetch } = await loadApp(() => jsonResponse(++calls === 1 ? original : fresh),
+    { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+  try {
+    await settle();
+    window.dispatchEvent(new window.PageTransitionEvent("pagehide", { persisted: true }));
+    assert.doesNotMatch(document.body.textContent, /SYNTHETIC NAVIGATION SECRET/);
+    window.dispatchEvent(new window.PageTransitionEvent("pageshow", { persisted: true }));
+    await settle();
+    assert.match(document.body.textContent, /Fresh navigation response/);
+    assert.equal(calls, 2);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("post-downgrade submissions use the narrowed clearance and no denied investigation", async () => {
+  const bodies = [];
+  const { document, window, restoreFetch } = await loadApp((url, options) => {
+    if (String(url).includes("/api/v1/runs")) {
+      bodies.push(JSON.parse(options.body));
+      return jsonResponse({ ...runResponse(), data_classification: "PUBLIC", answer: "Public result" });
+    }
+    if (String(url).includes("user_clearance=PUBLIC")) return jsonResponse({ code: "investigation_not_found", message: "Unavailable" }, 404);
+    return jsonResponse(INVESTIGATION);
+  }, { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+  try {
+    await settle();
+    changeClearance(document, window, "PUBLIC");
+    await settle();
+    document.querySelector("#composer-message").value = "Public query";
+    submit(document, window);
+    await settle();
+    assert.equal(bodies[0].user_clearance, "PUBLIC");
+    assert.equal(bodies[0].investigation_id, undefined);
+    assert.match(document.body.textContent, /Public result/);
+  } finally {
+    restoreFetch();
+  }
+});
+
+test("unavailable session storage cannot prevent clearing protected content", async () => {
+  const original = structuredClone(INVESTIGATION);
+  original.turns[0].answer = "SYNTHETIC STORAGE SECRET";
+  const { document, window, restoreFetch } = await loadApp((url) => String(url).includes("user_clearance=PUBLIC")
+    ? jsonResponse({ code: "investigation_not_found", message: "Unavailable" }, 404)
+    : jsonResponse(original),
+  { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+  try {
+    await settle();
+    window.Storage.prototype.setItem = () => { throw new Error("storage unavailable"); };
+    changeClearance(document, window, "PUBLIC");
+    assert.doesNotMatch(document.body.textContent, /SYNTHETIC STORAGE SECRET/);
+    assert.equal(document.querySelector("#export-pdf-button").disabled, true);
+    await settle();
+    assert.equal(document.querySelectorAll(".agent-turn").length, 0);
+  } finally {
+    restoreFetch();
+  }
+});
+
 test("keeps a full-width workspace and responsive toolbar contract in CSS", async () => {
   const css = await readFile(new URL("../../frontend/css/app.css", import.meta.url), "utf8");
 
