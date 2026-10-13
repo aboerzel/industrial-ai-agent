@@ -35,7 +35,6 @@ from industrial_ai_agent.agent.response_language import (
 )
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
-    AgentRunProfile,
     InternalDiagnosticTarget,
     ResolvedRunPolicy,
     RunClearanceDeniedError,
@@ -48,6 +47,7 @@ from industrial_ai_agent.agent.troubleshooting_run_service import (
     RunExecution,
     internal_diagnostic_message,
 )
+from industrial_ai_agent.application.action_approval import is_action_profile_authorized
 from industrial_ai_agent.application.document_content import (
     AuthorizedDocumentContent,
     AuthorizedDocumentContentReader,
@@ -1221,16 +1221,8 @@ def _is_run_resumable_by(
         return False
     if record.status is not RunStatus.WAITING_FOR_APPROVAL:
         return True
-    if record.data_classification is not DataClassification.CONFIDENTIAL:
-        return False
-    if record.approval_action == "create_maintenance_ticket":
-        return record.run_profile is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
-    return record.approval_action == "execute_reference_calibration" and (
-        record.run_profile
-        in {
-            AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
-            AgentRunProfile.CONFIDENTIAL_RECOVERY,
-        }
+    return is_action_profile_authorized(
+        record.approval_action or "", record.data_classification, record.run_profile
     )
 
 

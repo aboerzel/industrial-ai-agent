@@ -24,7 +24,12 @@ from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunProfile,
     InternalDiagnosticTarget,
 )
+from industrial_ai_agent.application.action_approval import (
+    ReferenceCalibrationApprovalClaim,
+)
 from industrial_ai_agent.domain.closed_loop_recovery import RecoveryOutcome
+from industrial_ai_agent.domain.physical_device import DeviceId
+from industrial_ai_agent.domain.product_history import StationId
 from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.demo_security import (
@@ -370,19 +375,25 @@ def test_confidential_recovery_approval_persists_reloads_and_claims_once() -> No
         )
         restored = asyncio.run(store.get(run_id))
         approval_claimed = asyncio.run(
-            store.claim_reference_calibration_approval(
-                run_id,
-                action_id="reference-calibration-action-1",
-                station_id="S04",
-                device_id="POSITION-ENC-02",
+            store.claim_protected_action_approval(
+                ReferenceCalibrationApprovalClaim(
+                    run_id,
+                    "reference-calibration-action-1",
+                    StationId("S04"),
+                    DeviceId("POSITION-ENC-02"),
+                ),
+                security_context=_context(DataClassification.CONFIDENTIAL),
             )
         )
         replay_claimed = asyncio.run(
-            store.claim_reference_calibration_approval(
-                run_id,
-                action_id="reference-calibration-action-1",
-                station_id="S04",
-                device_id="POSITION-ENC-02",
+            store.claim_protected_action_approval(
+                ReferenceCalibrationApprovalClaim(
+                    run_id,
+                    "reference-calibration-action-1",
+                    StationId("S04"),
+                    DeviceId("POSITION-ENC-02"),
+                ),
+                security_context=_context(DataClassification.CONFIDENTIAL),
             )
         )
     finally:

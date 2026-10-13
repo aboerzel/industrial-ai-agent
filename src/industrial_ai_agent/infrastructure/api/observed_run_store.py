@@ -8,7 +8,8 @@ from uuid import UUID
 from industrial_ai_agent.agent.agent_run import AgentRunResult
 from industrial_ai_agent.agent.failure_origin import FailureOrigin
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
-from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.application.action_approval import ProtectedActionApprovalClaim
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.run_store import (
     AgentRunStore,
     StoredAgentRun,
@@ -110,22 +111,18 @@ class ObservedAgentRunStore:
             approval_clearance=approval_clearance,
         )
 
-    async def claim_reference_calibration_approval(
+    async def claim_protected_action_approval(
         self,
-        run_id: UUID,
+        claim: ProtectedActionApprovalClaim,
         *,
-        action_id: str,
-        station_id: str,
-        device_id: str,
+        security_context: SecurityContext,
     ) -> bool:
         return await self._observe(
-            "claim_reference_calibration_approval",
-            run_id,
-            self._delegate.claim_reference_calibration_approval,
-            run_id,
-            action_id=action_id,
-            station_id=station_id,
-            device_id=device_id,
+            "claim_protected_action_approval",
+            claim.run_id,
+            self._delegate.claim_protected_action_approval,
+            claim,
+            security_context=security_context,
         )
 
     async def _observe(

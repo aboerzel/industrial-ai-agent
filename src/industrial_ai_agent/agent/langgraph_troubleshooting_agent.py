@@ -1158,12 +1158,7 @@ class LangGraphTroubleshootingAgent:
                 ApprovalInterruptPayload(
                     kind="action_approval",
                     action=pending_action["action"],
-                    action_id=(
-                        pending_action["request_id"]
-                        if pending_action["action"]
-                        == EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME
-                        else None
-                    ),
+                    action_id=pending_action["request_id"],
                     details=details,
                 ).model_dump(exclude_none=True)
             )
@@ -1203,11 +1198,15 @@ class LangGraphTroubleshootingAgent:
                 "device_id": pending_action["device_id"],
             }
         else:
+            run_id = state["run_id"]
+            if run_id is None:
+                raise RuntimeError("Maintenance execution requires a run ID")
             result = await tool.ainvoke(
                 {
                     "station_id": pending_action["station_id"],
                     "summary": pending_action["summary"],
                     "request_id": pending_action["request_id"],
+                    "run_id": run_id,
                 }
             )
             executed_arguments = {

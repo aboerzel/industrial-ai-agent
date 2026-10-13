@@ -102,7 +102,7 @@ class RecordingMcpToolProvider:
     @asynccontextmanager
     async def open_session(self) -> AsyncIterator[McpToolSession]:
         async def create_maintenance_ticket(
-            station_id: str, summary: str, request_id: str
+            station_id: str, summary: str, request_id: str, run_id: str
         ) -> str:
             self.calls.append(
                 {
@@ -432,7 +432,7 @@ def test_hitl_resume_keeps_the_original_response_language() -> None:
             FakeLLMClient([_action_response()]), provider, checkpointer
         ).astart_via_mcp(
             "Erstelle ein Wartungsticket für S04.",
-            thread_id="language-resume-1",
+            thread_id="123e4567-e89b-12d3-a456-426614174002",
         )
     )
     resumed_client = FakeLLMClient(
@@ -446,7 +446,7 @@ def test_hitl_resume_keeps_the_original_response_language() -> None:
 
     completed = asyncio.run(
         _agent(resumed_client, provider, checkpointer).aresume_via_mcp(
-            thread_id="language-resume-1", approval="approve"
+            thread_id="123e4567-e89b-12d3-a456-426614174002", approval="approve"
         )
     )
 
@@ -516,7 +516,10 @@ def test_mcp_hitl_interrupt_approves_once_and_survives_agent_recreation() -> Non
     started, payload = asyncio.run(
         _agent(
             FakeLLMClient([_action_response()]), provider, checkpointer
-        ).astart_via_mcp("Create a maintenance ticket for S04.", thread_id="ticket-1")
+        ).astart_via_mcp(
+            "Create a maintenance ticket for S04.",
+            thread_id="123e4567-e89b-12d3-a456-426614174001",
+        )
     )
 
     assert started["pending_action"] is not None
@@ -525,16 +528,21 @@ def test_mcp_hitl_interrupt_approves_once_and_survives_agent_recreation() -> Non
     assert payload == {
         "kind": "action_approval",
         "action": CREATE_MAINTENANCE_TICKET_TOOL_NAME,
+        "action_id": "ticket-call-1",
         "details": {"station_id": "S04", "summary": "Investigate QUALITY-09"},
     }
     assert provider.calls == []
 
     recreated = _agent(FakeLLMClient([_final_response()]), provider, checkpointer)
     completed = asyncio.run(
-        recreated.aresume_via_mcp(thread_id="ticket-1", approval="approve")
+        recreated.aresume_via_mcp(
+            thread_id="123e4567-e89b-12d3-a456-426614174001", approval="approve"
+        )
     )
     repeated = asyncio.run(
-        recreated.aresume_via_mcp(thread_id="ticket-1", approval="approve")
+        recreated.aresume_via_mcp(
+            thread_id="123e4567-e89b-12d3-a456-426614174001", approval="approve"
+        )
     )
 
     assert completed["run_status"] is AgentRunStatus.SUCCESS

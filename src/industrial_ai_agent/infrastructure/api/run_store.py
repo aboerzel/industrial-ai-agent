@@ -13,7 +13,14 @@ from industrial_ai_agent.agent.failure_origin import (
 )
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
-from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.application.action_approval import (
+    MaintenanceTicketApprovalClaim,
+    ProtectedActionApprovalClaim,
+    ReferenceCalibrationApprovalClaim,
+    is_action_profile_authorized,
+)
+from industrial_ai_agent.application.run_visibility import is_run_visible
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.schemas import RunStatus
 
 
@@ -129,13 +136,11 @@ class AgentRunStore(Protocol):
         approval_clearance: DataClassification,
     ) -> StoredAgentRun | None: ...
 
-    async def claim_reference_calibration_approval(
+    async def claim_protected_action_approval(
         self,
-        run_id: UUID,
+        claim: ProtectedActionApprovalClaim,
         *,
-        action_id: str,
-        station_id: str,
-        device_id: str,
+        security_context: SecurityContext,
     ) -> bool: ...
 
     async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None: ...
@@ -310,29 +315,19 @@ class InMemoryAgentRunStore:
             self._records[run_id] = record
             return record
 
-    async def claim_reference_calibration_approval(
+    async def claim_protected_action_approval(
         self,
-        run_id: UUID,
+        claim: ProtectedActionApprovalClaim,
         *,
-        action_id: str,
-        station_id: str,
-        device_id: str,
+        security_context: SecurityContext,
     ) -> bool:
         async with self._lock:
-            existing = self._records.get(run_id)
-            if (
-                existing is None
-                or existing.status is not RunStatus.RUNNING
-                or existing.approval_decision != "approve"
-                or not _matches_reference_calibration_approval(
-                    existing.approval_request,
-                    action_id=action_id,
-                    station_id=station_id,
-                    device_id=device_id,
-                )
+            existing = self._records.get(claim.run_id)
+            if existing is None or not _matches_protected_action_approval(
+                existing, claim, security_context
             ):
                 return False
-            self._records[run_id] = replace(
+            self._records[claim.run_id] = replace(
                 existing,
                 approval_request=None,
                 updated_at=datetime.now(UTC),
@@ -465,23 +460,44 @@ def _matches_recent_query(
     return record.created_at is None or record.created_at >= query.created_after
 
 
-def _matches_reference_calibration_approval(
-    approval_request: dict[str, object] | None,
-    *,
-    action_id: str,
-    station_id: str,
-    device_id: str,
+def _matches_protected_action_approval(
+    record: StoredAgentRun,
+    claim: ProtectedActionApprovalClaim,
+    security_context: SecurityContext,
 ) -> bool:
+    approval_request = record.approval_request
     if not isinstance(approval_request, dict):
         return False
     details = approval_request.get("arguments")
+    if not isinstance(details, dict):
+        return False
+    if isinstance(claim, MaintenanceTicketApprovalClaim):
+        action = "create_maintenance_ticket"
+        target_matches = details.get("summary") == claim.summary
+    elif isinstance(claim, ReferenceCalibrationApprovalClaim):
+        action = "execute_reference_calibration"
+        target_matches = (
+            details.get("device_id") == claim.device_id.value
+            and details.get("operation_type") == "reference_calibration"
+        )
+    else:
+        return False
     return (
-        approval_request.get("action") == "execute_reference_calibration"
-        and approval_request.get("action_id") == action_id
-        and isinstance(details, dict)
-        and details.get("station_id") == station_id
-        and details.get("device_id") == device_id
-        and details.get("operation_type") == "reference_calibration"
+        record.run_id == claim.run_id
+        and record.status is RunStatus.RUNNING
+        and record.approval_decision == "approve"
+        and record.approval_decided_at is not None
+        and isinstance(record.approval_decided_clearance, DataClassification)
+        and record.approval_decided_clearance >= record.data_classification
+        and is_run_visible(record.data_classification, security_context)
+        and is_action_profile_authorized(
+            action, record.data_classification, record.run_profile
+        )
+        and record.approval_action == action
+        and approval_request.get("action") == action
+        and approval_request.get("action_id") == claim.action_id
+        and details.get("station_id") == claim.station_id.value
+        and target_matches
     )
 
 

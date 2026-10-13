@@ -17,6 +17,7 @@ from industrial_ai_agent.infrastructure.factory_mcp_client import (
 _INDUSTRIAL_TOKEN = "industrial-http-test-token"
 _INTERNAL_AGENT_TOKEN = "industrial-internal-http-test-token"
 _CODEX_TOKEN = "codex-http-test-token"
+_PUBLIC_TOKEN = "public-http-test-token"
 _SERVER_SOURCE = """
 import os
 from mcp.server.mcpserver import MCPServer
@@ -74,12 +75,13 @@ def secure_factory_server() -> Iterator[str]:
         "MCP_INDUSTRIAL_AGENT_TOKEN": _INDUSTRIAL_TOKEN,
         "MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN": _INTERNAL_AGENT_TOKEN,
         "MCP_CODEX_DEVELOPMENT_TOKEN": _CODEX_TOKEN,
+        "MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN": _PUBLIC_TOKEN,
     }
     process = subprocess.Popen(
         [sys.executable, "-c", _SERVER_SOURCE],
         env=environment,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
         text=True,
     )
     try:
@@ -92,6 +94,41 @@ def secure_factory_server() -> Iterator[str]:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+
+
+def test_public_client_can_read_but_cannot_discover_or_invoke_write(
+    secure_factory_server: str,
+) -> None:
+    async def verify():
+        async with open_mcp_session(
+            StreamableHttpServerParameters(
+                url=secure_factory_server,
+                bearer_token=_PUBLIC_TOKEN,
+                request_headers={
+                    "X-Clearance": "CONFIDENTIAL",
+                    "X-Permissions": "CREATE_MAINTENANCE_TICKET",
+                },
+            )
+        ) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            assert "create_maintenance_ticket" not in {
+                tool.name for tool in tools.tools
+            }
+            read = await session.call_tool("list_stations", {})
+            assert not read.is_error
+            with pytest.raises(MCPError, match="MCP tool is not authorized"):
+                await session.call_tool(
+                    "create_maintenance_ticket",
+                    {
+                        "station_id": "S04",
+                        "summary": "must be rejected",
+                        "request_id": "public-direct-write",
+                        "run_id": "123e4567-e89b-12d3-a456-426614174000",
+                    },
+                )
+
+    asyncio.run(verify())
 
 
 def test_industrial_client_discovers_write_tool(secure_factory_server: str) -> None:

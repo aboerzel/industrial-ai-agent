@@ -836,6 +836,9 @@ flowchart LR
     Route -->|"read request"| Tool["MCP read-tool node"]
     Route -->|"write proposal"| Approval["HITL interrupt"]
     Approval -->|"approved"| Action["MCP action node"]
+    Action --> Guard["Executing capability<br/>RLS + single-use action approval"]
+    Direct["Direct authenticated MCP caller"] --> Guard
+    Guard -->|"authorized"| Execute["Protected side effect"]
     Tool -->|"structured observation"| Model
     Tool --> Provider["MCP Tool Provider"]
     Provider --> Factory["factory_mcp"]
@@ -846,7 +849,7 @@ flowchart LR
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class CR,Resolver,Provider,Factory,Knowledge core
     class Adapter,Model,Route,Tool,Approval,Action,End framework
-    class Capability,Security security
+    class Capability,Security,Guard security
 ```
 
 `TroubleshootingGraphState` holds LangChain messages, the executed-tool count,
@@ -865,9 +868,17 @@ using the same thread ID. `create_maintenance_ticket` is prepared before the int
 executes through Factory MCP only after approval, and uses its tool-call ID as a
 server-derived idempotency key. Nodes before an
 interrupt remain side-effect-free because LangGraph restarts the node from its beginning
-on resume. The checkpoint schema is framework-owned; application lifecycle records stay
-in `agent_runtime.agent_runs`. Both preserve their distinct responsibilities under
-[ADR-011](../decisions/ADR-011-agent-persistence-and-human-in-the-loop.md).
+on resume. The executing capability consumes the authoritative approval from the
+persisted run before the side effect, checking current clearance, action profile,
+decision and approver clearance, exact action ID and targets, and single-use status.
+`READ` and `PREPARE` capabilities do not require this claim. `PUBLIC` MCP principals
+have read-only permissions. MCP permission grants capability access only; direct
+authenticated MCP calls use the same execution guard as the post-HITL graph.
+Run/action identifiers are injected from trusted checkpoint/run state, never from
+model arguments. Old pending approvals without an action ID fail closed and must be
+proposed and approved again. The checkpoint schema is framework-owned; application
+lifecycle records stay in `agent_runtime.agent_runs`. Both preserve their distinct
+responsibilities under [ADR-011](../decisions/ADR-011-agent-persistence-and-human-in-the-loop.md).
 
 ## Distributed MCP Observability
 
@@ -1354,6 +1365,9 @@ sequenceDiagram
     Store-->>Agent: Resume same thread and decision
     alt approved
         Agent->>Action: Execute approved action once
+        Action->>Store: Consume exact action approval under caller RLS
+        Store-->>Action: Authorized single-use claim or neutral denial
+        Action->>Action: Perform bounded side effect only after successful claim
         Action-->>Agent: Structured action result
     else rejected
         Agent->>Agent: Do not execute the action
@@ -1377,6 +1391,7 @@ stateDiagram-v2
 The public run record persists lifecycle and approval data; official LangGraph
 checkpoints remain framework-managed. The process does not keep a Python thread blocked
 while waiting. Factory MCP owns the cohesive maintenance action and its request-ID unique
-constraint. Hardware MCP additionally consumes a persisted approval exactly once, bound
-to the run, station, device, and operation, before it delegates deterministic recovery.
+constraint. Both executing capabilities consume persisted approval exactly once under
+the caller context. Ticket approval binds run, action, station, and summary; calibration
+approval binds run, action, station, device, and operation before deterministic recovery.
 Every protected action node is reached only after an approved resume.

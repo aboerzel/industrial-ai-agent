@@ -310,8 +310,8 @@ def _execution_from_state(
         action_id = payload.get("action_id")
         if not isinstance(details, dict) or not isinstance(action, str):
             raise RuntimeError("LangGraph returned an invalid approval payload")
-        if action == "execute_reference_calibration" and not isinstance(action_id, str):
-            raise RuntimeError("Hardware recovery approval requires an action ID")
+        if not isinstance(action_id, str):
+            raise RuntimeError("Protected action approval requires an action ID")
         arguments = {str(key): str(value) for key, value in details.items()}
         summary = arguments.get("summary", "Approval required.")
         return RunExecution(

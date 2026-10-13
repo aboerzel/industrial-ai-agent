@@ -1,5 +1,11 @@
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict
 
+from industrial_ai_agent.application.action_approval import (
+    MaintenanceTicketApprovalClaim,
+    TrustedActionApprovalClaimPort,
+)
 from industrial_ai_agent.domain.maintenance_ticket import (
     MaintenanceTicketId,
     MaintenanceTicketRequestId,
@@ -8,7 +14,7 @@ from industrial_ai_agent.domain.maintenance_ticket_repository import (
     MaintenanceTicketRepository,
 )
 from industrial_ai_agent.domain.product_history import StationId
-from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketProposalArguments,
 )
@@ -38,8 +44,14 @@ class MaintenanceTicketLookupResult(BaseModel):
 
 
 class MaintenanceTicketCapability:
-    def __init__(self, repository: MaintenanceTicketRepository) -> None:
+    def __init__(
+        self,
+        repository: MaintenanceTicketRepository,
+        *,
+        approval_claims: TrustedActionApprovalClaimPort | None = None,
+    ) -> None:
         self._repository = repository
+        self._approval_claims = approval_claims
 
     def get_maintenance_ticket(self, ticket_id: str) -> MaintenanceTicketLookupResult:
         requested_ticket_id = MaintenanceTicketId(ticket_id)
@@ -60,15 +72,30 @@ class MaintenanceTicketCapability:
             classification=ticket.classification,
         )
 
-    def create_maintenance_ticket(
+    async def create_maintenance_ticket(
         self,
         request_id: str,
         station_id: str,
         summary: str,
+        *,
+        run_id: UUID,
+        security_context: SecurityContext,
     ) -> MaintenanceTicketResult:
+        if (
+            self._approval_claims is None
+            or security_context.clearance < DataClassification.CONFIDENTIAL
+        ):
+            raise PermissionError("Protected action is not authorized")
+        station = StationId(station_id)
+        request = MaintenanceTicketRequestId(request_id)
+        if not await self._approval_claims.claim_approved_action(
+            MaintenanceTicketApprovalClaim(run_id, request.value, station, summary),
+            security_context,
+        ):
+            raise PermissionError("Protected action is not authorized")
         ticket = self._repository.create_maintenance_ticket(
-            MaintenanceTicketRequestId(request_id),
-            StationId(station_id),
+            request,
+            station,
             summary,
         )
         return MaintenanceTicketResult(

@@ -237,22 +237,26 @@ def _optional_agent_registration(
     token = os.getenv(token_name)
     if token is None or not token.strip():
         return None
-    return _registration(
-        token=token,
-        client_id=client_id,
-        clearance=clearance,
-        permissions=frozenset(
+    permissions = {
+        McpPermission.READ_FACTORY,
+        McpPermission.READ_KNOWLEDGE,
+        McpPermission.READ_OBSERVABILITY,
+        McpPermission.READ_AGENT_RUNTIME,
+    }
+    if clearance >= DataClassification.CONFIDENTIAL:
+        permissions.update(
             {
-                McpPermission.READ_FACTORY,
-                McpPermission.READ_KNOWLEDGE,
-                McpPermission.READ_OBSERVABILITY,
-                McpPermission.READ_AGENT_RUNTIME,
                 McpPermission.CREATE_MAINTENANCE_TICKET,
                 McpPermission.READ_HARDWARE_STATUS,
                 McpPermission.PREPARE_HARDWARE_RECOVERY,
                 McpPermission.EXECUTE_HARDWARE_RECOVERY,
             }
-        ),
+        )
+    return _registration(
+        token=token,
+        client_id=client_id,
+        clearance=clearance,
+        permissions=frozenset(permissions),
     )
 
 

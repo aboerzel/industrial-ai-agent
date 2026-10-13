@@ -30,14 +30,13 @@ from industrial_ai_agent.domain.physical_device import DeviceId
 from industrial_ai_agent.domain.product_history import StationId
 from industrial_ai_agent.domain.security import (
     DEMO_ENGINEER_SECURITY_CONTEXT,
-    DEMO_RUNTIME_SECURITY_CONTEXT,
     SecurityContext,
+)
+from industrial_ai_agent.infrastructure.action_approval import (
+    AgentRunStoreActionApprovalPort,
 )
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
-)
-from industrial_ai_agent.infrastructure.hardware_recovery_approval import (
-    AgentRunStoreRecoveryApprovalPort,
 )
 from industrial_ai_agent.infrastructure.mcp_access_control import (
     McpHttpAccessControl,
@@ -346,13 +345,13 @@ def create_secure_hardware_mcp_server(
 
     adapter = SimulatedPositionEncoderAdapter()
     preparation = HardwareRecoveryPreparationService(physical_devices=adapter)
-    run_store = PostgreSqlAgentRunStore(
-        PostgreSqlSessionFactory(database_url), DEMO_RUNTIME_SECURITY_CONTEXT
-    )
+    session_factory = PostgreSqlSessionFactory(database_url)
     execution = HardwareRecoveryExecutionService(
         preparation=preparation,
         physical_devices=adapter,
-        approval_claims=AgentRunStoreRecoveryApprovalPort(run_store),
+        approval_claims=AgentRunStoreActionApprovalPort(
+            lambda context: PostgreSqlAgentRunStore(session_factory, context)
+        ),
     )
     server: MCPServer
 

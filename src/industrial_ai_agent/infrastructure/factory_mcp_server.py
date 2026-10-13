@@ -2,9 +2,10 @@
 
 import argparse
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from time import perf_counter
 from typing import Any
+from uuid import UUID
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
@@ -15,6 +16,12 @@ from industrial_ai_agent.domain.security import (
     DEMO_ENGINEER_SECURITY_CONTEXT,
     DataClassification,
     SecurityContext,
+)
+from industrial_ai_agent.infrastructure.action_approval import (
+    AgentRunStoreActionApprovalPort,
+)
+from industrial_ai_agent.infrastructure.api.postgres_run_store import (
+    PostgreSqlAgentRunStore,
 )
 from industrial_ai_agent.infrastructure.in_memory_factory_discovery_repository import (
     InMemoryFactoryDiscoveryRepository,
@@ -58,6 +65,7 @@ from industrial_ai_agent.tools.tool_contracts import (
     MaintenanceSummary,
     MaintenanceTicketIdentifier,
     ProductIdentifier,
+    RunIdentifier,
     StationIdentifier,
     ToolCallIdentifier,
 )
@@ -331,10 +339,11 @@ def create_factory_mcp_server(
                 idempotent_hint=True,
             ),
         )
-        def create_maintenance_ticket(
+        async def create_maintenance_ticket(
             station_id: StationIdentifier,
             summary: MaintenanceSummary,
             request_id: ToolCallIdentifier,
+            run_id: RunIdentifier,
             ctx: Context,
         ) -> dict[str, Any]:
             _, _, _, active_ticket_capability = _capabilities_for_request(
@@ -351,14 +360,20 @@ def create_factory_mcp_server(
             )
             if active_ticket_capability is None:
                 raise PermissionError("MCP tool is not authorized")
-            result = _invoke_factory_tool(
+            security_context = (
+                access_control.access_context_from_headers(ctx.headers).security_context
+                if access_control is not None
+                else DEMO_ENGINEER_SECURITY_CONTEXT
+            )
+            result = await _invoke_factory_action(
                 telemetry=telemetry,
                 tool_name="create_maintenance_ticket",
-                operation_type="write",
                 action=lambda: active_ticket_capability.create_maintenance_ticket(
                     request_id=request_id,
                     station_id=station_id,
                     summary=summary,
+                    run_id=UUID(run_id),
+                    security_context=security_context,
                 ),
             )
             return result.model_dump(mode="json")
@@ -389,6 +404,9 @@ def create_default_factory_mcp_server(
     database_url = os.getenv("FACTORY_DATABASE_URL")
     if database_url:
         session_factory = PostgreSqlSessionFactory(database_url)
+        approvals = AgentRunStoreActionApprovalPort(
+            lambda context: PostgreSqlAgentRunStore(session_factory, context)
+        )
         return create_factory_mcp_server(
             product_history=ProductHistoryCapability(
                 PostgreSqlProductHistoryRepository(
@@ -410,6 +428,7 @@ def create_default_factory_mcp_server(
                     session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
                 )
             ),
+            approval_claims=approvals,
             telemetry=telemetry,
         )
     return create_factory_mcp_server(
@@ -433,6 +452,9 @@ def create_secure_factory_mcp_server(
     if not database_url:
         raise RuntimeError("FACTORY_DATABASE_URL is required for secure HTTP MCP")
     session_factory = PostgreSqlSessionFactory(database_url)
+    approvals = AgentRunStoreActionApprovalPort(
+        lambda context: PostgreSqlAgentRunStore(session_factory, context)
+    )
 
     def capabilities_for_context(security_context: SecurityContext):
         return (
@@ -446,7 +468,10 @@ def create_secure_factory_mcp_server(
                 PostgreSqlFactoryDiscoveryRepository(session_factory, security_context)
             ),
             MaintenanceTicketCapability(
-                PostgreSqlMaintenanceTicketRepository(session_factory, security_context)
+                PostgreSqlMaintenanceTicketRepository(
+                    session_factory, security_context
+                ),
+                approval_claims=approvals,
             ),
         )
 
@@ -582,6 +607,41 @@ def _invoke_factory_tool(
         )
 
 
+async def _invoke_factory_action(
+    *,
+    telemetry: Telemetry | None,
+    tool_name: str,
+    action: Callable[[], Awaitable[Any]],
+) -> Any:
+    if telemetry is None:
+        return await action()
+    attributes = {
+        "mcp.tool": tool_name,
+        "mcp.operation": "write",
+        "operation.type": "write",
+    }
+    started = perf_counter()
+    status = "success"
+    try:
+        with telemetry.span("factory.tool", attributes):
+            result = await action()
+        telemetry.log_event(event="mcp.server.completed", run_id=None)
+        return result
+    except BaseException as error:
+        status = "failure"
+        telemetry.log_error(
+            event="mcp.server.failed",
+            run_id=None,
+            error_code=sanitized_error_code(error),
+        )
+        raise
+    finally:
+        telemetry.record_mcp_call(
+            attributes={**attributes, "operation.status": status},
+            duration_seconds=perf_counter() - started,
+        )
+
+
 def _capabilities_for_request(
     *,
     ctx: Context | None,
@@ -600,12 +660,14 @@ def _capabilities_for_request(
     FactoryDiscoveryCapability,
     MaintenanceTicketCapability | None,
 ]:
-    if access_control is None or capabilities_for_context is None:
+    if access_control is None:
         return fallback
     if ctx is None:
         raise PermissionError("MCP authentication failed")
     access_context = access_control.access_context_from_headers(ctx.headers)
     access_control.authorize_tool(access_context, tool_name)
+    if capabilities_for_context is None:
+        return fallback
     return capabilities_for_context(access_context.security_context)
 
 

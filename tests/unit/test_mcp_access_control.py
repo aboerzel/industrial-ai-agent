@@ -11,8 +11,26 @@ from industrial_ai_agent.infrastructure.mcp_access_control import (
     McpAuthorizationError,
     McpHttpAccessControl,
     RegisteredMcpClientContextResolver,
+    _optional_agent_registration,
     _registration,
 )
+
+
+def test_public_demo_registration_has_no_write_or_recovery_permissions(monkeypatch):
+    monkeypatch.setenv("MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN", "public-unit-test")
+    registration = _optional_agent_registration(
+        token_name="MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN",
+        client_id="industrial-agent-public",
+        clearance=DataClassification.PUBLIC,
+    )
+    assert registration is not None
+    assert registration.access_context.permits(McpPermission.READ_FACTORY)
+    assert not registration.access_context.permissions & {
+        McpPermission.CREATE_MAINTENANCE_TICKET,
+        McpPermission.PREPARE_HARDWARE_RECOVERY,
+        McpPermission.EXECUTE_HARDWARE_RECOVERY,
+        McpPermission.READ_HARDWARE_STATUS,
+    }
 
 
 def _registrations():

@@ -458,6 +458,15 @@ High-risk actions require deterministic authorization and policy checks.
 
 Human approval must be supported where appropriate.
 
+MCP permission grants capability access, never protected side-effect authorization.
+Factory ticket creation and Hardware calibration execution must consume an authoritative,
+action-bound persisted approval at the executing capability. Direct MCP calls and
+post-HITL graph calls must use the same guard: current principal/resource clearance,
+persisted action profile, exact run/action/target binding, approved decision, and atomic
+single-use claim. PUBLIC MCP principals have read-only permissions; read-only hardware
+preparation does not require execution approval. Never trust model-supplied approval or
+caller-provided identifiers without the authoritative lookup.
+
 Industrial safety must remain enforced by machine / PLC / safety systems independently of the LLM.
 
 ---

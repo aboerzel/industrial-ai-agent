@@ -1,6 +1,10 @@
 import pytest
 
-from industrial_ai_agent.domain.maintenance_ticket import MaintenanceTicketId
+from industrial_ai_agent.domain.maintenance_ticket import (
+    MaintenanceTicketId,
+    MaintenanceTicketRequestId,
+)
+from industrial_ai_agent.domain.product_history import StationId
 from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository import (
     InMemoryMaintenanceTicketRepository,
 )
@@ -24,9 +28,9 @@ def test_maintenance_ticket_tool_contract_accepts_supported_grammar(
 def test_get_maintenance_ticket_returns_only_the_existing_ticket_projection() -> None:
     repository = InMemoryMaintenanceTicketRepository()
     capability = MaintenanceTicketCapability(repository)
-    created = capability.create_maintenance_ticket(
-        request_id="read-projection",
-        station_id="S04",
+    created = repository.create_maintenance_ticket(
+        request_id=MaintenanceTicketRequestId("read-projection"),
+        station_id=StationId("S04"),
         summary="Inspect QUALITY-09",
     )
     tickets_before_read = repository.tickets

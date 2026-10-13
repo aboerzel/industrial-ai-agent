@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
+from industrial_ai_agent.application.action_approval import (
+    ReferenceCalibrationApprovalClaim,
+    TrustedActionApprovalClaimPort,
+)
 from industrial_ai_agent.application.closed_loop_recovery import (
     ClosedLoopRecoveryService,
     RecoveryAuthorizationDecision,
@@ -65,20 +69,6 @@ class ReferenceCalibrationPreparation:
     proposal: RecoveryProposal
     precondition_evaluations: tuple[PreconditionEvaluation, ...]
     classification: DataClassification
-
-
-class TrustedRecoveryApprovalClaimPort(Protocol):
-    """Consume one approved, run-bound reference-calibration action."""
-
-    async def claim_reference_calibration(
-        self,
-        *,
-        run_id: UUID,
-        action_id: str,
-        station_id: StationId,
-        device_id: DeviceId,
-    ) -> bool:
-        """Return whether the exact trusted approval was claimed once."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +255,7 @@ class HardwareRecoveryExecutionService:
         *,
         preparation: HardwareRecoveryPreparationService,
         physical_devices: PhysicalDevicePort,
-        approval_claims: TrustedRecoveryApprovalClaimPort,
+        approval_claims: TrustedActionApprovalClaimPort,
     ) -> None:
         self._preparation = preparation
         self._physical_devices = physical_devices
@@ -282,17 +272,19 @@ class HardwareRecoveryExecutionService:
         mcp_execution_permitted: bool,
     ) -> RecoveryResult:
         """Consume approval and delegate the fresh recovery loop to its owner."""
+        if not mcp_execution_permitted:
+            raise HardwareRecoveryNotAccessibleError()
         preparation = self._preparation.prepare_reference_calibration(
             station_id=station_id,
             device_id=device_id,
             security_context=security_context,
         )
-        approved = await self._approval_claims.claim_reference_calibration(
-            run_id=run_id,
-            action_id=action_id,
-            station_id=station_id,
-            device_id=device_id,
+        approved = await self._approval_claims.claim_approved_action(
+            ReferenceCalibrationApprovalClaim(run_id, action_id, station_id, device_id),
+            security_context,
         )
+        if not approved:
+            raise HardwareRecoveryNotAccessibleError()
         authorization = TrustedReferenceCalibrationAuthorization(
             security_context=security_context,
             classification=preparation.classification,

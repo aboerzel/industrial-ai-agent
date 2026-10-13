@@ -22,6 +22,12 @@ ToolCallIdentifier = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
 ]
+RunIdentifier = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    ),
+]
 MaintenanceSummary = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
@@ -67,6 +73,7 @@ class CreateMaintenanceTicketExecutionArguments(
     """MCP execution contract; request_id is injected only after approval."""
 
     request_id: ToolCallIdentifier
+    run_id: RunIdentifier
 
 
 class ReferenceCalibrationProposalArguments(_StrictToolArguments):

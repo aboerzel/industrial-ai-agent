@@ -110,9 +110,27 @@ node only validates and constructs data before interrupting. The write action ex
 only in a separate node after an approved resume.
 
 The action uses the proposed tool-call ID as an idempotency key. PostgreSQL enforces it
-with a unique constraint, so replaying the action returns the same ticket rather than
-creating a second one. The public run store also atomically claims a waiting run before
-it resumes the graph.
+with a unique constraint as an additional duplicate-write defense. The public run store
+atomically claims a waiting run before it resumes the graph. Protected execution also
+atomically consumes the persisted action approval once; a repeated or concurrent claim
+is denied, including after an execution failure. Approval consumption precedes the
+side effect, so a crash may require a fresh approval rather than an automatic retry.
+
+### MCP Execution Authorization
+
+MCP tool permission grants capability access only; it does not authorize a side effect.
+Both direct MCP calls and post-HITL graph calls converge on the executing capability's
+authoritative persisted action claim. No protected execution occurs without that claim.
+The claim checks the current principal's run/resource clearance, the persisted action
+profile and classification, an approved running run, decision timestamp and approver
+clearance, the exact action ID, and its bound arguments. Ticket approval binds station
+and summary; calibration approval binds station, device, and operation. Missing,
+unrelated, rejected, consumed, or inaccessible approvals produce bounded neutral denial.
+Run and action IDs are lookup references, never proof of approval. The graph injects
+them from trusted run and checkpoint state after an approved resume; the model never
+owns them. Existing PostgreSQL RLS and row locking enforce the resource and single-use
+boundaries. PUBLIC MCP principals have read-only capability permissions. Hardware
+preparation is read-only and does not require an execution approval.
 
 ### Security and Model Routing
 
@@ -163,7 +181,7 @@ while a separate SQLAlchemy adapter persists application-owned lifecycle records
 ### Guardrail Clarification
 
 The persisted pending action is a strict Pydantic contract. For
-`create_maintenance_ticket`, the model never owns `request_id` or an idempotency key;
+`create_maintenance_ticket`, the model never owns `run_id`, `request_id`, or an idempotency key;
 the post-approval execution node derives it only from the actual tool-call ID. The
 database repository's unique request ID remains the second idempotency defense for a
 duplicate or concurrent resume. A reject clears the pending action and never executes it.

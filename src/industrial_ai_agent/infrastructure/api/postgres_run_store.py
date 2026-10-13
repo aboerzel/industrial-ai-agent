@@ -15,12 +15,14 @@ from industrial_ai_agent.agent.failure_origin import (
 )
 from industrial_ai_agent.agent.response_language import ResponseLanguage
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
+from industrial_ai_agent.application.action_approval import ProtectedActionApprovalClaim
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.run_store import (
     AgentRunStore,
     RecentRuntimeRunsQuery,
     RuntimeRunInspection,
     StoredAgentRun,
+    _matches_protected_action_approval,
     _to_public_status,
     recovery_failure_code,
 )
@@ -298,40 +300,29 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 return None
             return _stored(_require_record(session, run_id))
 
-    async def claim_reference_calibration_approval(
+    async def claim_protected_action_approval(
         self,
-        run_id: UUID,
+        claim: ProtectedActionApprovalClaim,
         *,
-        action_id: str,
-        station_id: str,
-        device_id: str,
+        security_context: SecurityContext,
     ) -> bool:
         return await asyncio.to_thread(
-            self._claim_reference_calibration_approval,
-            run_id,
-            action_id,
-            station_id,
-            device_id,
+            self._claim_protected_action_approval, claim, security_context
         )
 
-    def _claim_reference_calibration_approval(
+    def _claim_protected_action_approval(
         self,
-        run_id: UUID,
-        action_id: str,
-        station_id: str,
-        device_id: str,
+        claim: ProtectedActionApprovalClaim,
+        security_context: SecurityContext,
     ) -> bool:
         with self._session_factory.session(self._security_context) as session:
             record = session.scalar(
                 select(AgentRunRecord)
-                .where(AgentRunRecord.run_id == run_id)
+                .where(AgentRunRecord.run_id == claim.run_id)
                 .with_for_update()
             )
-            if record is None or not _matches_reference_calibration_approval(
-                record,
-                action_id=action_id,
-                station_id=station_id,
-                device_id=device_id,
+            if record is None or not _matches_protected_action_approval(
+                _stored(record), claim, security_context
             ):
                 return False
             record.approval_payload = None
@@ -463,29 +454,6 @@ def _stored_agent_status(status: str, error_code: str | None) -> str:
         "recovery_blocked": "RECOVERY_BLOCKED",
         "recovery_failed": "RECOVERY_FAILED",
     }[error_code or ""]
-
-
-def _matches_reference_calibration_approval(
-    record: AgentRunRecord,
-    *,
-    action_id: str,
-    station_id: str,
-    device_id: str,
-) -> bool:
-    payload = record.approval_payload
-    if not isinstance(payload, dict):
-        return False
-    details = payload.get("arguments")
-    return (
-        record.status == RunStatus.RUNNING.value
-        and record.approval_decision == "approve"
-        and payload.get("action") == "execute_reference_calibration"
-        and payload.get("action_id") == action_id
-        and isinstance(details, dict)
-        and details.get("station_id") == station_id
-        and details.get("device_id") == device_id
-        and details.get("operation_type") == "reference_calibration"
-    )
 
 
 def _inspection(record: AgentRunRecord) -> RuntimeRunInspection:

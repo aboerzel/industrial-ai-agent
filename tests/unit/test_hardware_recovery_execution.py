@@ -8,11 +8,15 @@ from uuid import UUID, uuid4
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from industrial_ai_agent.application.action_approval import (
+    ProtectedActionApprovalClaim,
+    ReferenceCalibrationApprovalClaim,
+    TrustedActionApprovalClaimPort,
+)
 from industrial_ai_agent.application.hardware_recovery import (
     HardwareRecoveryExecutionService,
     HardwareRecoveryNotAccessibleError,
     HardwareRecoveryPreparationService,
-    TrustedRecoveryApprovalClaimPort,
 )
 from industrial_ai_agent.domain.closed_loop_recovery import (
     RecoveryOutcome,
@@ -26,12 +30,12 @@ from industrial_ai_agent.domain.security import (
     DataClassification,
     SecurityContext,
 )
+from industrial_ai_agent.infrastructure.action_approval import (
+    AgentRunStoreActionApprovalPort,
+)
 from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
 from industrial_ai_agent.infrastructure.hardware_mcp_server import (
     create_hardware_mcp_server,
-)
-from industrial_ai_agent.infrastructure.hardware_recovery_approval import (
-    AgentRunStoreRecoveryApprovalPort,
 )
 from industrial_ai_agent.infrastructure.simulated_position_encoder_adapter import (
     SimulatedCalibrationOutcome,
@@ -84,18 +88,20 @@ class RecordingRecoveryTelemetry:
 
 
 @dataclass
-class TrustedApprovalClaims(TrustedRecoveryApprovalClaimPort):
+class TrustedApprovalClaims(TrustedActionApprovalClaimPort):
     approved_bindings: set[tuple[UUID, str, StationId, DeviceId]]
     on_claim: Callable[[], None] | None = None
 
-    async def claim_reference_calibration(
-        self,
-        *,
-        run_id: UUID,
-        action_id: str,
-        station_id: StationId,
-        device_id: DeviceId,
+    async def claim_approved_action(
+        self, claim: ProtectedActionApprovalClaim, security_context: SecurityContext
     ) -> bool:
+        assert isinstance(claim, ReferenceCalibrationApprovalClaim)
+        run_id, action_id, station_id, device_id = (
+            claim.run_id,
+            claim.action_id,
+            claim.station_id,
+            claim.device_id,
+        )
         if self.on_claim is not None:
             self.on_claim()
         binding = (run_id, action_id, station_id, device_id)
@@ -121,10 +127,8 @@ def test_missing_or_rejected_approval_blocks_without_physical_execution() -> Non
     adapter = RecordingPositionEncoderAdapter()
     service = _execution_service(adapter, approved_bindings=set())
 
-    result = asyncio.run(_execute(service))
-
-    assert result.outcome is RecoveryOutcome.BLOCKED
-    assert result.action_executed is False
+    with pytest.raises(HardwareRecoveryNotAccessibleError):
+        asyncio.run(_execute(service))
     assert adapter.execute_calls == 0
 
 
@@ -132,13 +136,13 @@ def test_approval_is_bound_to_exact_action_and_consumed_after_one_use() -> None:
     adapter = RecordingPositionEncoderAdapter()
     service = _execution_service(adapter)
 
-    wrong_action = asyncio.run(_execute(service, action_id="other-action"))
+    with pytest.raises(HardwareRecoveryNotAccessibleError):
+        asyncio.run(_execute(service, action_id="other-action"))
     first = asyncio.run(_execute(service))
-    replay = asyncio.run(_execute(service))
+    with pytest.raises(HardwareRecoveryNotAccessibleError):
+        asyncio.run(_execute(service))
 
-    assert wrong_action.outcome is RecoveryOutcome.BLOCKED
     assert first.outcome is RecoveryOutcome.SUCCEEDED
-    assert replay.outcome is RecoveryOutcome.BLOCKED
     assert adapter.execute_calls == 1
 
 
@@ -292,38 +296,38 @@ def test_run_store_approval_adapter_requires_approved_exact_pending_action_once(
         )
         is not None
     )
-    approval_port = AgentRunStoreRecoveryApprovalPort(store)
+    approval_port = AgentRunStoreActionApprovalPort(lambda context: store)
 
     assert not asyncio.run(
-        approval_port.claim_reference_calibration(
-            run_id=uuid4(),
-            action_id="stored-action",
-            station_id=STATION_ID,
-            device_id=DEVICE_ID,
+        approval_port.claim_approved_action(
+            ReferenceCalibrationApprovalClaim(
+                uuid4(), "stored-action", STATION_ID, DEVICE_ID
+            ),
+            DEMO_ENGINEER_SECURITY_CONTEXT,
         )
     )
     assert not asyncio.run(
-        approval_port.claim_reference_calibration(
-            run_id=run_id,
-            action_id="stored-action",
-            station_id=STATION_ID,
-            device_id=DeviceId("POSITION-ENC-03"),
+        approval_port.claim_approved_action(
+            ReferenceCalibrationApprovalClaim(
+                run_id, "stored-action", STATION_ID, DeviceId("POSITION-ENC-03")
+            ),
+            DEMO_ENGINEER_SECURITY_CONTEXT,
         )
     )
     assert asyncio.run(
-        approval_port.claim_reference_calibration(
-            run_id=run_id,
-            action_id="stored-action",
-            station_id=STATION_ID,
-            device_id=DEVICE_ID,
+        approval_port.claim_approved_action(
+            ReferenceCalibrationApprovalClaim(
+                run_id, "stored-action", STATION_ID, DEVICE_ID
+            ),
+            DEMO_ENGINEER_SECURITY_CONTEXT,
         )
     )
     assert not asyncio.run(
-        approval_port.claim_reference_calibration(
-            run_id=run_id,
-            action_id="stored-action",
-            station_id=STATION_ID,
-            device_id=DEVICE_ID,
+        approval_port.claim_approved_action(
+            ReferenceCalibrationApprovalClaim(
+                run_id, "stored-action", STATION_ID, DEVICE_ID
+            ),
+            DEMO_ENGINEER_SECURITY_CONTEXT,
         )
     )
 
@@ -343,14 +347,14 @@ def test_run_store_rejected_or_mismatched_approval_cannot_be_claimed() -> None:
         )
         is not None
     )
-    approval_port = AgentRunStoreRecoveryApprovalPort(store)
+    approval_port = AgentRunStoreActionApprovalPort(lambda context: store)
 
     assert not asyncio.run(
-        approval_port.claim_reference_calibration(
-            run_id=run_id,
-            action_id="other-action",
-            station_id=STATION_ID,
-            device_id=DEVICE_ID,
+        approval_port.claim_approved_action(
+            ReferenceCalibrationApprovalClaim(
+                run_id, "other-action", STATION_ID, DEVICE_ID
+            ),
+            DEMO_ENGINEER_SECURITY_CONTEXT,
         )
     )
 
