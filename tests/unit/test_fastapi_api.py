@@ -728,6 +728,93 @@ def test_contextual_classification_remains_monotonic_after_store_reload() -> Non
     )
 
 
+def test_explicit_public_target_preserves_confidential_persisted_context_after_reload() -> (
+    None
+):
+    store = InMemoryAgentRunStore()
+    first_client = TestClient(
+        _create_app(FakeRunService(result=_success_result()), run_store=store)
+    )
+    first = first_client.post(
+        "/api/v1/runs",
+        json={"message": "Investigate P4711.", "user_clearance": "CONFIDENTIAL"},
+    ).json()
+    service = FakeRunService(result=_success_result())
+    client = TestClient(_create_app(service, run_store=store))
+    follow_up = client.post(
+        "/api/v1/runs",
+        json={
+            "message": "Show product P4101.",
+            "user_clearance": "CONFIDENTIAL",
+            "investigation_id": first["investigation_id"],
+        },
+    )
+    assert follow_up.status_code == 200
+    assert follow_up.json()["data_classification"] == "CONFIDENTIAL"
+    assert service.policies[-1].run_profile is AgentRunProfile.PUBLIC_INFORMATION
+    assert service.policies[-1].mcp_clearance_ceiling is DataClassification.PUBLIC
+
+
+def test_mixed_sensitive_run_persists_effective_classification_and_denies_public_read() -> (
+    None
+):
+    message = (
+        "P4101 Customer production plan: Example Industries, negotiated price 731.42."
+    )
+    store = InMemoryAgentRunStore()
+    service = FakeRunService(result=_success_result())
+    resolver = BearerTokenSecurityContextResolver(
+        tuple(
+            ApiPrincipal(
+                token=f"{classification.name.lower()}-test-token",
+                security_context=SecurityContext(
+                    f"{classification.name.lower()}-user",
+                    ("demo-user",),
+                    classification,
+                    True,
+                ),
+            )
+            for classification in (
+                DataClassification.PUBLIC,
+                DataClassification.RESTRICTED,
+            )
+        )
+    )
+    client = TestClient(
+        _create_production_app(
+            service, run_store=store, security_context_resolver=resolver
+        )
+    )
+    created = client.post(
+        "/api/v1/runs",
+        headers={"Authorization": "Bearer restricted-test-token"},
+        json={"message": message, "user_clearance": "RESTRICTED"},
+    )
+    assert created.status_code == 200
+    payload = created.json()
+    assert payload["data_classification"] == "RESTRICTED"
+    assert service.messages == [message]
+    assert service.policies[0].run_profile is AgentRunProfile.PUBLIC_INFORMATION
+    stored = asyncio.run(store.get(UUID(payload["run_id"])))
+    assert stored is not None
+    assert stored.data_classification is DataClassification.RESTRICTED
+    assert stored.run_profile is AgentRunProfile.PUBLIC_INFORMATION
+
+    hidden = client.get(
+        f"/api/v1/runs/{payload['run_id']}",
+        headers={"Authorization": "Bearer public-test-token"},
+    )
+    assert hidden.status_code == 404
+    assert hidden.json()["code"] == "run_not_found"
+    assert message not in hidden.text
+    visible = client.get(
+        f"/api/v1/runs/{payload['run_id']}?user_clearance=RESTRICTED",
+        headers={"Authorization": "Bearer restricted-test-token"},
+    )
+    assert visible.status_code == 200
+    assert visible.json()["data_classification"] == "RESTRICTED"
+
+
 def test_invalid_or_inaccessible_investigation_context_cannot_lower_unknown_request() -> (
     None
 ):

@@ -371,22 +371,53 @@ Negative:
 
 ## Agent Run Classification Policy Refinement
 
-The FastAPI run boundary resolves an initial classification only from a fixed,
-server-owned `AgentRunProfile`; clients never submit a classification, clearance,
-model profile, MCP identity, or permission. The existing free-form troubleshooting
-request is resolved only by deterministic server policy.
+The FastAPI run boundary separates target/profile resolution from effective request
+classification. A server-owned `AgentRunProfile` defines domain behavior and the bounded
+tool/MCP data scope; it does not classify the complete user message. A PUBLIC target
+can retain its PUBLIC information behavior while its run is classified RESTRICTED.
 
-Known synthetic demo identifiers resolve to their documented `PUBLIC`, `INTERNAL`,
-`CONFIDENTIAL`, or `RESTRICTED` scope. Other free-form input has no trusted public-data
-evidence and is conservatively resolved as `RESTRICTED_TROUBLESHOOTING`; spelling,
-case, and whitespace cannot downgrade it to a public-cloud-eligible classification.
-Unknown sensitivity therefore never authorizes external model processing. This remains a
-deterministic demo policy, not LLM-based sensitivity classification.
+Effective classification is the monotonic maximum of the profile minimum, every exact
+recognized identifier, all authorized persisted investigation context, complete-request
+content classification, and action/recovery requirements. All identifiers contribute;
+their order cannot change this maximum. Partial identifiers are not trusted evidence.
+Neither a known target nor discovery wording can suppress additional free text.
 
-`INTERNAL_DIAGNOSTIC` is available only through a separate bounded target contract.
+The bounded demo content policy accepts only explicitly supported neutral request forms
+and canonical identifiers. Unrecognized content (including unknown identifiers and
+arbitrary customer text) remains RESTRICTED, even alongside a PUBLIC identifier. This
+is a conservative deterministic demo policy, not a general sensitivity detector or an
+LLM judgment. Genuine identifierless follow-ups may inherit already-authorized persisted
+context; lower-classified targets never lower that context minimum. Authenticated
+clearance bounds authorization and identifierless discovery scope, not free-text safety.
+
+The effective classification is persisted and used for model assignment, security
+eligibility, final pre-adapter egress enforcement, and run visibility. MCP/RLS clearance
+and allowed tools remain bounded by the resolved target profile: adding sensitive prose
+must not grant broader factory access. Restoring a persisted policy accepts a higher
+effective classification than the profile minimum but rejects any downgrade below it.
+
+Authoritative classification signals at this boundary:
+
+| Signal | Target/profile resolution | Effective classification |
+| --- | --- | --- |
+| Seeded product, station, and fault/error identifiers | Yes | Every recognized ID's seed classification |
+| Syntactically valid maintenance-ticket identifiers | Ticket lookup profile | At least CONFIDENTIAL; unknown tickets remain indistinguishable |
+| Server-owned run profile | Domain behavior and tool scope | Profile minimum |
+| Authorized persisted investigation records | Identifierless genuine follow-up scope | Minimum from all authorized records |
+| Complete message content | No | Unrecognized free text requires RESTRICTED |
+| S04 position-reference recovery request | Dedicated recovery profile | At least CONFIDENTIAL, composed with all other signals |
+| Authenticated discovery clearance | Identifierless discovery profile | Selected discovery scope minimum; never overrides content |
+| Structured diagnostic target validation | Separate bounded diagnostic profile | INTERNAL only after trusted target validation |
+| Classified tool/retrieval observations | No initial target decision | Runtime boundary checks before context/model use |
+
+No LLM output, client classification label, or model assignment is classification
+authority. PostgreSQL record classifications and RLS remain authoritative for source
+data access; this demo resolver does not replace them.
+
+The structured `INTERNAL_DIAGNOSTIC` endpoint uses a separate bounded target contract.
 It contains validated resource identifiers and no free-form task text. The server
 constructs its prompt and verifies the required target projections using an INTERNAL
 RLS context. Missing, inaccessible, malformed, or higher-classified target evidence
 returns neutral unavailable semantics and never causes a confidential retry or a
-clearance increase. The profile remains INTERNAL for its complete lifetime; dynamic
-classification escalation is explicitly out of scope for this slice.
+clearance increase. This structured diagnostic run remains INTERNAL for its complete
+lifetime; dynamic classification escalation is explicitly out of scope for that path.

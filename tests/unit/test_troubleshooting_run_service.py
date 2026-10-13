@@ -21,7 +21,10 @@ from industrial_ai_agent.agent.model_selection import (
     QualityClass,
 )
 from industrial_ai_agent.agent.response_language import ResponseLanguage
-from industrial_ai_agent.agent.run_classification_policy import ResolvedRunPolicy
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunProfile,
+    ResolvedRunPolicy,
+)
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     McpBackedTroubleshootingAgent,
     RoutedTroubleshootingAgentFactory,
@@ -154,6 +157,48 @@ class CountingResolver(FixedResolver):
     def resolve_model(self, consumer_id, data_classification, *, run_id=None):
         self.calls += 1
         return super().resolve_model(consumer_id, data_classification, run_id=run_id)
+
+
+def test_direct_service_run_classifies_complete_input_before_model_resolution() -> None:
+    message = (
+        "P4101 Customer production plan: Example Industries, negotiated price 731.42."
+    )
+    classifications: list[DataClassification] = []
+    received: list[str] = []
+
+    class Resolver(FixedResolver):
+        def resolve_model(self, consumer_id, data_classification, *, run_id=None):
+            classifications.append(data_classification)
+            return super().resolve_model(
+                consumer_id, data_classification, run_id=run_id
+            )
+
+    class Agent:
+        async def aanswer_via_mcp(self, user_request, **kwargs):
+            received.append(user_request)
+            return AgentRunResult(
+                status=AgentRunStatus.SUCCESS,
+                final_answer="Complete.",
+                tool_call_count=0,
+            )
+
+    class Factory(CapturingFactory):
+        @contextmanager
+        def _open_agent(self, *, model_id, run_policy):
+            self.run_policy = run_policy
+            yield Agent()
+
+    factory = Factory()
+    service = TroubleshootingRunService(
+        model_resolver=Resolver(_selected_model()), agent_factory=factory
+    )
+    asyncio.run(service.run(message))
+
+    assert classifications == [DataClassification.RESTRICTED]
+    assert received == [message]
+    assert factory.run_policy is not None
+    assert factory.run_policy.run_profile is AgentRunProfile.PUBLIC_INFORMATION
+    assert factory.run_policy.data_classification is DataClassification.RESTRICTED
 
 
 def _selected_model() -> ModelDefinition:

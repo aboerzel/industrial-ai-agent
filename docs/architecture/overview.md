@@ -497,9 +497,12 @@ sequenceDiagram
     Gateway->>Gateway: Verify password; reject anonymous/invalid credentials
     Gateway->>API: Authenticated user's mapped bearer token + request
     API->>API: Authenticate principal; reject clearance elevation
-    API->>Run: Create request-scoped RLS store and durable run
-    Run->>Policy: Resolve classification and run policy
-    Policy->>Resolver: consumer_id + trusted classification
+    API->>Run: Load authorized investigation context from request-scoped RLS store
+    Run->>Policy: Resolve target profile and bounded tool/MCP scope
+    Policy->>Policy: Maximum of all IDs, full content, trusted context and action requirements
+    Policy-->>Run: Target profile + effective classification
+    Run->>Run: Persist both before model resolution
+    Policy->>Resolver: consumer_id + effective classification
     Resolver-->>Run: Authorized model_id or normalized denial
     API->>Agent: Invoke bounded workflow with selected model ID
     Agent->>Policy: Discover and admit allowed tool
@@ -507,7 +510,7 @@ sequenceDiagram
     MCP->>Data: Server-side authorization and RLS
     Data-->>MCP: Classified structured observation
     MCP-->>Agent: Bounded tool result
-    Agent->>Egress: Selected model ID and trusted classification
+    Agent->>Egress: Full prompt + selected model ID + effective classification
     Egress->>LLM: Allowed request only
     LLM-->>Agent: Decision or structured result
     Agent->>Run: Persist outcome or approval state

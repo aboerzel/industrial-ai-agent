@@ -154,9 +154,7 @@ class TroubleshootingRunService:
     async def run(self, message: str) -> AgentRunResult:
         return await self.run_with_policy(
             message,
-            run_policy=self._classification_policy.resolve(
-                AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
-            ),
+            run_policy=self._classification_policy.resolve_request(message),
             response_language=detect_response_language(message),
         )
 
@@ -222,9 +220,7 @@ class TroubleshootingRunService:
     ) -> tuple[ModelId, RunExecution]:
         if self._checkpointer_factory is None:
             raise RuntimeError("Persistent HITL runs require a PostgreSQL checkpointer")
-        resolved = run_policy or self._classification_policy.resolve(
-            AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
-        )
+        resolved = run_policy or self._classification_policy.resolve_request(message)
         decision = self._model_resolver.resolve_model(
             resolved.model_consumer_id,
             resolved.data_classification,

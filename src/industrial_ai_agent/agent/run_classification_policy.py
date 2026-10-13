@@ -6,7 +6,11 @@ from enum import StrEnum
 
 from industrial_ai_agent.agent.model_selection import AGENT_CONSUMER, ModelConsumerId
 from industrial_ai_agent.domain.maintenance_ticket import is_maintenance_ticket_id
-from industrial_ai_agent.domain.security import DataClassification, SecurityContext
+from industrial_ai_agent.domain.security import (
+    DataClassification,
+    SecurityContext,
+    effective_data_classification,
+)
 
 
 class AgentRunProfile(StrEnum):
@@ -104,10 +108,14 @@ _DEMO_ENTITY_PROFILES = {
     "POSITION-ENC-02": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
     "S02": AgentRunProfile.INTERNAL_DIAGNOSTIC,
     "S03": AgentRunProfile.INTERNAL_DIAGNOSTIC,
+    "S01": AgentRunProfile.PUBLIC_INFORMATION,
+    "S05": AgentRunProfile.PUBLIC_INFORMATION,
 }
 
+# Hyphens and Unicode word characters belong to an identifier, not its delimiters.
+# Match the whole token before catalogue lookup, including multi-hyphen fault codes.
 _EXPLICIT_TARGET_PATTERN = re.compile(
-    r"\b(?:P\d{4}|S\d{2,3}|MT-[A-Z0-9-]+|[A-Z][A-Z0-9]*-[A-Z0-9]+)\b"
+    r"(?<![\w-])(?:P\d{4}|S\d{2,3}|[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)(?![\w-])"
 )
 _CONTEXTUAL_FOLLOW_UP_PATTERNS = (
     re.compile(
@@ -122,6 +130,101 @@ _CONTEXTUAL_FOLLOW_UP_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+
+# Complete, neutral instruction scaffolds for the bounded demo. Identifiers are
+# classified separately; every other character must belong to a supported form.
+# Unknown prose is RESTRICTED, regardless of any known target in the same message.
+_NEUTRAL_DEMO_REQUEST_FORMS = frozenset(
+    {
+        "",
+        "AND",
+        "UND",
+        "INVESTIGATE",
+        "INVESTIGATE PRODUCT",
+        "INVESTIGATE STATION",
+        "INVESTIGATE AT",
+        "INVESTIGATE PRODUCT AT STATION",
+        "INSPECT",
+        "INSPECT PRODUCT",
+        "SHOW PRODUCT",
+        "SHOW TICKET",
+        "SHOW ME THE PRODUCTION HISTORY FOR",
+        "WHAT IS THE CURRENT STATUS OF STATION",
+        "WHY WAS PRODUCT REJECTED",
+        "RECOVER THE POSITION REFERENCE AT",
+        "UNTERSUCHE",
+        "UNTERSUCHE PRODUKT",
+        "UNTERSUCHE STATION",
+        "UNTERSUCHE AN",
+        "UNTERSUCHE PRODUKT AN STATION",
+        "UNTERSUCHE DEN ALLGEMEINEN FEHLER AN STATION",
+        "UNTERSUCHE DIE PRODUKTIONSHISTORIE VON",
+        "UNTERSUCHE PRODUKT UND FASSE SEINEN SICHTBAREN PRODUKTIONSPFAD ZUSAMMEN",
+        "UNTERSUCHE PRODUKT AN STATION MIT HISTORIE UND DOKUMENTATION",
+        "UNTERSUCHE DEN POSITIONSREFERENZFEHLER AN STATION UND STELLE DIE STATION WIEDER HER",
+        "ZEIGE MIR DAS TICKET",
+        "ZEIGE DAS WARTUNGSTICKET",
+        "ZEIGE DIE VERFÜGBAREN DETAILS ZUM WARTUNGSTICKET",
+        "ZEIGE DIE PRODUKTHISTORIE VON",
+        "PRUEFE DEN AKTUELLEN STATUS VON STATION",
+        "PRÜFE DEN AKTUELLEN STATUS VON STATION",
+    }
+)
+_NEUTRAL_DEMO_DISCOVERY_FORMS = frozenset(
+    {
+        "WHICH STATIONS ARE AVAILABLE",
+        "WHICH PRODUCTS ARE AVAILABLE",
+        "LIST THE PRODUCTS AVAILABLE TO ME AND SUMMARIZE THEIR FINAL STATUS",
+        "IDENTIFY RECENTLY FAILED PRODUCTS AND SUMMARIZE THEIR VISIBLE FAILURE STATUS",
+        "LISTE VERFÜGBARE PRODUKTE",
+        "LISTE DIE MIR VERFÜGBAREN PRODUKTE AUF UND FASSE IHREN ENDSTATUS ZUSAMMEN",
+        "GIB MIR EINEN ÜBERBLICK ÜBER DIE MIR VERFÜGBAREN PRODUKTE UND IHREN ENDSTATUS",
+        "ERMITTLE DIE KÜRZLICH FEHLGESCHLAGENEN PRODUKTE UND FASSE IHREN FEHLERSTATUS ZUSAMMEN",
+        "KÜRZLICH FEHLGESCHLAGENE PRODUKTE",
+    }
+)
+
+
+def _resolved_identifier_profiles(
+    normalized_message: str,
+) -> dict[str, AgentRunProfile]:
+    """Collect every complete known ID; valid tickets require CONFIDENTIAL scope."""
+    profiles = {}
+    for match in _EXPLICIT_TARGET_PATTERN.finditer(normalized_message):
+        identifier = match.group()
+        if identifier in _DEMO_ENTITY_PROFILES:
+            profiles[identifier] = _DEMO_ENTITY_PROFILES[identifier]
+        elif is_maintenance_ticket_id(identifier):
+            profiles[identifier] = AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    return profiles
+
+
+def _classify_demo_request_content(
+    message: str,
+    *,
+    trusted_context_classification: DataClassification | None,
+    security_context: SecurityContext | None,
+) -> DataClassification:
+    """Fail closed for all text outside supported complete demo request forms."""
+    if trusted_context_classification is not None and _is_contextual_follow_up_request(
+        message
+    ):
+        return trusted_context_classification
+    normalized = message.strip().upper()
+    identifiers = _resolved_identifier_profiles(normalized)
+    remainder = _EXPLICIT_TARGET_PATTERN.sub(
+        lambda match: " " if match.group() in identifiers else match.group(), normalized
+    )
+    remainder = " ".join(re.sub(r"[.,;:!?()\[\]{}\"'/]", " ", remainder).split())
+    if remainder in _NEUTRAL_DEMO_DISCOVERY_FORMS:
+        return (
+            security_context.clearance
+            if security_context is not None
+            else DataClassification.RESTRICTED
+        )
+    if identifiers and remainder in _NEUTRAL_DEMO_REQUEST_FORMS:
+        return DataClassification.PUBLIC
+    return DataClassification.RESTRICTED
 
 
 class RunClearanceDeniedError(PermissionError):
@@ -140,8 +243,14 @@ class ResolvedRunPolicy:
     mcp_client_identity: str
 
     def __post_init__(self) -> None:
-        if self.mcp_clearance_ceiling < self.data_classification:
-            raise ValueError("RLS clearance cannot be lower than run classification")
+        if not isinstance(self.data_classification, DataClassification):
+            raise TypeError("Unknown data classification")
+        if not (
+            _profile_classification(self.run_profile)
+            <= self.mcp_clearance_ceiling
+            <= self.data_classification
+        ):
+            raise ValueError("Run classification must cover its bounded RLS scope")
         if self.model_consumer_id != AGENT_CONSUMER:
             raise ValueError("Run policy must use the agent model consumer")
         if not self.allowed_tool_names:
@@ -158,14 +267,19 @@ class AgentRunClassificationPolicy:
         profile: AgentRunProfile,
         *,
         security_context: SecurityContext | None = None,
+        data_classification: DataClassification | None = None,
     ) -> ResolvedRunPolicy:
-        classification = _profile_classification(profile)
+        profile_minimum = _profile_classification(profile)
+        classification = effective_data_classification(
+            profile_minimum,
+            data_classification if data_classification is not None else profile_minimum,
+        )
         clearance = security_context.clearance if security_context else classification
         if clearance < classification:
             raise RunClearanceDeniedError("Requested demo data is unavailable")
-        # A higher user clearance authorizes the case but cannot broaden a lower-classified
-        # run's MCP/RLS data view. The run requirement is the least-privilege ceiling.
-        rls_clearance = classification
+        # Neither higher user clearance nor sensitive request prose broadens the
+        # profile's bounded MCP/RLS data view.
+        rls_clearance = profile_minimum
         if profile is AgentRunProfile.PUBLIC_INFORMATION:
             return ResolvedRunPolicy(
                 run_profile=profile,
@@ -222,16 +336,53 @@ class AgentRunClassificationPolicy:
             )
         raise ValueError("Unknown agent run profile")
 
+    def resolve_request(
+        self,
+        message: str,
+        *,
+        security_context: SecurityContext | None = None,
+        trusted_context_classification: DataClassification | None = None,
+    ) -> ResolvedRunPolicy:
+        """Resolve domain scope separately from the complete request's sensitivity."""
+        profile = resolve_contextual_demo_run_profile(
+            message,
+            security_context=security_context,
+            trusted_context_classification=trusted_context_classification,
+        )
+        identifier_profiles = _resolved_identifier_profiles(message.strip().upper())
+        classification = effective_data_classification(
+            _profile_classification(profile),
+            *(_profile_classification(item) for item in identifier_profiles.values()),
+            _classify_demo_request_content(
+                message,
+                trusted_context_classification=trusted_context_classification,
+                security_context=security_context,
+            ),
+            (
+                trusted_context_classification
+                if trusted_context_classification is not None
+                else DataClassification.PUBLIC
+            ),
+        )
+        return self.resolve(
+            profile,
+            security_context=security_context,
+            data_classification=classification,
+        )
+
     def resolve_persisted(
         self,
         *,
         profile: AgentRunProfile,
         data_classification: DataClassification,
     ) -> ResolvedRunPolicy:
-        resolved = self.resolve(profile)
-        if resolved.data_classification is not data_classification:
-            raise ValueError("Persisted run classification does not match its profile")
-        return resolved
+        if not isinstance(data_classification, DataClassification) or (
+            data_classification < _profile_classification(profile)
+        ):
+            raise ValueError(
+                "Persisted run classification is below its profile minimum"
+            )
+        return self.resolve(profile, data_classification=data_classification)
 
 
 def _profile_classification(profile: AgentRunProfile) -> DataClassification:
@@ -257,25 +408,22 @@ def _mcp_identity_for(clearance: DataClassification) -> str:
 def resolve_demo_run_profile(
     message: str, *, security_context: SecurityContext | None = None
 ) -> AgentRunProfile:
-    """Classify the bounded synthetic demo cases without accepting a client label.
+    """Resolve domain behavior for bounded demo targets, never message sensitivity.
 
     This narrow resolver deliberately recognizes only the documented scenarios. It is
     an outer-demo convenience, not a general data-classification engine.
     """
     normalized = message.strip().upper()
-    if _is_ticket_lookup_request(normalized):
-        # The supported ticket creation path is CONFIDENTIAL and the deterministic
-        # seeded ticket has the same classification. Treat every syntactically valid
-        # ticket lookup as CONFIDENTIAL so hidden and unknown tickets cannot be
-        # distinguished by lower-clearance callers before the model boundary.
-        return AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
-    if _is_restricted_information_request(normalized, security_context):
-        return AgentRunProfile.RESTRICTED_INFORMATION
     if _is_s04_position_reference_recovery(normalized):
         return AgentRunProfile.CONFIDENTIAL_RECOVERY
-    for identifier, profile in _DEMO_ENTITY_PROFILES.items():
-        if identifier in normalized:
-            return profile
+    if _is_restricted_information_request(normalized, security_context):
+        return AgentRunProfile.RESTRICTED_INFORMATION
+    profiles = _resolved_identifier_profiles(normalized)
+    if profiles:
+        return max(
+            profiles.values(),
+            key=lambda item: (_profile_classification(item), item.value),
+        )
     if security_context is not None and _is_discovery_request(normalized):
         return {
             DataClassification.PUBLIC: AgentRunProfile.PUBLIC_INFORMATION,
@@ -293,19 +441,19 @@ def resolve_contextual_demo_run_profile(
     trusted_context_classification: DataClassification | None,
     security_context: SecurityContext | None = None,
 ) -> AgentRunProfile:
-    """Resolve a bounded contextual follow-up without trusting conversation prose.
+    """Resolve the target profile of a genuine identifierless contextual follow-up.
 
     The supplied context classification must originate from already-authorized,
     persisted server records. Only a small, explicit set of deictic follow-up forms
-    can inherit it. New explicit targets keep the normal resolver and may only raise
-    the resulting classification.
+    can inherit it. Explicit targets keep their domain behavior; resolve_request owns
+    the independent, monotonic classification of the complete request and context.
     """
     resolved = resolve_demo_run_profile(message, security_context=security_context)
     if trusted_context_classification is None:
         return resolved
     normalized = message.strip().upper()
     if _EXPLICIT_TARGET_PATTERN.search(normalized):
-        return _profile_at_least(resolved, trusted_context_classification)
+        return resolved
     if _is_contextual_follow_up_request(message):
         return _profile_for_classification(trusted_context_classification)
     return resolved
@@ -315,14 +463,6 @@ def _is_contextual_follow_up_request(message: str) -> bool:
     return any(
         pattern.fullmatch(message.strip()) for pattern in _CONTEXTUAL_FOLLOW_UP_PATTERNS
     )
-
-
-def _profile_at_least(
-    resolved: AgentRunProfile, minimum_classification: DataClassification
-) -> AgentRunProfile:
-    if _profile_classification(resolved) >= minimum_classification:
-        return resolved
-    return _profile_for_classification(minimum_classification)
 
 
 def _profile_for_classification(
@@ -346,7 +486,10 @@ def _is_restricted_information_request(
         or security_context.clearance is not DataClassification.RESTRICTED
     ):
         return False
-    has_product_identifier = re.search(r"\bP\d{4}\b", normalized_message) is not None
+    identifiers = _resolved_identifier_profiles(normalized_message)
+    has_product_identifier = any(
+        re.fullmatch(r"P\d{4}", identifier) for identifier in identifiers
+    )
     is_station_discovery = (
         "STATION" in normalized_message
         and not has_product_identifier
@@ -356,7 +499,7 @@ def _is_restricted_information_request(
         )
     )
     is_restricted_station_status = (
-        "S07" in normalized_message
+        "S07" in identifiers
         and "STATUS" in normalized_message
         and not any(
             marker in normalized_message
@@ -388,15 +531,8 @@ def _is_discovery_request(normalized_message: str) -> bool:
     )
 
 
-def _is_ticket_lookup_request(normalized_message: str) -> bool:
-    return any(
-        is_maintenance_ticket_id(candidate.strip(".,;:!?()[]{}\"'"))
-        for candidate in normalized_message.split()
-    )
-
-
 def _is_s04_position_reference_recovery(normalized_message: str) -> bool:
-    return "S04" in normalized_message and any(
+    return "S04" in _resolved_identifier_profiles(normalized_message) and any(
         marker in normalized_message
         for marker in (
             "POSITIONSREFERENZ",

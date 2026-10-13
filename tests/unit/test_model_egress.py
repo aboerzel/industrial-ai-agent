@@ -21,6 +21,9 @@ from industrial_ai_agent.agent.model_egress import (
     ModelExecutionAuthorizer,
     effective_data_classification,
 )
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunClassificationPolicy,
+)
 from industrial_ai_agent.infrastructure.llm.configuration import (
     load_llm_configuration,
 )
@@ -239,3 +242,35 @@ def test_deny_error_does_not_expose_request_content_or_secrets() -> None:
     assert error_message == "Model egress denied by policy"
     assert "secret-request-content" not in error_message
     assert adapter.calls == []
+
+
+@pytest.mark.parametrize("zone", (ExecutionZone.PUBLIC_CLOUD, ExecutionZone.LOCAL))
+def test_mixed_public_target_and_restricted_text_is_checked_before_provider_call(
+    zone: ExecutionZone,
+) -> None:
+    message = (
+        "P4101 Customer production plan: Example Industries, negotiated price 731.42."
+    )
+    run_policy = AgentRunClassificationPolicy().resolve_request(message)
+    adapter = RecordingLLMClient()
+    checked = EgressCheckedLLMClient(
+        adapter,
+        FixedExecutionZoneResolver(
+            zone,
+            DataClassification.PUBLIC
+            if zone is ExecutionZone.PUBLIC_CLOUD
+            else DataClassification.RESTRICTED,
+        ),
+        run_policy.data_classification,
+    )
+    request = create_request(message)
+
+    assert run_policy.data_classification is DataClassification.RESTRICTED
+    if zone is ExecutionZone.PUBLIC_CLOUD:
+        with pytest.raises(ModelEgressDeniedError):
+            checked.chat(PROFILE, request)
+        assert adapter.calls == []
+    else:
+        checked.chat(PROFILE, request)
+        assert adapter.calls == [(PROFILE, request)]
+        assert adapter.calls[0][1].messages[0].content == message

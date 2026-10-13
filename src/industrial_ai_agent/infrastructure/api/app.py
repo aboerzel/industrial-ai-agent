@@ -39,7 +39,6 @@ from industrial_ai_agent.agent.run_classification_policy import (
     InternalDiagnosticTarget,
     ResolvedRunPolicy,
     RunClearanceDeniedError,
-    resolve_contextual_demo_run_profile,
 )
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     AgentRunService,
@@ -382,15 +381,12 @@ def create_app(
             else ()
         )
         try:
-            policy = _classification_policy(request).resolve(
-                resolve_contextual_demo_run_profile(
-                    payload.message,
-                    security_context=security_context,
-                    trusted_context_classification=_trusted_context_classification(
-                        previous_runs, security_context
-                    ),
-                ),
+            policy = _classification_policy(request).resolve_request(
+                payload.message,
                 security_context=security_context,
+                trusted_context_classification=_trusted_context_classification(
+                    previous_runs, security_context
+                ),
             )
         except RunClearanceDeniedError:
             _raise_api_run_error(

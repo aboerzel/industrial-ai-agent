@@ -1,4 +1,5 @@
 import asyncio
+from itertools import permutations, product
 from uuid import uuid4
 
 import pytest
@@ -119,13 +120,13 @@ def test_explicit_target_escalates_above_public_context() -> None:
 
 
 def test_explicit_public_target_does_not_downgrade_confidential_context() -> None:
-    assert (
-        resolve_contextual_demo_run_profile(
-            "Show product P4101.",
-            trusted_context_classification=DataClassification.CONFIDENTIAL,
-        )
-        is AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING
+    policy = AgentRunClassificationPolicy().resolve_request(
+        "Show product P4101.",
+        trusted_context_classification=DataClassification.CONFIDENTIAL,
     )
+    assert policy.run_profile is AgentRunProfile.PUBLIC_INFORMATION
+    assert policy.data_classification is DataClassification.CONFIDENTIAL
+    assert policy.mcp_clearance_ceiling is DataClassification.PUBLIC
 
 
 def test_untrusted_or_non_contextual_follow_up_keeps_restricted_fallback() -> None:
@@ -487,11 +488,11 @@ def test_ticket_lookup_uses_the_confidential_ticket_scope(
     )
 
 
-def test_persisted_policy_rejects_classification_mismatch() -> None:
+def test_persisted_policy_rejects_classification_below_profile_minimum() -> None:
     with pytest.raises(ValueError, match="classification"):
         AgentRunClassificationPolicy().resolve_persisted(
             profile=AgentRunProfile.INTERNAL_DIAGNOSTIC,
-            data_classification=DataClassification.CONFIDENTIAL,
+            data_classification=DataClassification.PUBLIC,
         )
 
 
@@ -521,3 +522,182 @@ def test_persisted_run_policy_cannot_change_during_execution() -> None:
             )
 
     asyncio.run(exercise())
+
+
+SYNTHETIC_RESTRICTED_CONTENT = (
+    "Customer production plan: customer Example Industries, negotiated price 731.42."
+)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    (
+        ("P4101", DataClassification.PUBLIC),
+        (SYNTHETIC_RESTRICTED_CONTENT, DataClassification.RESTRICTED),
+        (f"P4101 {SYNTHETIC_RESTRICTED_CONTENT}", DataClassification.RESTRICTED),
+        (f"{SYNTHETIC_RESTRICTED_CONTENT} P4101", DataClassification.RESTRICTED),
+        ("P4101 P4711", DataClassification.CONFIDENTIAL),
+        ("P4711 P4101", DataClassification.CONFIDENTIAL),
+        ("P4101 P4901 S07", DataClassification.RESTRICTED),
+        ("P4101XXX", DataClassification.RESTRICTED),
+        ("QUALITY-09", DataClassification.CONFIDENTIAL),
+        ("MT-S02-20260117 P9001", DataClassification.RESTRICTED),
+        ("Unrecognized content", DataClassification.RESTRICTED),
+        ("S01", DataClassification.PUBLIC),
+        ("S05", DataClassification.PUBLIC),
+    ),
+)
+def test_effective_request_classification_matrix(
+    message: str, expected: DataClassification
+) -> None:
+    assert (
+        AgentRunClassificationPolicy().resolve_request(message).data_classification
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "identifier", ("P4101", "S02", "QUALITY-09", "MT-S02-20260117")
+)
+@pytest.mark.parametrize("suffix", ("XXX", "_EXTRA", "-EXTRA", "é", "9"))
+def test_extended_identifier_never_resolves_its_known_prefix(
+    identifier: str, suffix: str
+) -> None:
+    message = f"{identifier}{suffix}"
+    assert (
+        resolve_demo_run_profile(message) is AgentRunProfile.RESTRICTED_TROUBLESHOOTING
+    )
+    assert (
+        AgentRunClassificationPolicy().resolve_request(message).data_classification
+        is DataClassification.RESTRICTED
+    )
+
+
+@pytest.mark.parametrize(
+    "identifier", ("P4101", "S02", "QUALITY-09", "MT-S02-20260117")
+)
+@pytest.mark.parametrize("prefix", ("X", "_", "-", "é"))
+def test_prefixed_identifier_never_resolves_known_suffix(
+    identifier: str, prefix: str
+) -> None:
+    assert (
+        resolve_demo_run_profile(f"{prefix}{identifier}")
+        is AgentRunProfile.RESTRICTED_TROUBLESHOOTING
+    )
+
+
+@pytest.mark.parametrize(
+    "form", ("P4101.", "(P4101)", "[P4101]", '"P4101"', "P4101!", "p4101")
+)
+def test_canonical_product_identifier_accepts_request_punctuation(form: str) -> None:
+    policy = AgentRunClassificationPolicy().resolve_request(form)
+    assert policy.run_profile is AgentRunProfile.PUBLIC_INFORMATION
+    assert policy.data_classification is DataClassification.PUBLIC
+
+
+@pytest.mark.parametrize(
+    ("message", "context", "expected"),
+    (
+        ("P4101", DataClassification.CONFIDENTIAL, DataClassification.CONFIDENTIAL),
+        ("P9001", DataClassification.PUBLIC, DataClassification.RESTRICTED),
+        ("What does that mean?", DataClassification.PUBLIC, DataClassification.PUBLIC),
+        ("What does that mean?", None, DataClassification.RESTRICTED),
+        (
+            SYNTHETIC_RESTRICTED_CONTENT,
+            DataClassification.PUBLIC,
+            DataClassification.RESTRICTED,
+        ),
+    ),
+)
+def test_effective_classification_retains_context_minimum(
+    message: str,
+    context: DataClassification | None,
+    expected: DataClassification,
+) -> None:
+    assert (
+        AgentRunClassificationPolicy()
+        .resolve_request(message, trusted_context_classification=context)
+        .data_classification
+        is expected
+    )
+
+
+def test_sensitive_content_preserves_public_target_behavior_and_data_scope() -> None:
+    policy = AgentRunClassificationPolicy().resolve_request(
+        f"P4101 {SYNTHETIC_RESTRICTED_CONTENT}"
+    )
+    assert policy.run_profile is AgentRunProfile.PUBLIC_INFORMATION
+    assert policy.data_classification is DataClassification.RESTRICTED
+    assert policy.allowed_tool_names == PUBLIC_INFORMATION_TOOLS
+    assert policy.mcp_clearance_ceiling is DataClassification.PUBLIC
+    assert policy.mcp_client_identity == "industrial-agent-public"
+    assert (
+        AgentRunClassificationPolicy().resolve_persisted(
+            profile=policy.run_profile, data_classification=policy.data_classification
+        )
+        == policy
+    )
+
+
+def test_recovery_requirement_combines_with_all_identifiers() -> None:
+    for identifiers in ("P4101 P9001", "P9001 P4101"):
+        policy = AgentRunClassificationPolicy().resolve_request(
+            f"Recover the position reference at S04. {identifiers}"
+        )
+        assert policy.run_profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
+        assert policy.allowed_tool_names == CONFIDENTIAL_RECOVERY_TOOLS
+        assert policy.data_classification is DataClassification.RESTRICTED
+
+
+def test_identifier_permutations_have_the_same_maximum_classification() -> None:
+    resolver = AgentRunClassificationPolicy()
+    for size in range(1, 5):
+        identifiers = ("P4101", "S02", "QUALITY-09", "P9001")[:size]
+        expected = tuple(DataClassification)[size - 1]
+        for ordered in permutations(identifiers):
+            assert (
+                resolver.resolve_request(" ".join(ordered)).data_classification
+                is expected
+            )
+
+
+def test_adding_content_to_complete_requests_never_lowers_classification() -> None:
+    resolver = AgentRunClassificationPolicy()
+    requests = ("P4101", "S02", "QUALITY-09", "P9001", SYNTHETIC_RESTRICTED_CONTENT)
+    additions = (*requests, "unknown payload", "customer record 123456", "P4101XXX")
+    for message, addition in product(requests, additions):
+        initial = resolver.resolve_request(message).data_classification
+        for extended in (f"{message} {addition}", f"{addition} {message}"):
+            assert resolver.resolve_request(extended).data_classification >= initial
+
+
+def test_lower_identifiers_cannot_downgrade_discovery_or_context() -> None:
+    resolver = AgentRunClassificationPolicy()
+    for clearance in DataClassification:
+        context = SecurityContext("test", ("engineer",), clearance, True)
+        initial = resolver.resolve_request(
+            "Which stations are available?", security_context=context
+        ).data_classification
+        extended = resolver.resolve_request(
+            "Which stations are available? P4101", security_context=context
+        ).data_classification
+        assert extended >= initial
+        assert (
+            resolver.resolve_request(
+                "P4101", trusted_context_classification=clearance
+            ).data_classification
+            >= clearance
+        )
+
+
+@pytest.mark.parametrize(
+    "message", (f"P4101 {SYNTHETIC_RESTRICTED_CONTENT}", "P4101 P9001")
+)
+def test_public_clearance_cannot_authorize_effectively_restricted_request(
+    message: str,
+) -> None:
+    context = SecurityContext("public", ("engineer",), DataClassification.PUBLIC, True)
+    with pytest.raises(PermissionError, match="unavailable"):
+        AgentRunClassificationPolicy().resolve_request(
+            message, security_context=context
+        )

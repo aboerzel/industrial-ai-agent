@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
@@ -19,6 +20,8 @@ from industrial_ai_agent.agent.model_egress import (
     ModelExecutionAuthorizer,
 )
 from industrial_ai_agent.agent.model_selection import (
+    AGENT_CONSUMER,
+    AGENT_REQUIREMENTS,
     CapabilityCheckedLLMClient,
     CostClass,
     ModelAssignment,
@@ -36,6 +39,9 @@ from industrial_ai_agent.agent.model_selection import (
     ModelSelectionPolicy,
     QualityClass,
     validate_model_capabilities,
+)
+from industrial_ai_agent.agent.run_classification_policy import (
+    AgentRunClassificationPolicy,
 )
 from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.model_decision_observer import (
@@ -487,6 +493,52 @@ class CapturingClient:
         self.called = True
         self.call_count += 1
         return LLMResponse(text="unsafe", finish_reason=FinishReason.STOP)
+
+
+@pytest.mark.parametrize("zone", (ExecutionZone.PUBLIC_CLOUD, ExecutionZone.LOCAL))
+def test_mixed_request_resolves_assignment_under_effective_classification(
+    zone: ExecutionZone,
+) -> None:
+    message = (
+        "P4101 Customer production plan: Example Industries, negotiated price 731.42."
+    )
+    policy = AgentRunClassificationPolicy().resolve_request(message)
+    model = replace(
+        _model("assigned_model", zone=zone, capabilities=AGENT_REQUIREMENTS),
+        max_data_classification=(
+            DataClassification.PUBLIC
+            if zone is ExecutionZone.PUBLIC_CLOUD
+            else DataClassification.RESTRICTED
+        ),
+    )
+    assignments = Assignments(
+        *(
+            ModelAssignment(AGENT_CONSUMER, classification, model.model_id)
+            for classification in DataClassification
+        )
+    )
+    resolver = ModelResolutionService(
+        catalog=Catalog(model),
+        assignments=assignments,
+        authorizer=ModelExecutionAuthorizer(),
+        consumer_requirements={AGENT_CONSUMER: AGENT_REQUIREMENTS},
+    )
+
+    if zone is ExecutionZone.PUBLIC_CLOUD:
+        with pytest.raises(ModelResolutionError) as captured:
+            resolver.resolve_model(policy.model_consumer_id, policy.data_classification)
+        assert captured.value.decision.outcome is ModelDecisionOutcome.EGRESS_DENIED
+        assert (
+            captured.value.decision.effective_data_classification
+            is DataClassification.RESTRICTED
+        )
+    else:
+        decision = resolver.resolve_model(
+            policy.model_consumer_id, policy.data_classification
+        )
+        assert decision.outcome is ModelDecisionOutcome.EXECUTION_ALLOWED
+        assert decision.effective_data_classification is DataClassification.RESTRICTED
+        assert decision.model == model
 
 
 def test_final_provider_guard_blocks_restricted_public_invocation() -> None:
