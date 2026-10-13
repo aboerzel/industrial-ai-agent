@@ -206,6 +206,7 @@ services:
       dockerfile: Dockerfile.observability-mcp
     restart: unless-stopped
     environment:
+      AGENT_RUNTIME_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
       TEMPO_URL: http://tempo:3200
       LOKI_URL: http://loki:3100
       PROMETHEUS_URL: http://prometheus:9090
@@ -225,6 +226,8 @@ services:
       start_period: 20s
       retries: 3
     depends_on:
+      factory-mcp:
+        condition: service_healthy
       tempo:
         condition: service_healthy
       loki:

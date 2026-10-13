@@ -56,6 +56,7 @@ from industrial_ai_agent.application.model_configuration import (
     ModelAssignmentPolicyError,
     ModelConfigurationService,
 )
+from industrial_ai_agent.application.run_visibility import is_run_visible
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.demo_security import (
     ApiAuthorizationError,
@@ -1209,7 +1210,7 @@ async def _authorized_investigation(
 
 def _is_run_visible(record: StoredAgentRun, security_context: SecurityContext) -> bool:
     """Apply the shared persisted-run classification visibility policy."""
-    return int(record.data_classification) <= int(security_context.clearance)
+    return is_run_visible(record.data_classification, security_context)
 
 
 def _is_run_resumable_by(

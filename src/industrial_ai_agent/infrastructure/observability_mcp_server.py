@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import argparse
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from time import perf_counter
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -15,6 +16,12 @@ from mcp.types import ToolAnnotations
 from pydantic import StringConstraints
 
 from industrial_ai_agent.application.mcp_access import McpPermission
+from industrial_ai_agent.application.run_visibility import is_run_visible
+from industrial_ai_agent.domain.security import DataClassification, SecurityContext
+from industrial_ai_agent.infrastructure.api.postgres_run_store import (
+    PostgreSqlAgentRunStore,
+)
+from industrial_ai_agent.infrastructure.api.run_store import AgentRunStore
 from industrial_ai_agent.infrastructure.mcp_access_control import (
     McpHttpAccessControl,
     create_demo_mcp_access_control,
@@ -29,6 +36,9 @@ from industrial_ai_agent.infrastructure.observability_backends import (
     ObservabilityEvidenceService,
     PrometheusAdapter,
     TempoAdapter,
+)
+from industrial_ai_agent.infrastructure.persistence.postgres import (
+    PostgreSqlSessionFactory,
 )
 from industrial_ai_agent.infrastructure.telemetry import (
     Telemetry,
@@ -83,6 +93,8 @@ _OBSERVABILITY_TOOL_PERMISSIONS = {
 def create_observability_mcp_server(
     *,
     evidence_service: ObservabilityEvidenceService,
+    store_for_context: Callable[[SecurityContext], AgentRunStore] | None = None,
+    trace_run_ids: Mapping[str, UUID] | None = None,
     access_control: McpHttpAccessControl | None = None,
     telemetry: Telemetry | None = None,
 ) -> MCPServer:
@@ -92,6 +104,28 @@ def create_observability_mcp_server(
         version=OBSERVABILITY_MCP_SERVER_VERSION,
         description="Read-only bounded trace, log, and metric evidence for RCA.",
     )
+    # Only the composition root may supply this trusted correlation map. Never
+    # infer authorization from caller input or retrieved trace attributes.
+    trusted_trace_runs = dict(trace_run_ids or {})
+
+    async def authorize_run(
+        identifier: str, ctx: Context | None, tool_name: str
+    ) -> None:
+        security_context = _authorize(ctx, access_control, tool_name)
+        run_id = (
+            trusted_trace_runs.get(identifier.lower())
+            if len(identifier) == 32
+            else UUID(identifier)
+        )
+        if run_id is None or store_for_context is None:
+            raise LookupError("Agent run was not found")
+        inspection = await store_for_context(security_context).inspect(run_id)
+        if (
+            inspection is None
+            or inspection.run_id != run_id
+            or not is_run_visible(inspection.data_classification, security_context)
+        ):
+            raise LookupError("Agent run was not found")
 
     @server.tool(
         name="get_run_trace",
@@ -99,10 +133,10 @@ def create_observability_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def get_run_trace(
+    async def get_run_trace(
         run_id: RunIdentifier, ctx: Context | None = None
     ) -> dict[str, Any]:
-        _authorize(ctx, access_control, "get_run_trace")
+        await authorize_run(run_id, ctx, "get_run_trace")
         return _invoke_tool(
             telemetry,
             "get_run_trace",
@@ -115,12 +149,12 @@ def create_observability_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def get_trace_logs(
+    async def get_trace_logs(
         trace_id: TraceIdentifier,
         service_name: ServiceName | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        _authorize(ctx, access_control, "get_trace_logs")
+        await authorize_run(trace_id, ctx, "get_trace_logs")
         return _invoke_tool(
             telemetry,
             "get_trace_logs",
@@ -139,11 +173,11 @@ def create_observability_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def get_run_metrics(
+    async def get_run_metrics(
         run_or_trace_id: RunOrTraceIdentifier,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        _authorize(ctx, access_control, "get_run_metrics")
+        await authorize_run(run_or_trace_id, ctx, "get_run_metrics")
         return _invoke_tool(
             telemetry,
             "get_run_metrics",
@@ -182,10 +216,10 @@ def create_observability_mcp_server(
         structured_output=True,
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def investigate_run(
+    async def investigate_run(
         run_id: RunIdentifier, ctx: Context | None = None
     ) -> dict[str, Any]:
-        _authorize(ctx, access_control, "investigate_run")
+        await authorize_run(run_id, ctx, "investigate_run")
         return _invoke_tool(
             telemetry,
             "investigate_run",
@@ -202,7 +236,7 @@ def create_observability_mcp_server(
 def create_default_observability_mcp_server(
     *, telemetry: Telemetry | None = None
 ) -> MCPServer:
-    """Assemble only infrastructure query adapters; no agent runtime is involved."""
+    """Assemble local query adapters with the same persisted run visibility gate."""
     configuration = BackendConfiguration(
         tempo_url=os.getenv("TEMPO_URL", "http://127.0.0.1:3200"),
         loki_url=os.getenv("LOKI_URL", "http://127.0.0.1:3100"),
@@ -210,7 +244,9 @@ def create_default_observability_mcp_server(
         timeout_seconds=float(os.getenv("OBSERVABILITY_BACKEND_TIMEOUT_SECONDS", "2")),
     )
     return create_observability_mcp_server(
-        evidence_service=_create_evidence_service(configuration), telemetry=telemetry
+        evidence_service=_create_evidence_service(configuration),
+        store_for_context=_create_run_store_factory(),
+        telemetry=telemetry,
     )
 
 
@@ -238,6 +274,7 @@ def create_secure_observability_mcp_server(
     )
     server = create_observability_mcp_server(
         evidence_service=evidence_service,
+        store_for_context=_create_run_store_factory(),
         access_control=access_control,
         telemetry=telemetry,
     )
@@ -283,14 +320,31 @@ def _create_evidence_service(
 
 def _authorize(
     ctx: Context | None, access_control: McpHttpAccessControl | None, tool_name: str
-) -> None:
+) -> SecurityContext:
     if access_control is None:
-        return
+        return SecurityContext(
+            subject_id="observability-mcp-stdio",
+            roles=("development",),
+            clearance=DataClassification.INTERNAL,
+            authenticated=False,
+        )
     if ctx is None:
         raise PermissionError("MCP authentication failed")
-    access_control.authorize_tool(
-        access_control.access_context_from_headers(ctx.headers), tool_name
+    context = access_control.access_context_from_headers(ctx.headers)
+    access_control.authorize_tool(context, tool_name)
+    return context.security_context
+
+
+def _create_run_store_factory() -> Callable[[SecurityContext], AgentRunStore]:
+    database_url = os.getenv("AGENT_RUNTIME_DATABASE_URL") or os.getenv(
+        "FACTORY_DATABASE_URL"
     )
+    if not database_url:
+        raise RuntimeError(
+            "AGENT_RUNTIME_DATABASE_URL or FACTORY_DATABASE_URL is required"
+        )
+    session_factory = PostgreSqlSessionFactory(database_url)
+    return lambda context: PostgreSqlAgentRunStore(session_factory, context)
 
 
 def _invoke_tool(

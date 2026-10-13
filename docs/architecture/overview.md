@@ -63,6 +63,7 @@ flowchart LR
     Codex --> Observe
     Codex --> RCA
     Runtime --> Postgres
+    Observe -->|run visibility before telemetry| Postgres
     Observe --> Backends
     RCA --> Postgres
     RCA --> Backends
@@ -285,11 +286,19 @@ flowchart LR
     Codex --> Runtime["runtime_mcp\npersisted application facts"]
     Codex --> Observability["observability_mcp\ndistributed telemetry"]
     Runtime --> Runs["agent_runtime.agent_runs\nPostgreSQL RLS"]
+    Observability -->|run visibility before telemetry| Runs
     Observability --> Backends["Tempo / Loki / Prometheus"]
 ```
 
 Codex or another consumer may correlate returned evidence by `run_id`; neither MCP
 performs LLM reasoning, RCA orchestration, or cross-MCP calls.
+
+Observability's `READ_OBSERVABILITY` permission grants capability access only;
+run-scoped trace, log, and metric reads use the shared persisted-run classification
+visibility rule and the caller's RLS context before backend retrieval. Direct trace
+IDs require a trusted internal run binding and otherwise fail closed; the deployed
+composition currently has no such mapping. Run-ID `investigate_run` remains available
+for authorized correlated evidence. Service-health aggregates need no run access.
 
 `rca_mcp` is a separate read-only consumer-facing RCA composition, not a new agent
 path. It directly wires `RcaAnalysisService` to the request-scoped RLS runtime adapter
@@ -399,6 +408,7 @@ flowchart LR
     Knowledge --> Capabilities
     Capabilities --> RLS["PostgreSQL RLS and<br/>clearance-isolated retrieval"]
     Runtime --> RLS
+    Observe -->|run visibility before telemetry| RLS
     RCA --> RLS
     Observe --> Evidence["Bounded Tempo, Loki,<br/>and Prometheus projections"]
     RCA --> Evidence

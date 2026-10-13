@@ -289,17 +289,42 @@ the Industrial Agent API neither calls nor depends on it.
 ```mermaid
 flowchart LR
     Codex["Codex / future RCA consumer"] --> MCP["observability_mcp\nbounded read-only tools"]
-    MCP --> Tempo["Tempo\ntrace lookup"]
-    MCP --> Loki["Loki\nmetadata-only logs"]
-    MCP --> Prometheus["Prometheus\nfixed aggregates"]
+    MCP --> Gate["Run-scoped: persisted visibility\nSecurityContext + PostgreSQL RLS"]
+    Gate --> Tempo["Tempo\ntrace lookup"]
+    Gate --> Loki["Loki\nmetadata-only logs"]
+    Gate --> Prometheus["Prometheus\nfixed aggregates"]
+    MCP -->|service health only| Prometheus
 ```
 
 All five tools are `read_only_hint=true` and require the server-owned ADR-015
 `READ_OBSERVABILITY` permission: `get_run_trace(run_id)`,
 `get_trace_logs(trace_id, service_name?)`, `get_run_metrics(run_or_trace_id)`,
 `get_service_health(service_name, time_window?)`, and `investigate_run(run_id)`.
-Known services are fixed to `industrial-ai-agent`, `factory-mcp`, `knowledge-mcp`, and
+Known services are fixed to `industrial-ai-agent`, `factory-mcp`, `knowledge-mcp`, `runtime-mcp`, and
 `observability-mcp`; health windows are `5m`, `15m`, or `1h`.
+
+`READ_OBSERVABILITY` grants access to the capability, not to every run. The first,
+second, third, and fifth tools are `RUN_SCOPED`: after service authorization they
+load the authoritative persisted run using the current MCP `SecurityContext` and
+enforce the shared API/Runtime visibility policy before querying Tempo, Loki, or
+Prometheus. The deployed service uses the existing `AGENT_RUNTIME_DATABASE_URL`
+(or `FACTORY_DATABASE_URL`) with transaction-local clearance and PostgreSQL RLS.
+Missing and inaccessible runs return the same neutral not-found error, without
+run classification, trace IDs, span counts, services, durations, or error attributes.
+Derived trace/log/metric metadata inherits the run classification; sanitization
+does not declassify it. `get_service_health` is `SERVICE_SCOPED` and requires only
+the service permission, because its fixed aggregates disclose no specific run.
+
+Direct trace-ID reads require a trusted internal trace-to-run binding, followed by
+the same persisted-run visibility check. A composition root may inject that binding;
+caller classifications, trace attributes, and model output cannot establish it.
+The current deployed and stdio compositions have no authoritative trace-ID mapping,
+so direct `get_trace_logs(trace_id)` and trace-ID `get_run_metrics` fail closed with
+the same neutral error for unknown and inaccessible IDs, without any observability
+backend query. Accessible mapped IDs are supported and regression-tested through
+explicit injection. Use run-ID `investigate_run` for correlated logs and metrics in
+the deployed composition. Its run authorization precedes all evidence retrieval.
+RCA likewise loads the authorized runtime record before querying telemetry.
 
 The service uses Tempo `GET /api/search` with a server-built `run.id` filter followed by
 `GET /api/v2/traces/{trace_id}`, Loki `GET /loki/api/v1/query_range` with a fixed trace

@@ -36,6 +36,7 @@ from industrial_ai_agent.application.rca_evidence import (
     RcaToolTrajectoryObservation,
     RcaTraceObservation,
 )
+from industrial_ai_agent.application.run_visibility import is_run_visible
 from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.run_store import (
     AgentRunStore,
@@ -300,7 +301,9 @@ class StoreBackedRuntimeRcaEvidenceAdapter:
             raise RcaRuntimeEvidenceUnavailableError(
                 "RCA runtime evidence is unavailable"
             ) from error
-        if inspection is None:
+        if inspection is None or not is_run_visible(
+            inspection.data_classification, security_context
+        ):
             raise RcaRunNotAccessibleError("The requested run is not accessible")
         return inspection
 

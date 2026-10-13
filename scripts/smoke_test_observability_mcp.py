@@ -51,8 +51,12 @@ async def _run(run_id: str) -> None:
         raise RuntimeError(f"Unexpected read-only tool surface: {sorted(actual)}")
     if not isinstance(trace_id, str):
         raise TypeError("get_run_trace did not return a trace ID")
-    if not isinstance(logs.structured_content.get("events"), list):
-        raise TypeError("get_trace_logs did not return structured events")
+    # The deployed composition has no trusted trace-to-run mapping. Direct trace
+    # access must fail closed; run-authorized aggregation supplies correlated logs.
+    if not logs.is_error:
+        raise RuntimeError("Unmapped direct trace access did not fail closed")
+    if not isinstance(investigation.structured_content.get("correlated_logs"), list):
+        raise TypeError("investigate_run did not return structured correlated logs")
     if not isinstance(metrics.structured_content.get("series"), list):
         raise TypeError("get_run_metrics did not return bounded metric series")
     if not isinstance(health.structured_content.get("series"), list):

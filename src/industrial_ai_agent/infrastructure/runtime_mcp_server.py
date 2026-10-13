@@ -16,6 +16,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from industrial_ai_agent.application.mcp_access import McpPermission
+from industrial_ai_agent.application.run_visibility import is_run_visible
 from industrial_ai_agent.domain.security import DataClassification, SecurityContext
 from industrial_ai_agent.infrastructure.api.postgres_run_store import (
     PostgreSqlAgentRunStore,
@@ -382,7 +383,9 @@ async def _lookup(
 ) -> RuntimeRunInspection:
     context = _context(ctx, access_control, "get_agent_run")
     inspection = await store_for_context(context.security_context).inspect(UUID(run_id))
-    if inspection is None:
+    if inspection is None or not is_run_visible(
+        inspection.data_classification, context.security_context
+    ):
         raise LookupError("Agent run was not found")
     return inspection
 

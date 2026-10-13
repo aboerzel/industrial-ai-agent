@@ -10,7 +10,7 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 COPY pyproject.toml ./
 COPY src ./src
 
-# This service is an HTTP query adapter only; it contains no data, model, or database runtime.
+# Query adapters use the persisted run store for classification authorization.
 RUN pip install --no-cache-dir \
         "httpx>=0.28,<1.0" \
         "mcp>=2.0,<3.0" \
@@ -19,6 +19,8 @@ RUN pip install --no-cache-dir \
         "opentelemetry-instrumentation-asgi>=0.65b0,<0.66" \
         "opentelemetry-sdk>=1.44.0,<1.45" \
         "pydantic>=2.0" \
+        "psycopg[binary]>=3.3.5,<3.4" \
+        "sqlalchemy>=2.0.52,<2.1" \
         "uvicorn>=0.52.4,<0.53" \
     && pip install --no-cache-dir --no-deps .
 

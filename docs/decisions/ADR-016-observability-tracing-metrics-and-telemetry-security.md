@@ -72,6 +72,17 @@ because stored telemetry remains potentially sensitive. It reuses ADR-015's
 server-derived identity and a `READ_OBSERVABILITY` permission; trace context never
 establishes identity, clearance, or permission.
 
+`READ_OBSERVABILITY` authorizes the capability only. Every run-scoped read must load
+the authoritative persisted run through the caller's `SecurityContext` and enforce
+the shared run classification visibility policy, with PostgreSQL RLS, before any
+observability backend query. Derived metadata retains the run's classification;
+metadata-only capture and sanitization are not declassification. Direct trace-ID
+access requires a trusted internal binding to that run before retrieval; an absent
+binding fails closed, and unknown and inaccessible resources have the same neutral
+not-found behavior. Caller input, trace attributes, and model output cannot grant
+run access. Genuine service-health aggregates remain service-scoped and require
+only the capability permission. RCA retains its runtime-before-telemetry gate.
+
 Every application run retains its UUID `run_id` as a business identifier. It is a safe
 span/log attribute. OTel `trace_id` and `span_id` remain OTel identifiers; neither
 replaces `run_id`. FastAPI auto-instrumentation creates inbound request spans.

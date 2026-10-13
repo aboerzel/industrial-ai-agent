@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult
 
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.observability_backends import (
     ObservabilityNotFoundError,
 )
@@ -43,7 +46,7 @@ def test_observability_mcp_exposes_only_bounded_read_only_tools() -> None:
 
 def test_observability_mcp_validates_identifiers_before_backend_dispatch() -> None:
     evidence = _FakeEvidenceService()
-    server = create_observability_mcp_server(evidence_service=evidence)  # type: ignore[arg-type]
+    server = _server(evidence)
 
     async def call_invalid() -> None:
         with pytest.raises(ToolError, match="Error executing tool"):
@@ -61,7 +64,7 @@ def test_observability_mcp_validates_identifiers_before_backend_dispatch() -> No
 
 def test_unknown_valid_metric_identifiers_return_neutral_tool_errors() -> None:
     evidence = _NotFoundEvidenceService()
-    server = create_observability_mcp_server(evidence_service=evidence)  # type: ignore[arg-type]
+    server = _server(evidence)
 
     async def call_unknown() -> None:
         for identifier in (RUN_ID, TRACE_ID):
@@ -79,7 +82,7 @@ def test_investigate_run_is_a_deterministic_adapter_not_agent_or_write_path() ->
     assert "LangGraph" not in source
     assert "create_maintenance_ticket" not in source
 
-    server = create_observability_mcp_server(evidence_service=_FakeEvidenceService())  # type: ignore[arg-type]
+    server = _server(_FakeEvidenceService())
 
     async def call() -> dict[str, object]:
         result = await server.call_tool("investigate_run", {"run_id": RUN_ID})
@@ -147,3 +150,17 @@ class _Model:
     def model_dump(self, *, mode: str) -> dict[str, object]:
         assert mode == "json"
         return self._value
+
+
+def _server(evidence):
+    class Store:
+        async def inspect(self, run_id):
+            return SimpleNamespace(
+                run_id=run_id, data_classification=DataClassification.INTERNAL
+            )
+
+    return create_observability_mcp_server(
+        evidence_service=evidence,
+        store_for_context=lambda context: Store(),
+        trace_run_ids={TRACE_ID: UUID(RUN_ID)},
+    )
