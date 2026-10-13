@@ -197,9 +197,20 @@ export function renderSummaryMarkdown(summary) {
     "",
     "## Journey Results",
     "",
-    "| Journey | Result | Steps |",
-    "| --- | --- | ---: |",
-    ...summary.journey_summary.map((journey) => `| ${journey.journey} | ${journey.result} | ${journey.steps} |`),
+    "| Journey | Result | Required | Executed | Passed | Failed | Blocked / not run |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ...summary.journey_summary.map((journey) => `| ${journey.journey} | ${journey.result} | ${journey.required_total ?? 0} | ${journey.required_executed ?? 0} | ${journey.required_passed ?? 0} | ${journey.required_failed ?? 0} | ${journey.required_blocked_not_run ?? 0} |`),
+    "",
+    "## Assertion Evidence",
+    "",
+    ...((summary.journeys ?? []).flatMap((journey) => [
+      `### ${journey.journey}`,
+      "",
+      "| Planned assertion | Requirement | Executed | Status |",
+      "| --- | --- | --- | --- |",
+      ...(journey.assertions ?? []).map((item) => `| ${item.id} | ${item.requirement} | ${item.executed} | ${item.status} |`),
+      "",
+    ])),
     "",
   ].join("\n");
 }

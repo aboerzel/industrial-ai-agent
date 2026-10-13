@@ -6,6 +6,7 @@ const frontendUrl = process.env.E2E_FRONTEND_URL ?? "http://127.0.0.1:8080";
 
 export default defineConfig({
   testDir: "../tests/e2e",
+  testIgnore: "**/fixtures/**",
   fullyParallel: false,
   timeout: 180_000,
   expect: { timeout: 180_000 },

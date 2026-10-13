@@ -7,7 +7,15 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "@playwright/test";
 import {
-  assertHttpStatus, browserCredentials, completedJourneyStatus, createApiStatusGuard, executionStatus,
+  MissingEvidence, assertionPlan, assertionSummary, assertCurrentPlan, assertPersistedTurn,
+  assertToolEvidence, evaluatedJourneyStatus, plannedSteps, recordAssertion, requireEvidence,
+} from "./journey-assertions.mjs";
+import {
+  activeInvestigationId, checkClearanceChange, checkDocument, checkNewChat, checkPdf,
+  checkReload, readInvestigation, rememberInvestigation,
+} from "./browser-journey-checks.mjs";
+import {
+  assertHttpStatus, browserCredentials, createApiStatusGuard, executionStatus,
   exitCodeForStatuses, fetchExpected, modelAdminHeaders, readExpectedJson, requiredEnvironmentValue,
 } from "./e2e-http.mjs";
 import {
@@ -37,7 +45,7 @@ const JOURNEYS = {
     language: "DE",
     clearance: "CONFIDENTIAL",
     steps: [
-      { kind: "typed", prompt: "Untersuche Station S04 genauer.", expected: "SUCCESS", target: "S04" },
+      { kind: "typed", prompt: "Untersuche Station S04 genauer.", expected: "SUCCESS", target: "S04", tool: "get_machine_status" },
       { kind: "reference", type: "error_code", action: "search", expected: "SUCCESS" },
       { kind: "document", expected: "SUCCESS" },
       { kind: "typed", prompt: "Zeige die Produkthistorie des zuletzt genannten Produkts.", expected: "SUCCESS" },
@@ -49,7 +57,7 @@ const JOURNEYS = {
     language: "EN",
     clearance: "INTERNAL",
     steps: [
-      { kind: "typed", prompt: "Which stations are available to me?", expected: "SUCCESS" },
+      { kind: "typed", prompt: "Which stations are available to me?", expected: "SUCCESS", tool: "list_stations" },
       { kind: "reference", type: "station", action: "status", expected: "SUCCESS" },
       { kind: "typed", prompt: "Which products are visible for that station?", expected: "SUCCESS" },
       { kind: "reference", type: "product", action: "history", expected: "SUCCESS", optional: true },
@@ -61,7 +69,7 @@ const JOURNEYS = {
     language: "DE",
     clearance: "PUBLIC",
     steps: [
-      { kind: "typed", prompt: "Zeige die Produkthistorie von P4101.", expected: "SUCCESS", target: "P4101" },
+      { kind: "typed", prompt: "Zeige die Produkthistorie von P4101.", expected: "SUCCESS", target: "P4101", tool: "get_product_history" },
       { kind: "reference", type: "station", action: "status", expected: "SUCCESS" },
       { kind: "typed", prompt: "Welche Produkte sind an dieser Station sichtbar?", expected: "SUCCESS" },
     ],
@@ -72,12 +80,12 @@ const JOURNEYS = {
     language: "EN",
     clearance: "CONFIDENTIAL",
     steps: [
-      { kind: "typed", prompt: "Search technical documentation for QUALITY-09.", expected: "SUCCESS", target: "QUALITY-09" },
+      { kind: "typed", prompt: "Search technical documentation for QUALITY-09.", expected: "SUCCESS", target: "QUALITY-09", tool: "search_documentation" },
       { kind: "document", expected: "SUCCESS" },
       { kind: "select", clearance: "PUBLIC" },
-      { kind: "reference", type: "error_code", action: "investigate", expected: "ATTENTION" },
+      { kind: "typed", prompt: "Investigate QUALITY-09 in more detail.", expected: "ATTENTION", target: "QUALITY-09" },
       { kind: "select", clearance: "CONFIDENTIAL" },
-      { kind: "typed", prompt: "Which station is affected by this error code?", expected: "SUCCESS" },
+      { kind: "typed", prompt: "Which station is affected by QUALITY-09?", expected: "SUCCESS", target: "S04" },
     ],
   },
   "clearance-boundary": {
@@ -86,9 +94,9 @@ const JOURNEYS = {
     language: "DE",
     clearance: "CONFIDENTIAL",
     steps: [
-      { kind: "typed", prompt: "Untersuche die Produkthistorie von P4711.", expected: "SUCCESS", target: "P4711" },
+      { kind: "typed", prompt: "Untersuche die Produkthistorie von P4711.", expected: "SUCCESS", target: "P4711", tool: "get_product_history" },
       { kind: "select", clearance: "INTERNAL" },
-      { kind: "reference", type: "product", action: "history", expected: "ATTENTION" },
+      { kind: "typed", prompt: "Show the product history for P4711.", expected: "ATTENTION", target: "P4711" },
       { kind: "select", clearance: "CONFIDENTIAL" },
       { kind: "typed", prompt: "Untersuche Station S04 genauer.", expected: "SUCCESS", target: "S04" },
       { kind: "new-chat" },
@@ -139,31 +147,34 @@ const JOURNEYS = {
   },
 };
 
-const command = parseArguments(process.argv.slice(2));
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const command = isMain ? parseArguments(process.argv.slice(2)) : {};
 const RUN_ID = command.runId ?? process.env.E2E_RUN_ID ?? "manual-current";
 const RESULTS_DIRECTORY = path.join(ROOT, "evals", "results", "browser-e2e", RUN_ID);
 const RUN_STARTED_AT = new Date().toISOString();
-const RUN_METADATA_BASE = await collectRunMetadata();
+const RUN_METADATA_BASE = isMain ? await collectRunMetadata() : null;
 let latestAssignmentSnapshot = [];
-if (command.preflight) {
-  await runPreflight();
-} else if (command.comparePath) {
-  await compareReports(command.comparePath);
-} else if (command.aggregate) {
-  await aggregateResults();
-} else {
-  const requested = command.all ? Object.keys(JOURNEYS) : command.journeys;
-  const identifiers = command.resume ? await incompleteJourneys(requested) : requested;
-  const outcomes = [];
-  for (const id of identifiers) outcomes.push(await runJourney(id));
-  if (command.resume) {
-    const candidates = requested.length ? requested : Object.keys(JOURNEYS);
-    for (const id of candidates.filter((candidate) => !identifiers.includes(candidate))) {
-      try { outcomes.push((await loadJourneyResult(id)).status); }
-      catch { outcomes.push("MISSING"); }
+if (isMain) {
+  if (command.preflight) {
+    await runPreflight();
+  } else if (command.comparePath) {
+    await compareReports(command.comparePath);
+  } else if (command.aggregate) {
+    await aggregateResults();
+  } else {
+    const requested = command.all ? Object.keys(JOURNEYS) : command.journeys;
+    const identifiers = command.resume ? await incompleteJourneys(requested) : requested;
+    const outcomes = [];
+    for (const id of identifiers) outcomes.push(await runJourney(id));
+    if (command.resume) {
+      const candidates = requested.length ? requested : Object.keys(JOURNEYS);
+      for (const id of candidates.filter((candidate) => !identifiers.includes(candidate))) {
+        try { outcomes.push((await loadJourneyResult(id)).status); }
+        catch { outcomes.push("MISSING"); }
+      }
     }
+    process.exitCode = exitCodeForStatuses(outcomes);
   }
-  process.exitCode = exitCodeForStatuses(outcomes);
 }
 
 function parseArguments(arguments_) {
@@ -224,6 +235,8 @@ async function effectiveHarnessFingerprint() {
     "frontend/playwright.config.mjs",
     "frontend/scripts/manual-e2e-runner-core.mjs",
     "frontend/scripts/e2e-http.mjs",
+    "frontend/scripts/journey-assertions.mjs",
+    "frontend/scripts/browser-journey-checks.mjs",
     "frontend/scripts/run-e2e-journey.mjs",
     "frontend/scripts/run-manual-e2e.mjs",
     "tests/e2e/investigation-journeys.spec.mjs",
@@ -255,6 +268,8 @@ function classifyDirtyScope(paths) {
     "frontend/playwright.config.mjs",
     "frontend/scripts/manual-e2e-runner-core.mjs",
     "frontend/scripts/e2e-http.mjs",
+    "frontend/scripts/journey-assertions.mjs",
+    "frontend/scripts/browser-journey-checks.mjs",
     "frontend/scripts/run-e2e-journey.mjs",
     "frontend/scripts/run-manual-e2e.mjs",
     "tests/e2e/investigation-journeys.spec.mjs",
@@ -373,7 +388,8 @@ async function runJourney(id) {
     operation = "prepare page";
     await preparePage(page, definition);
     configurationGuard.assertUnchanged(operation);
-    for (const step of definition.steps) {
+    for (const [index, step] of plannedSteps(definition).entries()) {
+      result.current_assertion_id = `step-${index + 1}:${step.kind}`;
       operation = step.kind;
       await assertConfigurationSnapshot(configurationSnapshot, `before ${operation}`);
       await executeStep(page, context, result, step, clientErrors, failedFetches, httpGuard);
@@ -384,7 +400,12 @@ async function runJourney(id) {
     await smokeControls(page, result, browser);
     configurationGuard.assertUnchanged(operation);
   } catch (error) {
-    if (error instanceof PreflightBlockedError) {
+    if (error instanceof MissingEvidence || error.name === "AssertionError") {
+      if (result.current_assertion_id && result.assertions.find((item) => item.id === result.current_assertion_id)?.status === "NOT_RUN") {
+        recordAssertion(result, result.current_assertion_id, error instanceof MissingEvidence ? "BLOCKED" : "FAIL", error.message, !(error instanceof MissingEvidence));
+      }
+      result.status = error instanceof MissingEvidence ? "BLOCKED" : "FAIL";
+    } else if (error instanceof PreflightBlockedError) {
       result.runner_error = { name: error.name, message: error.message };
       result.status = "BLOCKED";
       result.runner_result = "BLOCKED";
@@ -407,7 +428,9 @@ async function runJourney(id) {
     result.completed_at = new Date().toISOString();
     result.metadata = currentRunMetadata(result.completed_at);
     result.browser_cleanup = true;
-    result.status = completedJourneyStatus(result);
+    delete result.current_assertion_id;
+    result.assertion_summary = assertionSummary(result.assertions);
+    result.status = evaluatedJourneyStatus(result);
     if (result.runner_result === "RUNNING") result.runner_result = result.status === "FAIL" ? "PRODUCT_FAIL" : result.status;
     await writeAtomically(journeyResultPath(id), result);
     await context?.close();
@@ -421,7 +444,7 @@ async function incompleteJourneys(requested) {
   const pending = [];
   for (const id of candidates) {
     try {
-      const result = JSON.parse(await readFile(journeyResultPath(id), "utf8"));
+      const result = await loadJourneyResult(id);
       if (shouldResume(result.status)) pending.push(id);
     } catch {
       pending.push(id);
@@ -459,15 +482,18 @@ async function preparePage(page, definition) {
 
 async function executeStep(page, context, result, step, clientErrors, failedFetches, httpGuard) {
   if (step.kind === "select") {
-    const investigationId = await page.evaluate(() => JSON.parse(sessionStorage.getItem("industrial-ai-agent.active-investigation") ?? "null")?.investigationId);
-    if (investigationId) httpGuard.expectResponse({ method: "GET", pathname: `/api/v1/investigations/${investigationId}`, query: { user_clearance: step.clearance }, allowedStatuses: [200, 404] });
-    await page.selectOption("#user-clearance", step.clearance);
-    record(result, { label: `select clearance ${step.clearance}`, ...await pageContext(page), expected_severity: "SUCCESS", actual_severity: "SUCCESS", test_result: "PASS", note: "User explicitly changed clearance." });
+    await checkClearanceChange(page, result, step.clearance, httpGuard);
+    record(result, { label: `select clearance ${step.clearance}`, ...await pageContext(page), test_result: "PASS", note: "Context transition, purge and server visibility asserted." });
     return;
   }
   if (step.kind === "new-chat") {
-    await page.locator("#new-investigation-button").click();
-    record(result, { label: "New Chat", clearance: await value(page, "#user-clearance"), language: await value(page, "#response-language"), expected_severity: "SUCCESS", actual_severity: "SUCCESS", test_result: "PASS", note: "Conversation reset through UI." });
+    await checkNewChat(page, result);
+    record(result, { label: "New Chat", ...await pageContext(page), test_result: "PASS", note: "Investigation, rendered turns and export state cleared." });
+    return;
+  }
+  if (step.kind === "reload" || step.kind === "pdf") {
+    await (step.kind === "pdf" ? checkPdf : checkReload)(page, result);
+    record(result, { label: step.kind, ...await pageContext(page), test_result: "PASS", note: "Bound investigation evidence asserted." });
     return;
   }
   if (step.kind === "typed") return submitTyped(page, context, result, step, clientErrors, failedFetches);
@@ -477,6 +503,7 @@ async function executeStep(page, context, result, step, clientErrors, failedFetc
 }
 
 async function submitTyped(page, context, result, step, clientErrors, failedFetches) {
+  const previousId = await activeInvestigationId(page);
   const observation = observeNetwork(page, context);
   const before = await submitState(page);
   const initialTurns = await page.locator(".agent-turn").count();
@@ -504,10 +531,11 @@ async function submitTyped(page, context, result, step, clientErrors, failedFetc
     return;
   }
   const investigation = observation.responses.find(({ response }) => isInvestigationGet(response))?.response;
-  await recordAgentResult(page, result, `typed: ${step.prompt}`, step, runRequest.request, investigation, clientErrors, failedFetches, null, requestContext);
+  await recordAgentResult(page, result, `typed: ${step.prompt}`, step, runRequest.request, investigation, clientErrors, failedFetches, null, requestContext, previousId);
 }
 
 async function clickReference(page, context, result, step, clientErrors, failedFetches) {
+  const previousId = await activeInvestigationId(page);
   const reference = await findReference(page, step.type, await value(page, "#response-language"));
   if (!reference) {
     record(result, {
@@ -541,52 +569,41 @@ async function clickReference(page, context, result, step, clientErrors, failedF
     return;
   }
   const investigation = observation.responses.find(({ response }) => isInvestigationGet(response))?.response;
-  await recordAgentResult(page, result, `click ${step.type}: ${referenceText} / ${action}`, step, runRequest.request, investigation, clientErrors, failedFetches, referenceText, requestContext);
+  await recordAgentResult(page, result, `click ${step.type}: ${referenceText} / ${action}`, step, runRequest.request, investigation, clientErrors, failedFetches, referenceText, requestContext, previousId);
 }
 
 async function openDocument(page, context, result, step, clientErrors, failedFetches) {
-  const button = page.locator(".document-action").first();
-  if (!await button.count()) {
-    record(result, failedStep("document open", step.expected, await pageContext(page), "No rendered document action was available.", false));
-    return;
-  }
-  const responsePromise = page.waitForResponse((response) => /\/api\/v1\/documents\/[^/]+\?/.test(response.url()), { timeout: 20_000 });
-  await button.click();
-  const response = await responsePromise;
-  assertHttpStatus(response);
-  const actual = response.status() === 200 ? "SUCCESS" : "ATTENTION";
-  record(result, { label: "document open", ...await pageContext(page), expected_severity: step.expected, actual_severity: actual, test_result: actual === step.expected ? "PASS" : "FAIL", note: response.url(), clicked_reference_type: "document" });
+  await checkDocument(page, result);
+  record(result, { label: "document open/download", ...await pageContext(page), test_result: "PASS", clicked_reference_type: "document", note: "Document reference, content, download and filename asserted." });
 }
 
-async function recordAgentResult(page, result, label, step, request, investigationResponse, clientErrors, failedFetches, clickedIdentifier = null, observedRequestContext = null) {
+async function recordAgentResult(page, result, label, step, request, investigationResponse, clientErrors, failedFetches, clickedIdentifier = null, observedRequestContext = null, previousId = null) {
   const context = await pageContext(page);
   const body = request.postDataJSON();
-  let turn = null;
-  if (investigationResponse) {
-    assertHttpStatus(investigationResponse);
-    let investigation;
-    try { investigation = await investigationResponse.json(); }
-    catch {
-      record(result, { label, ...context, expected_severity: step.expected, actual_severity: "FAILURE", test_result: "FAIL", note: "invalid investigation response", clicked_reference_type: clickedIdentifier ? step.type : null, context_preserved: false, language_preserved: false, semantic_target: clickedIdentifier, run_status: null, error_code: "invalid_investigation_response", failure_origin: "product_response_invalid", request_context: observedRequestContext, investigation_response_observed: true });
-      return;
-    }
-    if (!Array.isArray(investigation.turns)) {
-      record(result, { label, ...context, expected_severity: step.expected, actual_severity: "FAILURE", test_result: "FAIL", note: "invalid investigation response", clicked_reference_type: clickedIdentifier ? step.type : null, context_preserved: false, language_preserved: false, semantic_target: clickedIdentifier, run_status: null, error_code: "invalid_investigation_response", failure_origin: "product_response_invalid", request_context: observedRequestContext, investigation_response_observed: true });
-      return;
-    }
-    turn = investigation.turns.at(-1);
-  }
+  const run = await readExpectedJson(requireEvidence(await request.response(), "Required run response missing."));
+  const investigation = await readInvestigation(page, requireEvidence(run.investigation_id, "Required investigation ID missing."), context.clearance);
+  const turn = assertPersistedTurn({ run, investigation, request: body, ...context, previousId });
+  if (await activeInvestigationId(page) !== run.investigation_id) throw harnessSignal("AssertionError", "UI investigation reference does not match the persisted run.");
+  rememberInvestigation(result, investigation, turn);
   const agentTurn = page.locator(".agent-turn").last();
   await agentTurn.waitFor({ state: "visible" });
   const text = await agentTurn.innerText();
   const actual = await userSeverity(agentTurn, text);
   const faults = [...clientErrors, ...failedFetches, ...technicalFaults(text)];
-  const contextOk = body.user_clearance === context.clearance && body.response_language === context.language && (!turn || (turn.response_language === context.language && CLEARANCE_RANK[turn.data_classification] <= CLEARANCE_RANK[context.clearance]));
-  const semanticOk = !clickedIdentifier || step.expected === "ATTENTION" || text.includes(clickedIdentifier);
-  const leakFree = step.expected !== "ATTENTION" || !text.includes(clickedIdentifier);
+  const contextOk = body.user_clearance === context.clearance && body.response_language === context.language && turn.response_language === context.language && CLEARANCE_RANK[turn.data_classification] <= CLEARANCE_RANK[context.clearance];
+  const target = clickedIdentifier ?? step.target;
+  const semanticOk = !target || step.expected === "ATTENTION" || text.includes(target);
+  const leakFree = step.expected !== "ATTENTION" || !target || !text.includes(target);
+  if (step.expected === "SUCCESS") {
+    if (turn.status !== "success") throw harnessSignal("AssertionError", "Expected successful persisted result.");
+    const tool = step.tool ?? (clickedIdentifier ? { station: "get_machine_status", product: "get_product_history", error_code: "search_documentation" }[step.type] : null);
+    if (tool) assertToolEvidence(turn, tool, target);
+  } else if (step.expected === "ATTENTION") {
+    if (!["requested_data_unavailable", "diagnostic_target_unavailable"].includes(turn.error?.code)) throw harnessSignal("AssertionError", "Expected persisted unavailable-data result, not an arbitrary attention state.");
+  }
   const languageOk = hasLanguageSignal(text, context.language, actual);
   const testResult = actual === step.expected && contextOk && semanticOk && leakFree && languageOk && !faults.length ? "PASS" : "FAIL";
-  record(result, { label, ...context, expected_severity: step.expected, actual_severity: actual, test_result: testResult, note: faults.join("; ") || (!leakFree ? "Protected identifier leaked in access denial." : null), clicked_reference_type: clickedIdentifier ? step.type : null, context_preserved: contextOk, language_preserved: languageOk, semantic_target: clickedIdentifier, run_status: turn?.status ?? null, error_code: turn?.error?.code ?? null, failure_origin: turn?.error?.failure_origin ?? null, request_context: observedRequestContext, investigation_response_observed: Boolean(investigationResponse) });
+  record(result, { label, ...context, expected_severity: step.expected, actual_severity: actual, test_result: testResult, note: faults.join("; ") || (!leakFree ? "Protected identifier leaked in access denial." : null), clicked_reference_type: clickedIdentifier ? step.type : null, context_preserved: contextOk, language_preserved: languageOk, semantic_target: target ?? null, run_status: turn.status, error_code: turn.error?.code ?? null, failure_origin: turn.error?.failure_origin ?? null, request_context: observedRequestContext, investigation_response_observed: true, ui_investigation_response_observed: Boolean(investigationResponse) });
 }
 
 async function smokeControls(page, result, browser) {
@@ -709,13 +726,20 @@ function hasLanguageSignal(text, language, severity) {
   return language === "DE" ? /der|die|das|und|Station|Produkt/i.test(text) : /the|station|product|available|is/i.test(text);
 }
 function technicalFaults(text) { return /invalid run response|internal_error|model_output_invalid|mcp.*(failed|unavailable)/i.test(text) ? ["user-facing technical failure"] : []; }
-function failedStep(label, expected, context, note, optional) { return { label, ...context, expected_severity: expected, actual_severity: optional ? "ATTENTION" : "FAILURE", test_result: optional ? "PASS" : "FAIL", note, clicked_reference_type: null }; }
-function startResult(id, definition, metadata) { return { id, journey: definition.name, tags: definition.tags, metadata, planned_language: definition.language, planned_clearance: definition.clearance, started_at: new Date().toISOString(), real_model: "Local Qwen 3.5 9B", model_id: LOCAL_MODEL_ID, reasoning_effort: "none", external_provider_calls: 0, status: "RUNNING", runner_result: "RUNNING", steps: [], visited: [], click_depth: 0 }; }
-function record(result, step) { result.steps.push(step); }
+function failedStep(label, expected, context, note, optional) { return { label, ...context, expected_severity: expected, actual_severity: optional ? null : "FAILURE", test_result: optional ? "NOT_RUN" : "BLOCKED", note, clicked_reference_type: null }; }
+function startResult(id, definition, metadata) { return { id, journey: definition.name, tags: definition.tags, metadata, assertions: assertionPlan(definition), planned_language: definition.language, planned_clearance: definition.clearance, started_at: new Date().toISOString(), real_model: "Local Qwen 3.5 9B", model_id: LOCAL_MODEL_ID, reasoning_effort: "none", external_provider_calls: 0, status: "RUNNING", runner_result: "RUNNING", steps: [], visited: [], click_depth: 0 }; }
+function record(result, step) {
+  const assertion = result.assertions.find((item) => item.id === result.current_assertion_id);
+  recordAssertion(result, assertion.id, step.test_result, step.note, !["NOT_RUN", "BLOCKED"].includes(step.test_result));
+  result.steps.push({ ...step, assertion_id: assertion.id, requirement: assertion.requirement });
+}
 function journeyResultPath(id) { return path.join(RESULTS_DIRECTORY, `journey-${id}.json`); }
 async function loadJourneyResult(id) {
   const result = JSON.parse(await readFile(journeyResultPath(id), "utf8"));
-  if (result.status === "PASS") result.status = completedJourneyStatus(result);
+  try { assertCurrentPlan(result, JOURNEYS[id]); }
+  catch { result.status = "BLOCKED"; result.assertion_plan_error = "Artifact requires measurement against the current assertion plan."; }
+  if (result.status === "PASS") result.status = evaluatedJourneyStatus(result);
+  result.assertion_summary = assertionSummary(result.assertions);
   return result;
 }
 async function fetchJson(url) {
@@ -773,7 +797,7 @@ async function aggregateResults() {
   const steps = journeys.flatMap((journey) => journey.steps.map((step) => ({ journey: journey.id, ...step })));
   const count = (predicate) => steps.filter(predicate).length;
   const finishedAt = new Date().toISOString();
-  const journeySummary = journeys.map((journey) => ({ journey: journey.journey, steps: journey.steps.length, success: journey.steps.filter((step) => step.actual_severity === "SUCCESS").length, attention: journey.steps.filter((step) => step.actual_severity === "ATTENTION").length, failure: journey.steps.filter((step) => step.actual_severity === "FAILURE").length, result: journey.status }));
+  const journeySummary = journeys.map((journey) => ({ journey: journey.journey, steps: journey.steps.length, success: journey.steps.filter((step) => step.actual_severity === "SUCCESS").length, attention: journey.steps.filter((step) => step.actual_severity === "ATTENTION").length, failure: journey.steps.filter((step) => step.actual_severity === "FAILURE").length, result: journey.status, ...assertionSummary(journey.assertions) }));
   const overallStatus = executionStatus([...journeys.map((journey) => journey.status), ...(configurationError ? ["HARNESS_ERROR"] : []), ...(preflightStatus ? [preflightStatus] : [])]);
   const summary = {
     metadata: currentRunMetadata(finishedAt),
@@ -787,7 +811,7 @@ async function aggregateResults() {
     generated_at: new Date().toISOString(), real_model: "Local Qwen 3.5 9B", external_provider_calls: 0,
     planned_journeys: Object.keys(JOURNEYS).length, completed_journeys: journeys.filter((journey) => !["MISSING", "BLOCKED"].includes(journey.status)).length,
     journeys,
-    table: steps.map((step) => ({ id: step.journey, journey: journeys.find((item) => item.id === step.journey)?.journey ?? step.journey, step: step.label, clearance: step.clearance, language: step.language, expected_severity: step.expected_severity, actual_severity: step.actual_severity, test_result: step.test_result, error_code: step.error_code ?? null, failure_origin: step.failure_origin ?? null, error_or_note: step.note })),
+    table: steps.map((step) => ({ id: step.journey, journey: journeys.find((item) => item.id === step.journey)?.journey ?? step.journey, step: step.label, assertion_id: step.assertion_id, requirement: step.requirement, clearance: step.clearance, language: step.language, expected_severity: step.expected_severity, actual_severity: step.actual_severity, test_result: step.test_result, error_code: step.error_code ?? null, failure_origin: step.failure_origin ?? null, error_or_note: step.note })),
     journey_summary: journeySummary,
     coverage: coverageReport(journeys, steps),
     totals: { steps: steps.length, pass: count((step) => step.test_result === "PASS"), attention: count((step) => step.actual_severity === "ATTENTION"), failure: count((step) => step.actual_severity === "FAILURE") },
@@ -824,5 +848,15 @@ function coverageReport(journeys, steps) {
   const tags = journeys.map((journey) => journey.tags).filter(Boolean);
   const values = (field) => [...new Set(tags.flatMap((tag) => Array.isArray(tag[field]) ? tag[field] : [tag[field]]).filter(Boolean))];
   const clearance = Object.fromEntries(["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].map((level) => [level, { planned: tags.some((tag) => tag.clearance === level), success: steps.some((step) => step.clearance === level && step.actual_severity === "SUCCESS"), attention: steps.some((step) => step.clearance === level && step.actual_severity === "ATTENTION"), attention_not_applicable: tags.some((tag) => tag.clearance === level && tag.attention_reason) ? tags.find((tag) => tag.clearance === level && tag.attention_reason).attention_reason : null }]));
-  return { clearances: clearance, languages: values("language"), domains: values("domain"), interactions: values("interaction"), expected_user_severities: values("expected_user_severity"), multi_turn_journeys: tags.filter((tag) => tag.multi_turn === "yes").length, mixed_typed_follow_up_and_click: tags.filter((tag) => tag.interaction.includes("typed-follow-up") && tag.interaction.some((item) => item.endsWith("-click"))).length };
+  const passed = steps.filter((step) => step.test_result === "PASS");
+  return {
+    planned: { clearances: clearance, languages: values("language"), domains: values("domain"), interactions: values("interaction"), expected_user_severities: values("expected_user_severity"), multi_turn_journeys: tags.filter((tag) => tag.multi_turn === "yes").length },
+    asserted: { languages: [...new Set(passed.filter((step) => step.language_preserved).map((step) => step.language))],
+      clearance_contexts: [...new Set(passed.filter((step) => step.context_preserved).map((step) => step.clearance))],
+      reference_types: [...new Set(passed.map((step) => step.clicked_reference_type).filter(Boolean))],
+      pdf_journeys: journeys.filter((journey) => journey.assertions?.some((item) => item.claim === "pdf" && item.executed && item.status === "PASS")).map((journey) => journey.id),
+      manual_only: ["gateway_identity_switch", "mcp_transport", "hitl_execution"] },
+  };
 }
+
+export { JOURNEYS, executeStep, recordAgentResult, startResult };

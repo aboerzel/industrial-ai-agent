@@ -7,6 +7,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
+import { JOURNEYS } from "../../frontend/scripts/run-e2e-journey.mjs";
+import { assertionPlan } from "../../frontend/scripts/journey-assertions.mjs";
 import {
   assertHttpStatus, browserCredentials, completedJourneyStatus, createApiStatusGuard,
   executionStatus, exitCodeForStatuses, fetchExpected, getModelAdminJson, modelAdminHeaders, readExpectedJson,
@@ -103,8 +105,9 @@ async function successfulArtifacts(directory, firstStatus = "PASS") {
   const source = await readFile(path.join(root, "frontend/scripts/run-e2e-journey.mjs"), "utf8");
   const ids = [...source.split("const command =")[0].matchAll(/^  (?:"([^"]+)"|([a-z][a-z-]*)): \{/gm)].map((match) => match[1] ?? match[2]);
   for (const [index, id] of ids.entries()) {
+    const assertions = assertionPlan(JOURNEYS[id]).map((item) => item.requirement === "MANUAL_ONLY" ? item : { ...item, status: "PASS", executed: true });
     await writeFile(path.join(directory, `journey-${id}.json`), JSON.stringify({ id, journey: id,
-      status: index === 0 ? firstStatus : "PASS", steps: [{ test_result: "PASS", actual_severity: "SUCCESS" }],
+      status: index === 0 ? firstStatus : "PASS", steps: assertions.filter((item) => item.executed).map((item) => ({ assertion_id: item.id, requirement: item.requirement, test_result: "PASS", actual_severity: "SUCCESS" })), assertions,
       smoke: { model_configuration: "PASS", monitoring: "PASS" } }));
   }
 }
@@ -273,3 +276,25 @@ test("aggregation rejects legacy PASS artifacts with failed critical smoke check
   const report = JSON.parse(await readFile(path.join(result.directory, "summary.json"), "utf8"));
   assert.equal(report.execution_status, "FAIL");
 });
+
+for (const fault of ["missing-plan", "pdf-not-run", "missing-reference", "security-not-run"]) {
+  test(`aggregation rejects false PASS artifact: ${fault}`, async (t) => {
+    const result = await runFixture(t, ["--aggregate"], {}, async (directory) => {
+      await successfulArtifacts(directory);
+      const id = fault === "security-not-run" ? "clearance-boundary" : "s04-investigation";
+      const artifact = path.join(directory, `journey-${id}.json`);
+      const report = JSON.parse(await readFile(artifact, "utf8"));
+      if (fault === "missing-plan") delete report.assertions;
+      else {
+        const claim = fault === "pdf-not-run" ? "pdf" : fault === "security-not-run" ? "select" : "reference";
+        Object.assign(report.assertions.find((item) => item.claim === claim), { status: "NOT_RUN", executed: false });
+      }
+      await writeFile(artifact, JSON.stringify(report));
+    });
+    assert.equal(result.code, 1);
+    const summary = JSON.parse(await readFile(path.join(result.directory, "summary.json"), "utf8"));
+    assert.equal(summary.execution_status, "BLOCKED");
+    assert.notEqual(summary.product_quality_gate, "PASS");
+    assert.match(await readFile(path.join(result.directory, "summary.md"), "utf8"), /Required.*Executed.*Passed.*Failed.*Blocked/);
+  });
+}

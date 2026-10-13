@@ -5,6 +5,7 @@
   "scripts": {
     "test": "node --test ../tests/frontend/*.test.mjs",
     "test:e2e": "playwright test -c playwright.config.mjs",
+    "test:e2e:fixtures": "playwright test -c playwright.fixtures.config.mjs",
     "e2e:journey": "node scripts/run-e2e-journey.mjs",
     "e2e:manual:preflight": "node scripts/run-e2e-journey.mjs --preflight",
     "e2e:manual": "node scripts/run-manual-e2e.mjs",

@@ -1,10 +1,11 @@
 # Browser E2E Journeys
 
-The browser E2E suite runs 12 realistic multi-turn user journeys against the local Compose
-runtime. It is intentionally separate from deterministic frontend unit tests and
-provider-contract tests. It exercises real DOM navigation in German and English,
-classification/clearance boundaries, resumable manual execution, persisted investigations,
-and PDF/document interactions.
+The manual runner registers 12 multi-turn journeys against the local Compose runtime.
+The older `npm run test:e2e` specification contains five German journeys. Neither command
+is part of FAST, and a green historical report is not proof of the current assertions.
+Both use explicit assertion plans; model behavior still requires a deliberate local
+real-model measurement. Separate synthetic browser fixtures exercise the same assertion
+functions with the shipped UI and a local fake HTTP server, without Compose, MCP or models.
 
 Run it after the local stack is healthy:
 
@@ -43,10 +44,22 @@ Deterministic auth/status/exit regressions run without browsers, services or mod
 
 ```text
 node --test tests/frontend/e2e-http-security.test.mjs tests/frontend/manual-e2e-runner.test.mjs
+node --test tests/frontend/journey-assertions.test.mjs
 ```
 
 Run that command from the repository root. It substitutes HTTP and child processes;
 it does not replace the separate real-model milestone gate.
+
+Run the safe browser assertion regressions independently (Chromium must already be installed):
+
+```text
+cd frontend
+npm run test:e2e:fixtures
+```
+
+The fixture configuration is separate from the live E2E configuration, needs no secrets,
+and denies browser requests outside its ephemeral loopback server. Synthetic responses
+prove the assertion and UI paths, not real-model choices, live authorization or MCP behavior.
 
 ```text
 cd frontend
@@ -66,7 +79,9 @@ npm run e2e:journey -- --aggregate
 ```
 
 `--journey` may be repeated for an explicit subset. `--resume` skips only journeys with
-an atomic `PASS` artefact, including expected `ATTENTION` paths whose assertions pass.
+an atomic `PASS` artefact and the current complete assertion plan, including expected
+`ATTENTION` paths whose assertions pass. Legacy PASS artifacts without that plan are
+BLOCKED and require an explicit fresh `--journey` measurement.
 It retries `HARNESS_ERROR`, missing and unmeasured journeys. Measured `FAIL` and `BLOCKED`
 artifacts are retained and still cause a non-zero exit; invoke their `--journey` explicitly
 to retry them. A `HARNESS_ERROR`
@@ -84,9 +99,78 @@ before each model call and after the journey. A difference stops further model c
 
 Install Chromium once on a new developer machine with `npx playwright install chromium`. Before any user journey, the suite verifies that every Agent assignment is `local_quality` (Local Qwen 3.5 9B) and that the catalog resolves it to the local Ollama model. It uses `reasoning_effort="none"`; it must not call any public-cloud provider. The suite does not mutate model assignments.
 
-Each journey interacts with the rendered reference control and its action menu. The test captures the request caused by that click, checks the selected clearance and German response language, reads the returned persisted turn, and validates that the target identifier is semantically present in the rendered result. A journey has at most four follow-up clicks and never revisits an `(identifier, action)` pair.
+Reference steps capture the actual run request, validate the selected clearance and DE/EN
+language, require run/investigation IDs and a matching persisted terminal turn, check the
+target in the result, and require the relevant executed-tool name, target arguments and
+recorded finding. `tool_calls` is the API projection of server-recorded `executed_tool_calls`;
+it is not inferred from a button or prose. This projection does not expose raw MCP results
+or prove the transport independently. A journey has at most four follow-up clicks and
+never revisits an `(identifier, action)` pair. Typed steps with an explicit required tool
+apply the same evidence check; other follow-ups may use earlier evidence.
 
-Results are written to a unique run directory below `evals/results/browser-e2e/`. The generated report records per-step severity and per-journey results, link-category coverage, continuity, context preservation, document opening, and clearance-boundary usability. Provider rate-limit, unavailable, and malformed-provider-response contracts remain deterministic test-double cases rather than browser real-model cases.
+The manual wrapper creates a unique run directory below `evals/results/browser-e2e/`;
+individual commands use their explicit run ID or `manual-current`. Reports list each
+planned assertion, its REQUIRED/OPTIONAL/MANUAL_ONLY requirement, executed flag and
+PASS/FAIL/BLOCKED/NOT_RUN status. Required totals, executed, passed, failed and blocked/not-run
+counts appear in JSON and Markdown. PASS requires every REQUIRED assertion to have executed
+and passed, plus the existing critical smoke checks. Missing IDs, documents, tool evidence
+or pre-transition security state cannot silently pass. Optional missing reference clicks
+remain explicitly NOT_RUN and contribute no passed observation. Planned tags and actually
+asserted coverage are reported separately. An incomplete required plan cannot be resumed
+or aggregated as PASS. Provider failure contracts remain deterministic test-double cases.
+
+## Assertion coverage and limits
+
+Each agent step requires a bound persisted terminal result and nonempty answer/error;
+severity, basic language signals and target presence are checked, rather than general
+semantic correctness of generated prose. Every journey reloads its current investigation
+under the selected context. PDF-tagged journeys trigger the UI download and require HTTP
+200, a completed file, PDF content type/signature/trailer, the investigation ID, classification
+and relevant identifiers/tool names or a stable request fragment. The current server export
+uses uncompressed ReportLab streams; unsupported output encoding fails the content check.
+These checks are not a complete visual/layout or PDF-text semantic evaluation.
+
+| Manual-runner journey | AUTOMATED AND ASSERTED when measured | OPTIONAL |
+| --- | --- | --- |
+| `s04-investigation` | S04 result/tool binding, fault-reference search, document open/download, follow-up, reload, PDF | None |
+| `station-discovery` | Station-list tool, station-reference status, follow-up, reload | Product-reference click |
+| `product-history` | P4101 history/tool binding, station-reference status, follow-up, reload | None |
+| `documentation` | QUALITY-09 search/tool, document open/download, PUBLIC downgrade purge/read/PDF denial, explicit denied query, upgrade/continuation, reload, PDF | None |
+| `clearance-boundary` | P4711 history/tool, INTERNAL downgrade purge/read/PDF denial, explicit denied query, upgrade/continuation, new-chat reset, reload, PDF | None |
+| `station-discovery-de` | Typed result, station-reference status/tool, follow-up, reload | None |
+| `healthy-station-de` | S01 result, station-reference status/tool, reload | Product-reference click |
+| `healthy-station-en` | S01 result, follow-up, station-reference status/tool, reload | None |
+| `s04-investigation-en` | S04 result, follow-up, fault-reference search/tool, reload | None |
+| `product-centric-en` | P4901 result, product-reference history/tool, reload | Station-reference click |
+| `clearance-boundary-en` | Station result, explicit unavailable-documentation outcome, new-chat reset, public station result, reload, PDF | None |
+| `restricted-boundary` | S07 result, station-reference status/tool, documentation follow-up, reload | None |
+
+The five older Playwright journeys apply the same persisted-result, document, reload and
+context helpers; A, D and E also require PDF export. Journey E saves the ID before the
+downgrade and submits an explicit denied query after the frontend purges old references.
+Compound report flags derive from complete measured assertions instead of constant PASS values.
+
+Downgrades require previously visible higher-classification data, a changed selector,
+the saved investigation's neutral 404, purged rendered/export state and a direct PDF 404
+under the lower context. A later request uses the new selection. Upgrades reload under
+the new context; they do not switch gateway identity. Individual document classifications
+are independent of the enclosing run. A protected synthetic document download is explicitly
+denied in the fixture suite; the live registry does not claim a per-document authorization matrix.
+
+Document steps require a persisted document reference, an actual opened blob with nonempty
+content, an actual download, matching bytes, appropriate type and matching server filename.
+**Known separate product defect:** `frontend/js/api.js` currently assigns the document
+download filename from `document.filename` rather than the response document. The assertion
+detects this and the affected live document journeys fail; this test-quality change does
+not repair that product code or retain a green acceptance claim.
+
+MANUAL_ONLY / NOT_RUN claims in each report explicitly separate live gateway identity
+switching, independent MCP transport/result inspection and protected HITL execution.
+The read journeys never propose or approve a write. Existing deterministic backend and
+boundary tests cover those contracts separately; these browser reports do not certify them.
+Real-model answer correctness, full PDF layout/content semantics and physical recovery
+are NOT COVERED by the synthetic suite. Credentials are not available for a second ordinary
+identity in the current journey configuration, so identity switching is not an automated claim.
 
 ## Regression Tiers
 
@@ -116,15 +200,9 @@ Manual runs use a unique run directory with `preflight.json`, per-journey JSON f
 their scope, a deterministic effective-harness SHA-256 fingerprint, the local-model
 identity, and the read-only assignment snapshot. The comparison uses
 stable step outcome, severity, error, language, navigation, and security dimensions;
-it does not compare generated answer prose byte-for-byte. A GREEN suite has no P0/P1
-finding and all required journeys. YELLOW means only bounded P2/P3 findings. RED means
-a security finding, unexpected technical failure, invalid response, internal error, or
-broken core navigation.
-
-Separately tracked Finding 10 coverage issues remain: some clearance-change journeys
-still expect references purged by the current frontend; PDF tags and legacy report
-flags do not establish complete PDF/identity/tool acceptance coverage. This auth/status
-fix does not add journeys or repair those coverage gaps.
+it does not compare generated answer prose byte-for-byte. Execution reports use
+PASS/FAIL/BLOCKED/HARNESS_ERROR/INCOMPLETE; no P0/P1 or GREEN/YELLOW/RED scoring is
+implemented by this runner. A PASS applies only to its listed executed assertions.
 
 This Manual Real-Model E2E suite is deliberately not intended for every development
 change. The next quality-protection task will formalize the FAST / INTEGRATION /

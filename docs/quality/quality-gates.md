@@ -35,7 +35,13 @@ first performs its read-only assignment/configuration preflight, is resumable an
 fingerprinted, then exercises the existing 12 browser DOM journeys with Local Qwen 3.5
 9B and MCP. It makes no external provider calls and remains outside FAST and ordinary CI.
 It covers German and English, PUBLIC, INTERNAL, CONFIDENTIAL, and RESTRICTED requested clearances,
-real reference navigation, multi-turn behavior, and PDF acceptance. Baseline reports in
+real reference navigation and multi-turn behavior, with required persisted-result,
+reload, context-transition and PDF-content assertions where declared. PASS certifies
+only the complete current required assertion plan, never optional/manual-only claims.
+The separate `npm run test:e2e:fixtures` command runs the shipped UI against synthetic
+loopback HTTP fixtures without models; it validates the assertion paths and is not part
+of FAST or a live gateway/MCP certification. The current document-download filename
+defect makes affected live document journeys fail rather than silently pass. Baseline reports in
 ignored `evals/results/browser-e2e/` are compared as release evidence, not committed test
 artifacts.
 
@@ -54,7 +60,7 @@ artifacts.
 | PDF | Language and turn severity, authorized-only view, no pending/duplicate turns, sanitized exceptions | FAST | COVERED |
 | MCP/operations | Initialize/list-tools failure and missing required tool are unhealthy; deployed MCP healthchecks are protocol-aware | FAST plus INTEGRATION boundary coverage | COVERED |
 | Documentation | Current API routes, Compose services, E2E scripts, three quality tiers; no legacy router presented as current | FAST | COVERED |
-| Real model/browser | Real tool choices, model behavior, multi-turn semantics and DOM journey quality | MANUAL_REAL_MODEL | COVERED |
+| Real model/browser | Declared required assertions for real tool choices, model behavior and DOM journeys; gateway identity switching, independent MCP transport and HITL writes are manual-only in browser reports | MANUAL_REAL_MODEL | NOT_RUN until a current complete measurement; synthetic assertions validated separately |
 
 ## When To Run
 
@@ -77,3 +83,7 @@ change. `SKIPPED / INFRASTRUCTURE_UNAVAILABLE` means integration infrastructure 
 present and must be run later; it is never evidence that the integration gate passed.
 Manual real-model evaluation is intentionally human-triggered because it consumes local
 inference time and validates behavior deterministic tests cannot guarantee.
+Journey reports expose planned/executed/passed/failed/blocked assertion counts. Required
+BLOCKED or NOT_RUN cannot yield PASS. Historical reports without the current assertion
+plan require fresh measurement. See the journey coverage table and remaining limits in
+[Browser E2E Journeys](../learning/browser-e2e-journeys.md).
