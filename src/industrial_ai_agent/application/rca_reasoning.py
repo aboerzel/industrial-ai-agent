@@ -13,6 +13,7 @@ from typing import Literal, Protocol, Self
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from industrial_ai_agent.agent.llm import (
+    FinishReason,
     LLMClient,
     LLMJsonSchema,
     LLMMessage,
@@ -50,6 +51,7 @@ from industrial_ai_agent.application.rca import (
 from industrial_ai_agent.domain.security import DataClassification
 
 _LOGGER = logging.getLogger(__name__)
+_EXPLANATION_MAX_OUTPUT_TOKENS = 1024
 
 
 class RcaFocus(StrEnum):
@@ -244,6 +246,10 @@ class LlmRcaReasoner:
                 RcaReasoningStatus.UNAVAILABLE, report
             )
 
+        if response.finish_reason is not FinishReason.STOP or response.tool_calls:
+            _LOGGER.warning("RCA reasoning generation did not complete normally")
+            return RcaReasoningResult.unavailable(RcaReasoningStatus.MALFORMED, report)
+
         try:
             output = _RcaReasoningProviderOutput.model_validate_json(response.text)
         except (TypeError, ValueError, ValidationError) as error:
@@ -280,8 +286,8 @@ def _chat_with_timeout(
 class _RcaReasoningProviderOutput(_RcaReasoningModel):
     summary: BoundedText
     assessment: RcaReasoningAssessment
-    hypotheses: tuple[RcaReasoningHypothesis, ...] = Field(default=(), max_length=5)
-    recommended_next_checks: tuple[BoundedText, ...] = Field(default=(), max_length=5)
+    hypotheses: tuple[RcaReasoningHypothesis, ...] = Field(max_length=5)
+    recommended_next_checks: tuple[BoundedText, ...] = Field(max_length=5)
 
 
 def project_safe_rca_reasoning(
@@ -370,6 +376,7 @@ def _reasoning_request(
             )
         ),
         reasoning_effort=LLMReasoningEffort.NONE,
+        max_output_tokens=_EXPLANATION_MAX_OUTPUT_TOKENS,
     )
 
 
@@ -403,11 +410,10 @@ def _validated_result(
 def _log_malformed_reasoning_output(error: Exception) -> None:
     """Record bounded validation metadata without retaining provider output."""
     if isinstance(error, ValidationError):
-        paths = tuple(
-            ".".join(str(part) for part in item["loc"])
-            for item in error.errors(include_url=False, include_input=False)
+        # Validation locations can contain arbitrary provider-supplied field names.
+        _LOGGER.warning(
+            "RCA reasoning schema validation failed error_count=%s", error.error_count()
         )
-        _LOGGER.warning("RCA reasoning schema validation failed at paths=%s", paths)
         return
     _LOGGER.warning(
         "RCA reasoning policy validation failed category=%s",
@@ -514,12 +520,19 @@ def _deterministic_reasoning_limitations(
 
 _SYSTEM_INSTRUCTION = (
     "Return only one JSON object with summary, assessment, hypotheses, and "
-    "recommended_next_checks. Hypotheses contain statement, confidence, and evidence_refs; "
+    "recommended_next_checks. All four fields are required. Keep the summary to one "
+    "short sentence about observed lifecycle, completeness, or timing. Choose assessment "
+    "only from the enum in the response schema. Use empty arrays when no grounded "
+    "hypotheses or next checks are supported; never omit either array. Keep any "
+    'hypotheses and checks concise. Hypotheses contain kind="hypothesis", statement, '
+    "confidence, and evidence_refs; "
     "do not add fields or limitations: deterministic limitations are retained by the server. "
     "The supplied structured "
     "RCA data is the only evidence. Deterministic findings are immutable: do not change "
     "their kinds, confidence, evidence, limitations, or source status. Do not make causal "
-    "assertions; the server retains causal-status limitations. Label every hypothesis as "
+    "assertions, even to deny causality; the server retains causal-status limitations. "
+    "Do not discuss excluded payload categories, even to state that they are missing. "
+    "Label every hypothesis as "
     "hypothesis and cite only supplied evidence references. Missing evidence remains missing. Do not describe a successful "
     "run as failed, do not call a dominant timing component a cause, and do not treat "
     "configured cost as observed cost. Do not infer prompts, responses, tool or document "

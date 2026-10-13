@@ -282,6 +282,44 @@ def test_rls_failure_happens_before_optional_reasoning() -> None:
     assert reasoner.calls == 0
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [RcaReasoningStatus.MALFORMED, RuntimeError("offline"), TimeoutError("timeout")],
+)
+def test_explanation_failure_preserves_entire_mcp_deterministic_projection(
+    failure,
+) -> None:
+    class FailedReasoner:
+        def reason(self, report, *, focus):
+            if isinstance(failure, Exception):
+                raise failure
+            return RcaReasoningResult.unavailable(failure, report)
+
+    server = create_rca_mcp_server(
+        analysis_service=_FakeAnalysisService(),  # type: ignore[arg-type]
+        reasoner=FailedReasoner(),
+    )
+
+    async def call():
+        baseline = await server.call_tool("analyze_run", {"run_id": str(RUN_ID)})
+        explained = await server.call_tool(
+            "analyze_run", {"run_id": str(RUN_ID), "reasoning": "explain"}
+        )
+        return baseline.structured_content, explained.structured_content
+
+    baseline, explained = asyncio.run(call())
+    expected = (
+        RcaReasoningStatus.UNAVAILABLE if isinstance(failure, Exception) else failure
+    )
+    assert explained["reasoning"]["status"] == expected.value
+    assert explained["reasoning"]["summary"] is None
+    assert explained["reasoning"]["hypotheses"] == []
+    assert explained["reasoning"]["limitations"] == baseline["reasoning"]["limitations"]
+    assert {key: value for key, value in explained.items() if key != "reasoning"} == {
+        key: value for key, value in baseline.items() if key != "reasoning"
+    }
+
+
 def _call(focus: str, *, failed: bool = False) -> dict[str, object]:
     server = create_rca_mcp_server(
         analysis_service=_FakeAnalysisService(failed=failed)  # type: ignore[arg-type]

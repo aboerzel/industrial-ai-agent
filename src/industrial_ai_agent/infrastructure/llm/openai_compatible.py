@@ -86,8 +86,13 @@ class OpenAICompatibleLLMClient:
             "messages": [_serialize_message(message) for message in request.messages],
             "temperature": profile_config.temperature,
         }
-        if profile_config.max_output_tokens is not None:
-            parameters["max_tokens"] = profile_config.max_output_tokens
+        output_budget = (
+            request.max_output_tokens
+            if request.max_output_tokens is not None
+            else profile_config.max_output_tokens
+        )
+        if output_budget is not None:
+            parameters["max_tokens"] = output_budget
         if request.tools:
             parameters["tools"] = [
                 {

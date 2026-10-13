@@ -189,6 +189,45 @@ def test_passes_configured_output_limit_to_provider() -> None:
     assert fake_client.completions.parameters["max_tokens"] == 128
 
 
+@pytest.mark.parametrize("budget,expected", [(None, 192), (1024, 1024)])
+def test_explicit_use_case_budget_overrides_catalog_default_only_when_set(
+    budget: int | None, expected: int
+) -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="ok", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
+    )
+    fake_client = FakeOpenAIClient(completion)
+    configuration = create_configuration(max_output_tokens=192)
+    client = OpenAICompatibleLLMClient(
+        configuration, environment={}, client_factory=lambda **_: fake_client
+    )
+
+    client.chat(
+        LOCAL_QUALITY_PROFILE,
+        LLMRequest(
+            messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
+            max_output_tokens=budget,
+        ),
+    )
+
+    assert fake_client.completions.parameters["max_tokens"] == expected
+    assert configuration.get_model_config("local_quality").max_output_tokens == 192
+
+
+@pytest.mark.parametrize("budget", [0, -1, 4097, True, "1024"])
+def test_invalid_request_output_budget_is_rejected_before_sdk_call(budget) -> None:
+    with pytest.raises(ValueError):
+        LLMRequest(
+            messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
+            max_output_tokens=budget,
+        )
+
+
 def test_normalizes_provider_parsed_structured_response_object() -> None:
     completion = SimpleNamespace(
         choices=[

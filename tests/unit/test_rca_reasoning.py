@@ -1,7 +1,9 @@
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from time import sleep
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -11,6 +13,7 @@ from industrial_ai_agent.agent.llm import (
     LLMClient,
     LLMRequest,
     LLMResponse,
+    LLMToolCall,
     ModelId,
 )
 from industrial_ai_agent.agent.model_egress import (
@@ -58,6 +61,10 @@ from industrial_ai_agent.application.rca_reasoning import (
     project_safe_rca_reasoning,
 )
 from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.infrastructure.llm.configuration import load_model_catalog
+from industrial_ai_agent.infrastructure.llm.openai_compatible import (
+    OpenAICompatibleLLMClient,
+)
 
 RUN_ID = UUID("123e4567-e89b-12d3-a456-426614174000")
 NOW = datetime(2026, 9, 6, tzinfo=UTC)
@@ -171,6 +178,196 @@ def test_provider_output_with_unknown_fields_is_malformed() -> None:
     result = _reasoner(client).reason(_report(), focus=RcaFocus.OVERVIEW)
 
     assert result.status is RcaReasoningStatus.MALFORMED
+
+
+@pytest.mark.parametrize("missing", ["hypotheses", "recommended_next_checks"])
+def test_missing_required_output_fields_cannot_be_available(missing: str) -> None:
+    output = _valid_output()
+    del output[missing]
+    client = _RecordingClient(output)
+    report = _report()
+    before = report.model_dump(mode="json")
+
+    result = _reasoner(client).reason(report, focus=RcaFocus.OVERVIEW)
+
+    assert result.status is RcaReasoningStatus.MALFORMED
+    assert result.summary is None
+    assert report.model_dump(mode="json") == before
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "finish_reason",
+    [reason for reason in FinishReason if reason is not FinishReason.STOP],
+)
+def test_incomplete_generation_is_rejected_even_with_valid_json(
+    finish_reason: FinishReason,
+) -> None:
+    client = _RecordingClient(_valid_output(), finish_reason=finish_reason)
+    report = _report()
+    before = report.model_dump(mode="json")
+
+    result = _reasoner(client).reason(report, focus=RcaFocus.OVERVIEW)
+
+    assert result.status is RcaReasoningStatus.MALFORMED
+    assert result.hypotheses == ()
+    assert report.model_dump(mode="json") == before
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "output", [None, "", " ", "not JSON", '{"summary":"cut', {"summary": "only"}]
+)
+def test_invalid_or_partial_output_preserves_deterministic_report(output) -> None:
+    client = _RecordingClient(output)
+    report = _report()
+    before = report.model_dump(mode="json")
+
+    result = _reasoner(client).reason(report, focus=RcaFocus.OVERVIEW)
+
+    assert result.status is RcaReasoningStatus.MALFORMED
+    assert result.summary is None
+    assert result.assessment is None
+    assert result.recommended_next_checks == ()
+    assert report.model_dump(mode="json") == before
+    assert len(client.calls) == 1
+
+
+def test_explanation_has_its_own_bounded_output_budget() -> None:
+    client = _RecordingClient(_valid_output())
+
+    result = _reasoner(client).reason(_report(), focus=RcaFocus.OVERVIEW)
+
+    assert result.status is RcaReasoningStatus.AVAILABLE
+    assert client.calls[0][1].max_output_tokens == 1024
+    schema = client.calls[0][1].response_format.json_schema.schema_definition
+    assert set(schema["required"]) == {
+        "summary",
+        "assessment",
+        "hypotheses",
+        "recommended_next_checks",
+    }
+
+
+def test_explicit_empty_arrays_are_valid_without_inventing_hypotheses() -> None:
+    output = _valid_output()
+    output["hypotheses"] = []
+    output["recommended_next_checks"] = []
+
+    result = _reasoner(_RecordingClient(output)).reason(
+        _report(), focus=RcaFocus.OVERVIEW
+    )
+
+    assert result.status is RcaReasoningStatus.AVAILABLE
+    assert result.hypotheses == ()
+    assert result.recommended_next_checks == ()
+
+
+def test_schema_failure_logs_no_provider_text_or_unknown_field_names(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_marker = "synthetic-sensitive-output-marker"
+    output = {**_valid_output(), secret_marker: secret_marker}
+
+    result = _reasoner(_RecordingClient(output)).reason(
+        _report(), focus=RcaFocus.OVERVIEW
+    )
+
+    assert result.status is RcaReasoningStatus.MALFORMED
+    assert secret_marker not in caplog.text
+
+
+def test_explanation_response_cannot_contain_tool_calls() -> None:
+    class ToolCallingClient:
+        def chat(self, model_id, request) -> LLMResponse:
+            return LLMResponse(
+                text=json.dumps(_valid_output()),
+                finish_reason=FinishReason.STOP,
+                tool_calls=(LLMToolCall(id="unexpected", name="write", arguments={}),),
+            )
+
+    result = _reasoner(ToolCallingClient()).reason(_report(), focus=RcaFocus.OVERVIEW)
+
+    assert result.status is RcaReasoningStatus.MALFORMED
+
+
+@pytest.mark.parametrize(
+    "text,finish_reason,expected",
+    [
+        (None, "stop", RcaReasoningStatus.AVAILABLE),
+        ('{"summary":"The run completed', "length", RcaReasoningStatus.MALFORMED),
+    ],
+)
+def test_local_sdk_fixture_uses_explanation_budget_and_preserves_report(
+    text: str | None, finish_reason: str, expected: RcaReasoningStatus
+) -> None:
+    if text is None:
+        text = json.dumps(_valid_output())
+    configuration = load_model_catalog(
+        Path(__file__).resolve().parents[2] / "config/model_catalog.toml"
+    )
+    calls = []
+
+    def create(**parameters):
+        calls.append(parameters)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=text, tool_calls=None),
+                    finish_reason=finish_reason,
+                )
+            ]
+        )
+
+    fake_sdk = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    adapter = OpenAICompatibleLLMClient(
+        configuration, environment={}, client_factory=lambda **_: fake_sdk
+    )
+    reasoner = LlmRcaReasoner(
+        model_resolver=_resolver(
+            _profile("local_quality", ExecutionZone.LOCAL), DataClassification.INTERNAL
+        ),
+        client_factory=lambda classification, focus: EgressCheckedLLMClient(
+            adapter, configuration, classification
+        ),
+    )
+    report = _report()
+    before = report.model_dump(mode="json")
+
+    result = reasoner.reason(report, focus=RcaFocus.OVERVIEW)
+
+    assert result.status is expected
+    assert report.model_dump(mode="json") == before
+    assert len(calls) == 1
+    assert calls[0]["model"] == "qwen3.5:9b"
+    assert calls[0]["max_tokens"] == 1024
+    assert calls[0]["temperature"] == 0
+    assert calls[0]["reasoning_effort"] == "none"
+    assert calls[0]["response_format"]["json_schema"]["strict"] is True
+    assert "tools" not in calls[0]
+    assert "stop" not in calls[0]
+    assert configuration.get_model_config("local_quality").max_output_tokens == 192
+
+
+@pytest.mark.parametrize("error", [RuntimeError("offline"), TimeoutError("timeout")])
+def test_provider_error_keeps_report_and_never_retries(error: Exception) -> None:
+    report = _report()
+    before = report.model_dump(mode="json")
+    calls = []
+
+    class FailingClient:
+        def chat(self, model_id, request):
+            calls.append(model_id)
+            raise error
+
+    result = _reasoner(FailingClient()).reason(report, focus=RcaFocus.OVERVIEW)
+
+    assert result.status is RcaReasoningStatus.UNAVAILABLE
+    assert result.summary is None
+    assert report.model_dump(mode="json") == before
+    assert len(calls) == 1
 
 
 def test_invalid_hypothesis_evidence_reference_is_malformed() -> None:
@@ -412,16 +609,17 @@ def _report(
 
 @dataclass
 class _RecordingClient(LLMClient):
-    output: str | dict[str, object]
+    output: str | dict[str, object] | None
     calls: list[tuple[object, LLMRequest]] = field(default_factory=list)
+    finish_reason: FinishReason = FinishReason.STOP
 
     def chat(self, profile: object, request: LLMRequest) -> LLMResponse:
         self.calls.append((profile, request))
         return LLMResponse(
             text=self.output
-            if isinstance(self.output, str)
+            if isinstance(self.output, str) or self.output is None
             else json.dumps(self.output),
-            finish_reason=FinishReason.STOP,
+            finish_reason=self.finish_reason,
         )
 
 

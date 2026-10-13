@@ -370,6 +370,16 @@ or arbitrary Langfuse metadata. Its telemetry uses `rca.mcp.tool`, `rca.analysis
 `rca.reasoning` with safe trace correlation only; report text and identifiers are never
 metric labels.
 
+Explanation generation is a single attempt with an explicit 1024-token output budget;
+other consumers keep their catalog defaults. All four explanation fields are required,
+including explicit empty arrays where no grounded hypotheses or checks are offered.
+`available` requires a normal completed response, strict schema validation, and the
+existing runtime/evidence/epistemic checks. Empty, truncated, or invalid output yields
+`malformed`; provider failures and timeouts yield `unavailable`. Neither state contains
+model explanation content or invalidates the deterministic RCA. No repair, retry, or
+automatic model fallback is performed. The contract is detailed in
+[ADR-017](../decisions/ADR-017-automated-root-cause-analysis.md#explanation-output-and-failure-contract).
+
 ```mermaid
 sequenceDiagram
     actor Client as Engineer / Codex
@@ -382,6 +392,7 @@ sequenceDiagram
     participant Langfuse
     participant Analyzer as Deterministic analyzer
     participant Reasoner as Optional reasoner
+    participant Provider as Authorized model adapter
 
     Client->>MCP: analyze_run(run_id, reasoning)
     MCP->>Auth: Resolve identity and authorize run
@@ -399,8 +410,16 @@ sequenceDiagram
     Analyzer-->>MCP: Deterministic report
     opt reasoning=explain
         MCP->>Reasoner: Safe report projection only
-        Reasoner-->>MCP: Bounded hypotheses and explanation
+        Reasoner->>Provider: Capability/egress checked schema request, 1024 tokens
+        Provider-->>Reasoner: Model response or provider failure
+        Reasoner->>Reasoner: Check completion, schema, runtime and evidence
+        alt Valid complete output
+            Reasoner-->>MCP: available: validated explanation
+        else Invalid or unavailable
+            Reasoner-->>MCP: malformed / unavailable: no model content
+        end
     end
+    Note over MCP: Deterministic report remains unchanged
     MCP-->>Client: Read-only RCA projection
 ```
 

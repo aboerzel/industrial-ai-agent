@@ -160,6 +160,8 @@ class LLMRequest(BaseModel):
     tools: tuple[LLMToolDefinition, ...] = ()
     response_format: LLMResponseFormat | None = None
     reasoning_effort: LLMReasoningEffort | None = None
+    # An explicit use-case budget overrides the adapter's catalog default.
+    max_output_tokens: int | None = Field(default=None, ge=1, le=4096, strict=True)
 
 
 class LLMRequestDiagnostics(BaseModel):

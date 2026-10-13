@@ -250,6 +250,33 @@ status, and provider-reported token metadata when present. The safe projection, 
 text, hypotheses text, prompts, and provider response remain outside telemetry. This
 does not change configured-versus-observed cost semantics or create a new Agent run.
 
+### Explanation Output and Failure Contract
+
+The explanation explicitly requests a bounded 1024-token output budget through
+`LLMRequest.max_output_tokens`. This use-case budget overrides the model catalog's
+short-response default for this call only; chat requests without an override keep their
+configured budgets. It does not change model assignment, routing, temperature,
+reasoning-effort control, capability checks, or final egress authorization. No custom
+stop sequence is introduced. The existing provider deadline still applies.
+
+All four output fields (`summary`, `assessment`, `hypotheses`, and
+`recommended_next_checks`) are required. Empty arrays explicitly mean that no grounded
+hypotheses or checks are offered; omitted fields are invalid. The prompt asks for concise
+observations and only the assessments allowed by the runtime-specific schema.
+The server accepts an explanation as `available` only after normal completion
+(`finish_reason=stop`, no tool calls), strict schema validation, and the existing
+runtime/evidence/epistemic checks. Empty, truncated, schema-invalid, or policy-invalid
+output yields `malformed` with no model content. Provider errors and timeouts yield
+`unavailable`; security/capability resolution denial yields `not_allowed`.
+All these outcomes leave the complete deterministic report unchanged.
+
+There is exactly one explanation attempt, with no repair, SDK retry, or automatic model
+fallback. Structured-output support and a larger budget improve the output contract;
+they do not guarantee model reliability. `malformed` remains an intentional, transparent
+degradation state. Validation logs contain fixed categories or an error count, never
+provider output or provider-supplied field names. Tests use synthetic SDK responses;
+they do not claim a measured improvement in live local-model success rate.
+
 ### Local Reasoner Timeout
 
 The optional Reasoner has its own finite `RCA_REASONING_TIMEOUT_SECONDS` setting. It is
