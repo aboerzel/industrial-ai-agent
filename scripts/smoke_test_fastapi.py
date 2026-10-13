@@ -9,6 +9,8 @@ from pathlib import Path
 
 import httpx
 
+from industrial_ai_agent.infrastructure.local_environment import load_local_environment
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROMPT = (
     "P4711 failed during production. Investigate what happened and check the current "
@@ -23,6 +25,8 @@ EXPECTED_TOOLS = [
 
 
 def main() -> None:
+    load_local_environment(PROJECT_ROOT / ".env")
+    headers = _api_headers()
     port = _find_available_port()
     environment = dict(os.environ)
     environment["AGENT_API_HOST"] = "127.0.0.1"
@@ -43,14 +47,14 @@ def main() -> None:
     base_url = f"http://127.0.0.1:{port}"
     try:
         _wait_for_health(process, base_url)
-        with httpx.Client(timeout=300.0) as client:
+        with httpx.Client(timeout=300.0, headers=headers) as client:
             response = client.post(f"{base_url}/api/v1/runs", json={"message": PROMPT})
-            response.raise_for_status()
+            _expect_status(response, 200)
             payload = response.json()
             _assert_success_payload(payload)
 
             stored = client.get(f"{base_url}/api/v1/runs/{payload['run_id']}")
-            stored.raise_for_status()
+            _expect_status(stored, 200)
             if stored.json() != payload:
                 raise RuntimeError("Stored API run does not match its POST response")
     finally:
@@ -71,6 +75,20 @@ def _find_available_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
+
+
+def _api_headers() -> dict[str, str]:
+    token = os.getenv("MCP_INDUSTRIAL_AGENT_TOKEN", "").strip()
+    if not token or token.startswith("replace-with-") or "\n" in token or "\r" in token:
+        raise RuntimeError("MCP_INDUSTRIAL_AGENT_TOKEN is required for API smoke tests")
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _expect_status(response: httpx.Response, expected: int) -> None:
+    if response.status_code != expected:
+        raise RuntimeError(
+            f"Unexpected API HTTP status {response.status_code}; expected {expected}"
+        )
 
 
 def _wait_for_health(process: subprocess.Popen[bytes], base_url: str) -> None:

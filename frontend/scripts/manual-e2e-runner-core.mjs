@@ -32,7 +32,7 @@ export function shouldResume(status) {
 }
 
 export function sanitizeMessage(message) {
-  return String(message).replace(/Bearer\s+[^\s]+/gi, "Bearer [REDACTED]").slice(0, 500);
+  return String(message).replace(/(Bearer|Basic)\s+[^\s]+/gi, "$1 [REDACTED]").slice(0, 500);
 }
 
 export function isRunRequestMetadata({ method, url }) {

@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertHttpStatus, createApiStatusGuard, getModelAdminJson, readExpectedJson } from "../../frontend/scripts/e2e-http.mjs";
 
 const requireFrontendPackage = createRequire(
   new URL("../../frontend/package.json", import.meta.url),
@@ -16,20 +17,28 @@ const LANGUAGE = "DE";
 const CLEARANCE_RANK = { PUBLIC: 0, INTERNAL: 1, CONFIDENTIAL: 2, RESTRICTED: 3 };
 const results = [];
 let originalAssignments = [];
+let suiteFailed = false;
+const httpGuards = new WeakMap();
 
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async ({ request }) => {
-  const response = await request.get(`${API_URL}/api/v1/model-assignments`);
-  expect(response.ok()).toBeTruthy();
-  originalAssignments = await response.json();
+  originalAssignments = await getModelAdminJson(request, `${API_URL}/api/v1/model-assignments`);
   const agentAssignments = originalAssignments.filter((item) => item.consumer_id === "agent");
   expect(agentAssignments).toHaveLength(4);
   expect(agentAssignments.every((item) => item.model_id === LOCAL_MODEL_ID)).toBeTruthy();
-  const modelsResponse = await request.get(`${API_URL}/api/v1/models`);
-  expect(modelsResponse.ok()).toBeTruthy();
-  const localQuality = (await modelsResponse.json()).find((item) => item.model_id === LOCAL_MODEL_ID);
+  const localQuality = (await getModelAdminJson(request, `${API_URL}/api/v1/models`)).find((item) => item.model_id === LOCAL_MODEL_ID);
   expect(localQuality).toMatchObject({ provider: "ollama", provider_model: "qwen3.5:9b", execution_zone: "LOCAL" });
+});
+
+test.beforeEach(async ({ context }) => {
+  httpGuards.set(context, createApiStatusGuard(context));
+});
+
+test.afterEach(async ({ context }, testInfo) => {
+  if (testInfo.status !== "passed") suiteFailed = true;
+  try { httpGuards.get(context)?.assertSuccessful(); }
+  catch (error) { suiteFailed = true; throw error; }
 });
 
 test.afterAll(async () => {
@@ -81,6 +90,8 @@ test("Journey E: clearance boundary remains usable", async ({ page }) => {
   const journey = beginJourney("Clearance boundary");
   await openChat(page, "CONFIDENTIAL");
   await typedStep(page, journey, "Untersuche die Produkthistorie von P4711.", "SUCCESS", "P4711");
+  const investigationId = await page.evaluate(() => JSON.parse(sessionStorage.getItem("industrial-ai-agent.active-investigation") ?? "null")?.investigationId);
+  if (investigationId) httpGuards.get(page.context()).expectResponse({ method: "GET", pathname: `/api/v1/investigations/${investigationId}`, query: { user_clearance: "INTERNAL" }, allowedStatuses: [200, 404] });
   await page.selectOption("#user-clearance", "INTERNAL");
   await referenceStep(page, journey, "P4711", "Produkthistorie anzeigen", "ATTENTION", null);
   await page.selectOption("#user-clearance", "CONFIDENTIAL");
@@ -90,7 +101,7 @@ test("Journey E: clearance boundary remains usable", async ({ page }) => {
 });
 
 async function openChat(page, clearance) {
-  await page.goto("/");
+  assertHttpStatus(await page.goto("/"));
   await page.selectOption("#user-clearance", clearance);
   await page.selectOption("#response-language", LANGUAGE);
   await expect(page.locator("#user-clearance")).toHaveValue(clearance);
@@ -126,19 +137,21 @@ async function documentStep(page, journey, expectedSeverity) {
   const responsePromise = page.waitForResponse((response) => /\/api\/v1\/documents\/[^/]+\?/.test(response.url()));
   await documentButton.click();
   const response = await responsePromise;
-  const severity = response.ok() ? "SUCCESS" : "ATTENTION";
+  assertHttpStatus(response);
+  const severity = "SUCCESS";
   recordStep(journey, "document open", expectedSeverity, severity, response.url());
   expect(severity).toBe(expectedSeverity);
 }
 
 async function recordAgentStep(page, journey, label, request, investigationResponse, expectedSeverity, expectedIdentifier) {
+  assertHttpStatus(investigationResponse);
   const body = request.postDataJSON();
   const clearance = await page.locator("#user-clearance").inputValue();
   const language = await page.locator("#response-language").inputValue();
   expect(body.user_clearance).toBe(clearance);
   expect(body.response_language).toBe(language);
   expect(language).toBe(LANGUAGE);
-  const investigation = await investigationResponse.json();
+  const investigation = await readExpectedJson(investigationResponse);
   const turn = investigation.turns.at(-1);
   expect(turn.response_language).toBe(LANGUAGE);
   expect(CLEARANCE_RANK[turn.data_classification]).toBeLessThanOrEqual(CLEARANCE_RANK[clearance]);
@@ -154,11 +167,11 @@ async function recordAgentStep(page, journey, label, request, investigationRespo
 }
 
 function isRunPost(request) {
-  return request.method() === "POST" && request.url() === `${API_URL}/api/v1/runs`;
+  return request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/runs";
 }
 
 function isInvestigationGet(response) {
-  return response.request().method() === "GET" && response.url().startsWith(`${API_URL}/api/v1/investigations/`) && response.ok();
+  return response.request().method() === "GET" && new URL(response.url()).pathname.startsWith("/api/v1/investigations/");
 }
 
 async function classifySeverity(agentTurn, text) {
@@ -185,6 +198,7 @@ function buildReport() {
   const allSteps = results.flatMap((journey) => journey.steps);
   const clicks = (identifier) => allSteps.filter((step) => step.label.startsWith(`click ${identifier}`)).length;
   return {
+    execution_status: !suiteFailed && results.length === 5 && results.every((journey) => journey.result === "PASS") ? "PASS" : "FAIL",
     real_model_used: "Local Qwen 3.5 9B only",
     model_id: LOCAL_MODEL_ID,
     reasoning_effort: "none",

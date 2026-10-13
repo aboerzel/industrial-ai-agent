@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "@playwright/test";
 import {
+  assertHttpStatus, browserCredentials, completedJourneyStatus, createApiStatusGuard, executionStatus,
+  exitCodeForStatuses, fetchExpected, modelAdminHeaders, readExpectedJson, requiredEnvironmentValue,
+} from "./e2e-http.mjs";
+import {
   assignmentSnapshot,
   assertAssignmentSnapshot,
   calculateHarnessFingerprint,
@@ -152,7 +156,14 @@ if (command.preflight) {
   const identifiers = command.resume ? await incompleteJourneys(requested) : requested;
   const outcomes = [];
   for (const id of identifiers) outcomes.push(await runJourney(id));
-  process.exitCode = outcomes.includes("FAIL") ? 1 : 0;
+  if (command.resume) {
+    const candidates = requested.length ? requested : Object.keys(JOURNEYS);
+    for (const id of candidates.filter((candidate) => !identifiers.includes(candidate))) {
+      try { outcomes.push((await loadJourneyResult(id)).status); }
+      catch { outcomes.push("MISSING"); }
+    }
+  }
+  process.exitCode = exitCodeForStatuses(outcomes);
 }
 
 function parseArguments(arguments_) {
@@ -212,6 +223,7 @@ async function effectiveHarnessFingerprint() {
     "frontend/package-lock.json",
     "frontend/playwright.config.mjs",
     "frontend/scripts/manual-e2e-runner-core.mjs",
+    "frontend/scripts/e2e-http.mjs",
     "frontend/scripts/run-e2e-journey.mjs",
     "frontend/scripts/run-manual-e2e.mjs",
     "tests/e2e/investigation-journeys.spec.mjs",
@@ -242,6 +254,7 @@ function classifyDirtyScope(paths) {
     "frontend/package-lock.json",
     "frontend/playwright.config.mjs",
     "frontend/scripts/manual-e2e-runner-core.mjs",
+    "frontend/scripts/e2e-http.mjs",
     "frontend/scripts/run-e2e-journey.mjs",
     "frontend/scripts/run-manual-e2e.mjs",
     "tests/e2e/investigation-journeys.spec.mjs",
@@ -260,37 +273,58 @@ async function runPreflight() {
     try { checks.push({ name, status: "PASS", detail: await operation() }); }
     catch (error) { checks.push({ name, status: "BLOCKED", detail: error.message }); }
   };
-  await check("frontend", async () => `${(await fetch(FRONTEND_URL)).status}`);
-  await check("agent-api", async () => `${(await fetch(`${API_URL}/api/v1/models`)).status}`);
-  await check("factory-mcp", async () => probeMcpReadiness("http://127.0.0.1:8001/mcp", ["get_machine_status", "get_product_history"]));
-  await check("knowledge-mcp", async () => probeMcpReadiness("http://127.0.0.1:8002/mcp", ["search_documentation"]));
-  await check("ollama", async () => {
-    const tags = await fetchJson("http://127.0.0.1:11434/api/tags");
-    if (!tags.models?.some((model) => model.name === "qwen3.5:9b")) throw new Error("qwen3.5:9b is not installed in local Ollama");
-    return "qwen3.5:9b";
+  await check("authentication", async () => {
+    await modelAdminHeaders();
+    await browserCredentials(FRONTEND_URL);
+    await browserCredentials(FRONTEND_URL, true);
+    await requiredEnvironmentValue("MCP_INDUSTRIAL_AGENT_TOKEN");
+    return "Runner credentials configured; no values recorded.";
   });
-  await check("playwright", async () => {
-    const executable = chromium.executablePath();
-    if (!executable) throw new Error("Chromium executable unavailable");
-    return executable;
-  });
-  await check("model-assignments", async () => {
-    const assignments = await fetchJson(`${API_URL}/api/v1/model-assignments`);
-    latestAssignmentSnapshot = assignmentSnapshot(assignments);
-    const rows = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].map((classification) => {
-      const assignment = assignments.find((item) => item.consumer_id === "agent" && item.data_classification === classification);
-      return `${classification} ${assignment?.model_id ?? `${assignment?.selection_mode}/${assignment?.selection_policy}`} ${assignment?.model_id === LOCAL_MODEL_ID ? "PASS" : "BLOCKED"}`;
+  if (checks.every((check_) => check_.status === "PASS")) {
+    await check("frontend", async () => {
+      const credentials = await browserCredentials(FRONTEND_URL);
+      const authorization = Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64");
+      return `${(await fetchExpected(FRONTEND_URL, { headers: { Authorization: `Basic ${authorization}` } })).status}`;
     });
-    if (rows.some((row) => row.endsWith("BLOCKED"))) throw new Error(rows.join(" | "));
-    return rows.join(" | ");
-  });
-  await check("local-quality", async () => {
-    const models = await fetchJson(`${API_URL}/api/v1/models`);
-    const model = models.find((item) => item.model_id === LOCAL_MODEL_ID);
-    if (!model || model.provider !== "ollama" || model.provider_model !== "qwen3.5:9b" || model.execution_zone !== "LOCAL") throw new Error("local_quality is not Local Qwen 3.5 9B in LOCAL zone");
-    return "Local Qwen 3.5 9B";
-  });
-  await check("result-directory", async () => { await mkdir(RESULTS_DIRECTORY, { recursive: true }); return RESULTS_DIRECTORY; });
+    await check("model-admin-frontend", async () => {
+      const credentials = await browserCredentials(FRONTEND_URL, true);
+      const authorization = Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64");
+      return `${(await fetchExpected(FRONTEND_URL, { headers: { Authorization: `Basic ${authorization}` } })).status}`;
+    });
+    await check("agent-api", async () => {
+      const response = await fetchExpected(`${API_URL}/api/v1/models`, { headers: await modelAdminHeaders() });
+      return `${response.status}`;
+    });
+    await check("factory-mcp", async () => probeMcpReadiness("http://127.0.0.1:8001/mcp", ["get_machine_status", "get_product_history"]));
+    await check("knowledge-mcp", async () => probeMcpReadiness("http://127.0.0.1:8002/mcp", ["search_documentation"]));
+    await check("ollama", async () => {
+      const tags = await fetchJson("http://127.0.0.1:11434/api/tags");
+      if (!tags.models?.some((model) => model.name === "qwen3.5:9b")) throw new Error("qwen3.5:9b is not installed in local Ollama");
+      return "qwen3.5:9b";
+    });
+    await check("playwright", async () => {
+      const executable = chromium.executablePath();
+      if (!executable) throw new Error("Chromium executable unavailable");
+      return executable;
+    });
+    await check("model-assignments", async () => {
+      const assignments = await fetchJson(`${API_URL}/api/v1/model-assignments`);
+      latestAssignmentSnapshot = assignmentSnapshot(assignments);
+      const rows = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].map((classification) => {
+        const assignment = assignments.find((item) => item.consumer_id === "agent" && item.data_classification === classification);
+        return `${classification} ${assignment?.model_id ?? `${assignment?.selection_mode}/${assignment?.selection_policy}`} ${assignment?.model_id === LOCAL_MODEL_ID ? "PASS" : "BLOCKED"}`;
+      });
+      if (rows.some((row) => row.endsWith("BLOCKED"))) throw new Error(rows.join(" | "));
+      return rows.join(" | ");
+    });
+    await check("local-quality", async () => {
+      const models = await fetchJson(`${API_URL}/api/v1/models`);
+      const model = models.find((item) => item.model_id === LOCAL_MODEL_ID);
+      if (!model || model.provider !== "ollama" || model.provider_model !== "qwen3.5:9b" || model.execution_zone !== "LOCAL") throw new Error("local_quality is not Local Qwen 3.5 9B in LOCAL zone");
+      return "Local Qwen 3.5 9B";
+    });
+    await check("result-directory", async () => { await mkdir(RESULTS_DIRECTORY, { recursive: true }); return RESULTS_DIRECTORY; });
+  }
   const blocked = checks.some((check_) => check_.status !== "PASS");
   const finishedAt = new Date().toISOString();
   const report = {
@@ -314,8 +348,11 @@ async function runJourney(id) {
   let page;
   let configurationGuard;
   let configurationSnapshot;
+  let httpGuard;
   let operation = "startup";
   try {
+    const httpCredentials = await browserCredentials(FRONTEND_URL);
+    await browserCredentials(FRONTEND_URL, true);
     await assertLocalOnlyPreflight();
     configurationSnapshot = assignmentSnapshot(
       await fetchJson(`${API_URL}/api/v1/model-assignments`),
@@ -323,8 +360,9 @@ async function runJourney(id) {
     latestAssignmentSnapshot = configurationSnapshot;
     result.metadata = currentRunMetadata();
     browser = await chromium.launch({ headless: true });
-    context = await browser.newContext({ acceptDownloads: true });
+    context = await browser.newContext({ acceptDownloads: true, httpCredentials });
     configurationGuard = createReadOnlyConfigurationGuard(context);
+    httpGuard = createApiStatusGuard(context);
     page = await context.newPage();
     const clientErrors = [];
     const failedFetches = [];
@@ -338,11 +376,12 @@ async function runJourney(id) {
     for (const step of definition.steps) {
       operation = step.kind;
       await assertConfigurationSnapshot(configurationSnapshot, `before ${operation}`);
-      await executeStep(page, context, result, step, clientErrors, failedFetches);
+      await executeStep(page, context, result, step, clientErrors, failedFetches, httpGuard);
       configurationGuard.assertUnchanged(operation);
+      httpGuard.assertSuccessful();
     }
     operation = "smoke controls";
-    await smokeControls(page, result);
+    await smokeControls(page, result, browser);
     configurationGuard.assertUnchanged(operation);
   } catch (error) {
     if (error instanceof PreflightBlockedError) {
@@ -356,6 +395,7 @@ async function runJourney(id) {
   } finally {
     try {
       configurationGuard?.assertUnchanged(operation);
+      httpGuard?.assertSuccessful();
       if (configurationSnapshot) {
         await assertConfigurationSnapshot(configurationSnapshot, "after journey");
       }
@@ -367,7 +407,7 @@ async function runJourney(id) {
     result.completed_at = new Date().toISOString();
     result.metadata = currentRunMetadata(result.completed_at);
     result.browser_cleanup = true;
-    if (!["FAIL", "BLOCKED", "HARNESS_ERROR"].includes(result.status)) result.status = result.steps.every((step) => step.test_result === "PASS") ? "PASS" : "FAIL";
+    result.status = completedJourneyStatus(result);
     if (result.runner_result === "RUNNING") result.runner_result = result.status === "FAIL" ? "PRODUCT_FAIL" : result.status;
     await writeAtomically(journeyResultPath(id), result);
     await context?.close();
@@ -412,13 +452,15 @@ async function assertConfigurationSnapshot(snapshot, operation) {
 }
 
 async function preparePage(page, definition) {
-  await page.goto(FRONTEND_URL, { waitUntil: "domcontentloaded" });
+  assertHttpStatus(await page.goto(FRONTEND_URL, { waitUntil: "domcontentloaded" }));
   await page.selectOption("#user-clearance", definition.clearance);
   await page.selectOption("#response-language", definition.language);
 }
 
-async function executeStep(page, context, result, step, clientErrors, failedFetches) {
+async function executeStep(page, context, result, step, clientErrors, failedFetches, httpGuard) {
   if (step.kind === "select") {
+    const investigationId = await page.evaluate(() => JSON.parse(sessionStorage.getItem("industrial-ai-agent.active-investigation") ?? "null")?.investigationId);
+    if (investigationId) httpGuard.expectResponse({ method: "GET", pathname: `/api/v1/investigations/${investigationId}`, query: { user_clearance: step.clearance }, allowedStatuses: [200, 404] });
     await page.selectOption("#user-clearance", step.clearance);
     record(result, { label: `select clearance ${step.clearance}`, ...await pageContext(page), expected_severity: "SUCCESS", actual_severity: "SUCCESS", test_result: "PASS", note: "User explicitly changed clearance." });
     return;
@@ -511,7 +553,8 @@ async function openDocument(page, context, result, step, clientErrors, failedFet
   const responsePromise = page.waitForResponse((response) => /\/api\/v1\/documents\/[^/]+\?/.test(response.url()), { timeout: 20_000 });
   await button.click();
   const response = await responsePromise;
-  const actual = response.ok() ? "SUCCESS" : "ATTENTION";
+  assertHttpStatus(response);
+  const actual = response.status() === 200 ? "SUCCESS" : "ATTENTION";
   record(result, { label: "document open", ...await pageContext(page), expected_severity: step.expected, actual_severity: actual, test_result: actual === step.expected ? "PASS" : "FAIL", note: response.url(), clicked_reference_type: "document" });
 }
 
@@ -520,6 +563,7 @@ async function recordAgentResult(page, result, label, step, request, investigati
   const body = request.postDataJSON();
   let turn = null;
   if (investigationResponse) {
+    assertHttpStatus(investigationResponse);
     let investigation;
     try { investigation = await investigationResponse.json(); }
     catch {
@@ -545,10 +589,20 @@ async function recordAgentResult(page, result, label, step, request, investigati
   record(result, { label, ...context, expected_severity: step.expected, actual_severity: actual, test_result: testResult, note: faults.join("; ") || (!leakFree ? "Protected identifier leaked in access denial." : null), clicked_reference_type: clickedIdentifier ? step.type : null, context_preserved: contextOk, language_preserved: languageOk, semantic_target: clickedIdentifier, run_status: turn?.status ?? null, error_code: turn?.error?.code ?? null, failure_origin: turn?.error?.failure_origin ?? null, request_context: observedRequestContext, investigation_response_observed: Boolean(investigationResponse) });
 }
 
-async function smokeControls(page, result) {
-  await page.locator("#model-configuration-button").click();
-  const dialogOpen = await page.locator("#model-configuration-dialog").evaluate((dialog) => dialog.open);
-  if (dialogOpen) await page.locator("#model-configuration-close").click();
+async function smokeControls(page, result, browser) {
+  const adminContext = await browser.newContext({ httpCredentials: await browserCredentials(FRONTEND_URL, true) });
+  const httpGuard = createApiStatusGuard(adminContext);
+  const configurationGuard = createReadOnlyConfigurationGuard(adminContext);
+  let dialogOpen = false;
+  try {
+    const adminPage = await adminContext.newPage();
+    assertHttpStatus(await adminPage.goto(FRONTEND_URL));
+    await adminPage.locator("#model-configuration-button").click();
+    await adminPage.locator(".model-assignment-row").first().waitFor();
+    dialogOpen = await adminPage.locator("#model-configuration-dialog").evaluate((dialog) => dialog.open);
+    configurationGuard.assertUnchanged("model configuration smoke");
+    httpGuard.assertSuccessful();
+  } finally { await adminContext.close(); }
   const monitoring = page.locator(".monitoring-menu");
   await monitoring.locator("summary").click();
   const dashboard = monitoring.locator("a").first();
@@ -581,7 +635,7 @@ function actionFor(type, action, language) {
 }
 
 function isRunPost(request) { return isRunRequestMetadata({ method: request.method(), url: request.url() }); }
-function isInvestigationGet(response) { return response.request().method() === "GET" && new URL(response.url()).pathname.startsWith("/api/v1/investigations/") && response.ok(); }
+function isInvestigationGet(response) { return response.request().method() === "GET" && new URL(response.url()).pathname.startsWith("/api/v1/investigations/"); }
 function observeNetwork(page, context) {
   const requests = [];
   const responses = [];
@@ -659,10 +713,18 @@ function failedStep(label, expected, context, note, optional) { return { label, 
 function startResult(id, definition, metadata) { return { id, journey: definition.name, tags: definition.tags, metadata, planned_language: definition.language, planned_clearance: definition.clearance, started_at: new Date().toISOString(), real_model: "Local Qwen 3.5 9B", model_id: LOCAL_MODEL_ID, reasoning_effort: "none", external_provider_calls: 0, status: "RUNNING", runner_result: "RUNNING", steps: [], visited: [], click_depth: 0 }; }
 function record(result, step) { result.steps.push(step); }
 function journeyResultPath(id) { return path.join(RESULTS_DIRECTORY, `journey-${id}.json`); }
-async function fetchJson(url) { const response = await fetch(url); if (!response.ok) throw new Error(`Preflight request failed: ${response.status}`); return response.json(); }
+async function loadJourneyResult(id) {
+  const result = JSON.parse(await readFile(journeyResultPath(id), "utf8"));
+  if (result.status === "PASS") result.status = completedJourneyStatus(result);
+  return result;
+}
+async function fetchJson(url) {
+  const parsed = new URL(url);
+  const headers = parsed.origin === new URL(API_URL).origin && parsed.pathname.startsWith("/api/v1/") ? await modelAdminHeaders() : {};
+  return readExpectedJson(await fetchExpected(url, { headers }));
+}
 async function probeMcpReadiness(url, requiredTools) {
-  const token = await localEnvironmentValue("MCP_INDUSTRIAL_AGENT_TOKEN");
-  if (!token) throw new Error("MCP_INDUSTRIAL_AGENT_TOKEN is unavailable for protocol readiness.");
+  const token = await requiredEnvironmentValue("MCP_INDUSTRIAL_AGENT_TOKEN");
   const init = await mcpRequest(url, {
     jsonrpc: "2.0", id: 1, method: "initialize",
     params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "manual-e2e-preflight", version: "1.0" } },
@@ -680,8 +742,7 @@ async function probeMcpReadiness(url, requiredTools) {
 async function mcpRequest(url, payload, token, sessionId = null, requiresResponse = true) {
   const headers = { Authorization: `Bearer ${token}`, Accept: "application/json, text/event-stream", "Content-Type": "application/json" };
   if (sessionId) headers["Mcp-Session-Id"] = sessionId;
-  const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
-  if (!response.ok) throw new Error(`MCP protocol request failed: ${response.status}`);
+  const response = await fetchExpected(url, { method: "POST", headers, body: JSON.stringify(payload) }, requiresResponse ? [200] : [202]);
   if (requiresResponse) await response.text().then((text) => { response.mcpBody = text; });
   return response;
 }
@@ -690,45 +751,39 @@ function mcpPayload(response) {
   const data = body.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).at(-1) ?? body;
   try { return JSON.parse(data); } catch { throw new Error("MCP protocol response was not valid JSON-RPC."); }
 }
-async function localEnvironmentValue(key) {
-  if (process.env[key]) return process.env[key];
-  try {
-    const content = await readFile(path.join(ROOT, ".env"), "utf8");
-    const line = content.split(/\r?\n/).find((entry) => entry.startsWith(`${key}=`));
-    return line?.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, "") ?? null;
-  } catch { return null; }
-}
 async function writeAtomically(target, value) { await mkdir(path.dirname(target), { recursive: true }); const temporary = `${target}.${process.pid}.${Date.now()}.tmp`; const handle = await open(temporary, "w"); try { await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8"); await handle.sync(); } finally { await handle.close(); } await rename(temporary, target); }
 async function writeTextAtomically(target, value) { await mkdir(path.dirname(target), { recursive: true }); const temporary = `${target}.${process.pid}.${Date.now()}.tmp`; const handle = await open(temporary, "w"); try { await handle.writeFile(value, "utf8"); await handle.sync(); } finally { await handle.close(); } await rename(temporary, target); }
 
 async function aggregateResults() {
+  let configurationError = null;
+  let preflightStatus = null;
+  try { preflightStatus = JSON.parse(await readFile(path.join(RESULTS_DIRECTORY, "preflight.json"), "utf8")).status; }
+  catch (error) { if (error.code !== "ENOENT") preflightStatus = "HARNESS_ERROR"; }
   try {
     latestAssignmentSnapshot = assignmentSnapshot(
       await fetchJson(`${API_URL}/api/v1/model-assignments`),
     );
-  } catch {
-    // The aggregate remains useful for a blocked run even if the API is unavailable.
+  } catch (error) {
+    configurationError = runnerFailure(error, "aggregate configuration read");
   }
   const journeys = [];
   for (const id of Object.keys(JOURNEYS)) {
-    try { journeys.push(JSON.parse(await readFile(journeyResultPath(id), "utf8"))); } catch { journeys.push({ id, journey: JOURNEYS[id].name, status: "MISSING", steps: [] }); }
+    try { journeys.push(await loadJourneyResult(id)); } catch { journeys.push({ id, journey: JOURNEYS[id].name, status: "MISSING", steps: [] }); }
   }
   const steps = journeys.flatMap((journey) => journey.steps.map((step) => ({ journey: journey.id, ...step })));
   const count = (predicate) => steps.filter(predicate).length;
   const finishedAt = new Date().toISOString();
   const journeySummary = journeys.map((journey) => ({ journey: journey.journey, steps: journey.steps.length, success: journey.steps.filter((step) => step.actual_severity === "SUCCESS").length, attention: journey.steps.filter((step) => step.actual_severity === "ATTENTION").length, failure: journey.steps.filter((step) => step.actual_severity === "FAILURE").length, result: journey.status }));
-  const executionStatus = journeys.some((journey) => journey.status === "HARNESS_ERROR") ? "HARNESS_ERROR"
-    : journeys.some((journey) => journey.status === "BLOCKED") ? "BLOCKED"
-      : journeys.some((journey) => journey.status === "MISSING") ? "INCOMPLETE"
-        : journeys.some((journey) => journey.status === "FAIL") ? "FAIL"
-          : "PASS";
+  const overallStatus = executionStatus([...journeys.map((journey) => journey.status), ...(configurationError ? ["HARNESS_ERROR"] : []), ...(preflightStatus ? [preflightStatus] : [])]);
   const summary = {
     metadata: currentRunMetadata(finishedAt),
     run_id: RUN_ID,
     started_at: RUN_STARTED_AT,
     finished_at: finishedAt,
-    execution_status: executionStatus,
-    product_quality_gate: journeys.some((journey) => journey.status === "FAIL") ? "FAIL" : "PASS",
+    execution_status: overallStatus,
+    preflight_status: preflightStatus,
+    runner_error: configurationError,
+    product_quality_gate: overallStatus === "PASS" ? "PASS" : journeys.some((journey) => journey.status === "FAIL") ? "FAIL" : "NOT_EVALUATED",
     generated_at: new Date().toISOString(), real_model: "Local Qwen 3.5 9B", external_provider_calls: 0,
     planned_journeys: Object.keys(JOURNEYS).length, completed_journeys: journeys.filter((journey) => !["MISSING", "BLOCKED"].includes(journey.status)).length,
     journeys,
@@ -741,6 +796,7 @@ async function aggregateResults() {
   await writeAtomically(path.join(RESULTS_DIRECTORY, "summary.json"), summary);
   await writeTextAtomically(path.join(RESULTS_DIRECTORY, "summary.md"), renderSummaryMarkdown(summary));
   await writeAtomically(path.join(RESULTS_DIRECTORY, "browser-e2e-summary.json"), summary);
+  process.exitCode = exitCodeForStatuses([overallStatus]);
 }
 
 async function compareReports(previousPath) {

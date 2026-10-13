@@ -8,14 +8,45 @@ and PDF/document interactions.
 
 Run it after the local stack is healthy:
 
-Authentication migration note: the runner currently assumes an anonymously privileged
-gateway. That assumption is no longer valid. Before the next real-model milestone,
-configure Playwright browser contexts with explicit HTTP Basic demo credentials for
-the required investigation identity, and use a separate model-admin context for
-configuration. The clearance selector does not select identity. Do not put server bearer
-tokens into page JavaScript or storage. The runner is deliberately not migrated or run
-as part of Security Finding 1; the isolated gateway security integration test has no
-provider calls.
+Configure credentials in the Git-ignored root `.env` or the runner process environment
+before using the commands below. Explicit process values take precedence; an empty
+value fails closed rather than falling back to `.env`. Use the existing
+`AGENT_API_MODEL_ADMIN_TOKEN` for runner-only catalog/assignment reads and
+`MCP_INDUSTRIAL_AGENT_TOKEN` for MCP readiness. Browser login uses
+`E2E_FRONTEND_USERNAME` (default `restricted`) and `E2E_FRONTEND_PASSWORD`, matching
+an identity/password provisioned in the external `FRONTEND_AUTH_FILE`. Manual-runner
+model-configuration smoke uses a separate `model-admin` browser context with
+`E2E_MODEL_ADMIN_PASSWORD`. These passwords must be provisioned locally; placeholders
+from `.env.example` are rejected. No token or password is committed or written to
+normal reports. Authenticated Playwright traces are disabled to avoid credential capture.
+
+The default URLs are `E2E_API_URL=http://127.0.0.1:8000` and
+`E2E_FRONTEND_URL=http://127.0.0.1:8080`. Direct API reads send the model-admin Bearer
+header; browser requests authenticate with origin-scoped HTTP Basic, and Nginx maps
+the verified identity to its server-held API token. Bearer tokens are never injected
+into page JavaScript or storage. The clearance selector only narrows the authenticated
+identity's ceiling; it does not switch identity. The `restricted` default permits all
+requested clearance levels in the existing registry without granting model-admin to
+the investigation context. A lower-ceiling identity requires a compatible journey subset.
+
+Missing required credentials block preflight before network access and return a non-zero
+exit. HTTP success is explicitly 200 (MCP notifications require 202); redirects and
+unexpected 401/403/4xx/5xx fail. Expected negative responses must declare the exact status
+or a bounded allowed set: a context-change reload accepts 200 or neutral 404 only for its
+specific investigation and new clearance. Status is checked before JSON parsing, and
+error bodies/headers are not recorded. `FAIL`, `BLOCKED`, `HARNESS_ERROR`, failed critical
+smoke checks, and incomplete aggregates all produce non-zero exits. Aggregate API failures
+remain visible; an unevaluated product gate is `NOT_EVALUATED`, never PASS. Aggregation
+expects the complete existing registry, so a partial subset remains INCOMPLETE.
+
+Deterministic auth/status/exit regressions run without browsers, services or models:
+
+```text
+node --test tests/frontend/e2e-http-security.test.mjs tests/frontend/manual-e2e-runner.test.mjs
+```
+
+Run that command from the repository root. It substitutes HTTP and child processes;
+it does not replace the separate real-model milestone gate.
 
 ```text
 cd frontend
@@ -36,7 +67,9 @@ npm run e2e:journey -- --aggregate
 
 `--journey` may be repeated for an explicit subset. `--resume` skips only journeys with
 an atomic `PASS` artefact, including expected `ATTENTION` paths whose assertions pass.
-It reruns `FAIL`, `HARNESS_ERROR`, `BLOCKED`, and missing journeys. A `HARNESS_ERROR`
+It retries `HARNESS_ERROR`, missing and unmeasured journeys. Measured `FAIL` and `BLOCKED`
+artifacts are retained and still cause a non-zero exit; invoke their `--journey` explicitly
+to retry them. A `HARNESS_ERROR`
 means the browser runner could not complete its measurement lifecycle; it is distinct
 from a product `FAIL`. Results
 are stored as one file per journey in `evals/results/browser-e2e/`, followed by the
@@ -87,6 +120,11 @@ it does not compare generated answer prose byte-for-byte. A GREEN suite has no P
 finding and all required journeys. YELLOW means only bounded P2/P3 findings. RED means
 a security finding, unexpected technical failure, invalid response, internal error, or
 broken core navigation.
+
+Separately tracked Finding 10 coverage issues remain: some clearance-change journeys
+still expect references purged by the current frontend; PDF tags and legacy report
+flags do not establish complete PDF/identity/tool acceptance coverage. This auth/status
+fix does not add journeys or repair those coverage gaps.
 
 This Manual Real-Model E2E suite is deliberately not intended for every development
 change. The next quality-protection task will formalize the FAST / INTEGRATION /

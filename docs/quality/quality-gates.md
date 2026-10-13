@@ -7,6 +7,12 @@ risks without turning ordinary development into a real-model release exercise.
 
 Run from the repository root on PowerShell:
 
+Before the manual E2E command, configure the existing API/MCP tokens and local browser
+credentials as described in [Browser E2E Journeys](../learning/browser-e2e-journeys.md).
+The API on port 8000 requires Bearer authentication; the browser gateway on port 8080
+requires HTTP Basic. Missing credentials, unexpected HTTP statuses, runner errors and
+incomplete aggregates return non-zero exits. FAST uses fakes and requires no E2E secrets.
+
 ```powershell
 .\scripts\run-quality-gate.ps1 FAST
 .\scripts\run-quality-gate.ps1 INTEGRATION
@@ -28,7 +34,7 @@ that is not a passing integration validation. It never calls a real or external 
 first performs its read-only assignment/configuration preflight, is resumable and
 fingerprinted, then exercises the existing 12 browser DOM journeys with Local Qwen 3.5
 9B and MCP. It makes no external provider calls and remains outside FAST and ordinary CI.
-It covers German and English, PUBLIC, INTERNAL, CONFIDENTIAL, and RESTRICTED callers,
+It covers German and English, PUBLIC, INTERNAL, CONFIDENTIAL, and RESTRICTED requested clearances,
 real reference navigation, multi-turn behavior, and PDF acceptance. Baseline reports in
 ignored `evals/results/browser-e2e/` are compared as release evidence, not committed test
 artifacts.

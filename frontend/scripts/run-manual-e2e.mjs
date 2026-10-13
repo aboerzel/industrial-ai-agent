@@ -23,8 +23,8 @@ if (preflightResult !== 0) {
   const runArguments = journeys.length ? journeys.flatMap((journey) => ["--journey", journey]) : ["--all"];
   if (resume) runArguments.push("--resume");
   const result = await runChild([...common, ...runArguments]);
-  await runChild([...common, "--aggregate"]);
-  process.exitCode = result;
+  const aggregateResult = await runChild([...common, "--aggregate"]);
+  process.exitCode = result || aggregateResult;
 }
 
 function createRunId() {
@@ -48,6 +48,7 @@ function valuesAfter(values, flag) {
 function runChild(args) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, args, { cwd: path.join(ROOT, "frontend"), stdio: "inherit" });
+    child.on("error", () => resolve(1));
     child.on("exit", (code) => resolve(code ?? 1));
   });
 }

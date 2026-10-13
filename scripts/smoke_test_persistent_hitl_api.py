@@ -39,6 +39,7 @@ EXPECTED_ALL_TOOLS = (*EXPECTED_READ_TOOLS, "create_maintenance_ticket")
 def main() -> None:
     decision = _parse_args().decision
     load_local_environment(PROJECT_ROOT / ".env")
+    headers = _api_headers()
     database_url = os.getenv("AGENT_RUNTIME_DATABASE_URL") or os.getenv(
         "FACTORY_DATABASE_URL"
     )
@@ -63,9 +64,9 @@ def main() -> None:
     first_process = _start_api(environment)
     try:
         _wait_for_health(first_process, base_url)
-        with httpx.Client(timeout=300.0) as client:
+        with httpx.Client(timeout=300.0, headers=headers) as client:
             started = client.post(f"{base_url}/api/v1/runs", json={"message": PROMPT})
-            started.raise_for_status()
+            _expect_status(started, 200)
             waiting = started.json()
         _assert_waiting_for_approval(waiting)
         run_id = waiting["run_id"]
@@ -77,15 +78,15 @@ def main() -> None:
     second_process = _start_api(environment)
     try:
         _wait_for_health(second_process, base_url)
-        with httpx.Client(timeout=300.0) as client:
+        with httpx.Client(timeout=300.0, headers=headers) as client:
             restored = client.get(f"{base_url}/api/v1/runs/{run_id}")
-            restored.raise_for_status()
+            _expect_status(restored, 200)
             _assert_waiting_for_approval(restored.json())
             approved = client.post(
                 f"{base_url}/api/v1/runs/{run_id}/resume",
                 json={"decision": decision},
             )
-            approved.raise_for_status()
+            _expect_status(approved, 200)
             successful = approved.json()
             if decision == "approve":
                 duplicate = client.post(
@@ -98,8 +99,7 @@ def main() -> None:
         )
         ticket_count_after = _ticket_count(database_url)
         if decision == "approve":
-            if duplicate.status_code != 409:
-                raise RuntimeError("Duplicate approval was not rejected")
+            _expect_status(duplicate, 409)
             if ticket_count_after != ticket_count_before + 1:
                 raise RuntimeError(
                     "Approval did not create exactly one maintenance ticket"
@@ -124,6 +124,20 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--decision", choices=("approve", "reject"), default="approve")
     return parser.parse_args()
+
+
+def _api_headers() -> dict[str, str]:
+    token = os.getenv("MCP_INDUSTRIAL_AGENT_TOKEN", "").strip()
+    if not token or token.startswith("replace-with-") or "\n" in token or "\r" in token:
+        raise RuntimeError("MCP_INDUSTRIAL_AGENT_TOKEN is required for API smoke tests")
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _expect_status(response: httpx.Response, expected: int) -> None:
+    if response.status_code != expected:
+        raise RuntimeError(
+            f"Unexpected API HTTP status {response.status_code}; expected {expected}"
+        )
 
 
 def _start_api(environment: dict[str, str]) -> subprocess.Popen[bytes]:

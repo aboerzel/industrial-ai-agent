@@ -19,9 +19,9 @@ def test_frontend_static_assets_are_present_and_use_es_modules() -> None:
     assert markdown.is_file()
     assert marked.is_file()
     assert dompurify.is_file()
-    assert '<script type="module" src="js/app.js?v=20261013-1"></script>' in index
-    assert 'from "./api.js?v=20261013-1"' in app
-    assert 'from "./model-configuration.js?v=20261013-1"' in app
+    assert '<script type="module" src="js/app.js?v=20261013-2"></script>' in index
+    assert 'from "./api.js?v=20261013-2"' in app
+    assert 'from "./model-configuration.js?v=20261013-2"' in app
     assert 'from "./markdown.js?v=20261013-1"' in app
     assert "renderNextSteps" in app
     assert "turn.next_steps" in app
