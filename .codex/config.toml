@@ -1,6 +1,3 @@
-  [mcp_servers.pycharm]
-    url = "http://127.0.0.1:64462/stream"
-
 [mcp_servers.factory]
 url = "http://localhost:8001/mcp"
 bearer_token_env_var = "MCP_CODEX_DEVELOPMENT_TOKEN"
