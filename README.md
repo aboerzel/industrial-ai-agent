@@ -43,7 +43,8 @@ For the full industrial-value and scope statement, see [Capabilities and Industr
 flowchart LR
     subgraph Clients["Users and authorized clients"]
         User["Operator / Engineer / Maintenance"] --> UI["Web UI"]
-        UI --> API["FastAPI API"]
+        UI --> Gateway["Nginx same-origin gateway"]
+        Gateway --> API["FastAPI API"]
         Codex["Codex / authorized AI clients"]
     end
 
@@ -328,12 +329,13 @@ available. Containers explicitly stopped by the user are intentionally not resta
 All Compose host ports bind to `127.0.0.1`; the OTel Collector is Compose-internal.
 Grafana keeps anonymous local dashboard access as a Viewer, not an Admin. Do not add real
 credentials to the repository. The frontend is a separate static client and communicates
-only with the FastAPI JSON API.
+with the FastAPI JSON API only through its same-origin Nginx gateway.
 
-The local API authenticates the browser with an environment-configured opaque bearer
-token. The token resolves to a server-owned maximum clearance; the UI selector may only
-narrow that clearance for a request and can never raise it. The token is held in browser
-memory only. Every run-store request receives the resulting `SecurityContext`, and
+The local Nginx gateway authenticates browser requests with an environment-configured
+opaque bearer token that never enters browser code or storage. The token resolves to a
+server-owned maximum clearance; the UI selector may only narrow that clearance for a
+request and can never raise it. Every run-store request receives the resulting
+`SecurityContext`, and
 PostgreSQL RLS remains the authoritative visibility boundary. Model-configuration routes
 additionally require the server-owned `model-admin` role. Run classification, MCP
 permissions, and model egress remain separate deterministic checks. Unknown free text is

@@ -1,13 +1,4 @@
-const API_BASE_URL = "http://localhost:8000";
-let apiAccessToken = "";
-
-export function setApiAccessToken(token) {
-  apiAccessToken = typeof token === "string" ? token.trim() : "";
-}
-
-function authorizationHeaders() {
-  return apiAccessToken ? { Authorization: `Bearer ${apiAccessToken}` } : {};
-}
+const API_BASE_URL = "";
 
 export class ApiClientError extends Error {
   constructor(status, code, message, investigationId = null) {
@@ -131,7 +122,7 @@ async function requestBinary(path, fallbackFilename) {
   let response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      headers: { Accept: "*/*", ...authorizationHeaders() },
+      headers: { Accept: "*/*" },
     });
   } catch {
     throw new ApiClientError(0, "backend_unreachable", "The local agent API is not reachable. Start the FastAPI server and try again.");
@@ -171,7 +162,6 @@ async function request(path, options = {}, validator = isRunResponse) {
       ...options,
       headers: {
         Accept: "application/json",
-        ...authorizationHeaders(),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...options.headers,
       },

@@ -155,6 +155,11 @@ def test_frontend_is_a_loopback_only_static_service() -> None:
 
     assert frontend["image"] == "nginx:1.29-alpine"
     assert frontend["restart"] == "unless-stopped"
+    assert (
+        frontend["environment"]["MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN"]
+        == services["agent-api"]["environment"]["MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN"]
+    )
+    assert frontend["depends_on"]["agent-api"]["condition"] == "service_healthy"
     assert _published_ports(frontend) == (
         {
             "mode": "ingress",
@@ -175,7 +180,7 @@ def test_frontend_is_a_loopback_only_static_service() -> None:
         {
             "type": "bind",
             "source": str(PROJECT_ROOT / "frontend" / "nginx.conf"),
-            "target": "/etc/nginx/conf.d/default.conf",
+            "target": "/etc/nginx/templates/default.conf.template",
             "read_only": True,
             "bind": {},
         },

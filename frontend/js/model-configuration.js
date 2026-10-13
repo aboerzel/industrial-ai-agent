@@ -3,7 +3,7 @@ import {
   getModelCatalog,
   getModelConsumers,
   saveModelConfiguration,
-} from "./api.js";
+} from "./api.js?v=20261013-1";
 
 const CLASSIFICATIONS = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"];
 const CLASSIFICATION_RANK = Object.fromEntries(CLASSIFICATIONS.map((item, index) => [item, index]));

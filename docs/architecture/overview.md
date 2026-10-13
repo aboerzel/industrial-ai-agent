@@ -11,6 +11,7 @@ flowchart LR
     end
 
     subgraph Application["Industrial AI Agent"]
+        Gateway["Nginx frontend gateway<br/>server-owned demo identity"]
         API["FastAPI"]
         Run["Run service and durable run state"]
         Agent["LangGraph troubleshooting workflow"]
@@ -42,7 +43,7 @@ flowchart LR
         Langfuse["Langfuse<br/>allowed AI metadata only"]
     end
 
-    UI --> API
+    UI --> Gateway --> API
     APIClient --> API
     API --> Run --> Agent
     Agent --> Policy
@@ -75,7 +76,7 @@ flowchart LR
     classDef data fill:#334155,stroke:#0f172a,color:#ffffff
     classDef telemetry fill:#6b21a8,stroke:#3b0764,color:#ffffff
     class UI,APIClient,Codex client
-    class API,Run,Agent,Policy,HITL core
+    class Gateway,API,Run,Agent,Policy,HITL core
     class Factory,Knowledge,Runtime,Observe,RCA,Hardware mcp
     class Postgres,Documents,Local,Public,Device data
     class OTel,Backends,Grafana,Langfuse telemetry
@@ -426,18 +427,20 @@ session with Factory, Knowledge, and Hardware, runs `initialize` and `tools/list
 requires their agent-authorized capabilities. Compose uses this dependency-aware
 operational readiness endpoint for the Agent API Docker healthcheck. `GET /api/v1/runs/{run_id}` reads the durable application
 record. The separate static `frontend/` browser client communicates only with this public
-HTTP/JSON API. Compose serves it with a loopback-only Nginx service at
-`http://localhost:8080`; the local API entry point permits only that origin through
-explicit CORS configuration and does not serve frontend assets. The API has no CORS
-wildcard, authentication, TLS, rate limiting, or streaming endpoint. Its explicit
+HTTP/JSON API through its same-origin Nginx gateway. Compose serves that gateway on
+loopback at `http://localhost:8080`; it injects a server-owned local demo credential and
+forwards `/api/` without exposing the credential to browser code or storage. The local API
+entry point also retains explicit CORS configuration for authenticated development clients
+and does not serve frontend assets. The API has no CORS wildcard, TLS, rate limiting, or
+streaming endpoint. Its explicit
 `POST /api/v1/runs/{run_id}/resume` endpoint only accepts the strict `approve` or
 `reject` decision contract for a persisted pending action.
 Swagger UI at `/docs` remains the generated API contract explorer.
 
-The browser sends an opaque bearer token that the FastAPI adapter maps to a server-owned
-principal, maximum clearance, and roles. The token remains in browser memory only. The
-clearance selector may narrow the authenticated maximum for a request but can never
-raise it. FastAPI constructs the run-store adapter with that request-specific
+The Nginx gateway sends an opaque bearer token that the FastAPI adapter maps to a
+server-owned principal, maximum clearance, and roles. The browser never receives that
+token. The clearance selector may narrow the authenticated maximum for a request but can
+never raise it. FastAPI constructs the run-store adapter with that request-specific
 `SecurityContext`; its transaction-local `app.clearance` makes PostgreSQL RLS the first
 and authoritative record-visibility boundary. Python visibility checks remain
 defense-in-depth only. Model-configuration endpoints require `model-admin`. These API
@@ -466,7 +469,8 @@ trigger a higher-clearance retry.
 ```mermaid
 sequenceDiagram
     actor User
-    participant UI as Web UI / API client
+    participant UI as Web UI
+    participant Gateway as Nginx frontend gateway
     participant API as FastAPI
     participant Run as Run service and store
     participant Agent as LangGraph workflow
@@ -479,7 +483,8 @@ sequenceDiagram
     participant Telemetry as OpenTelemetry
 
     User->>UI: Troubleshooting request
-    UI->>API: Bearer token + requested clearance + request
+    UI->>Gateway: Same-origin request + requested clearance
+    Gateway->>API: Server-owned bearer token + request
     API->>API: Authenticate principal; reject clearance elevation
     API->>Run: Create request-scoped RLS store and durable run
     Run->>Policy: Resolve classification and run policy
@@ -496,7 +501,8 @@ sequenceDiagram
     LLM-->>Agent: Decision or structured result
     Agent->>Run: Persist outcome or approval state
     Agent-->>API: Sanitized public projection
-    API-->>UI: Run status and result
+    API-->>Gateway: Run status and result
+    Gateway-->>UI: Run status and result
     Agent-->>Telemetry: Safe runtime metadata and spans
 ```
 

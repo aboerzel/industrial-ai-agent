@@ -19,9 +19,10 @@ def test_frontend_static_assets_are_present_and_use_es_modules() -> None:
     assert markdown.is_file()
     assert marked.is_file()
     assert dompurify.is_file()
-    assert '<script type="module" src="js/app.js"></script>' in index
-    assert 'from "./api.js"' in app
-    assert 'from "./markdown.js"' in app
+    assert '<script type="module" src="js/app.js?v=20261013-1"></script>' in index
+    assert 'from "./api.js?v=20261013-1"' in app
+    assert 'from "./model-configuration.js?v=20261013-1"' in app
+    assert 'from "./markdown.js?v=20261013-1"' in app
     assert "renderNextSteps" in app
     assert "turn.next_steps" in app
     assert "renderInvestigationSteps" in app
@@ -37,6 +38,19 @@ def test_frontend_nginx_configuration_serves_es_module_mime_types() -> None:
 
     assert "location ~ \\.mjs$" in nginx
     assert "default_type application/javascript;" in nginx
+    assert 'add_header Cache-Control "no-store";' in nginx
+    assert 'add_header Cache-Control "no-cache, must-revalidate";' in nginx
+
+
+def test_frontend_nginx_proxies_api_with_server_owned_demo_identity() -> None:
+    nginx = (FRONTEND_ROOT / "nginx.conf").read_text(encoding="utf-8")
+
+    assert "location ^~ /api/" in nginx
+    assert "proxy_pass http://agent-api:8000;" in nginx
+    assert (
+        'proxy_set_header Authorization "Bearer '
+        '${MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN}";' in nginx
+    )
 
 
 def test_frontend_workspace_uses_a_full_width_scrollable_conversation() -> None:
@@ -69,7 +83,9 @@ def test_frontend_http_transport_is_isolated_to_api_module() -> None:
     api = (FRONTEND_ROOT / "js" / "api.js").read_text(encoding="utf-8")
     app = (FRONTEND_ROOT / "js" / "app.js").read_text(encoding="utf-8")
 
-    assert 'const API_BASE_URL = "http://localhost:8000"' in api
+    assert 'const API_BASE_URL = ""' in api
+    assert "Authorization" not in api
+    assert "apiAccessToken" not in api
     assert "fetch(" in api
     assert "fetch(" not in app
     assert "createRun" in api

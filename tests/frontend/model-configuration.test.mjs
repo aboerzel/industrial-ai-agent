@@ -253,7 +253,7 @@ test("opens, loads, closes, and reopens the production model configuration dialo
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, options = {}) => {
-    const path = new URL(String(url)).pathname;
+    const path = new URL(String(url), "http://localhost").pathname;
     requests.push({ method: options.method ?? "GET", path });
     const payload = path.endsWith("/models") ? CATALOG
       : path.endsWith("/model-consumers") ? CONSUMERS

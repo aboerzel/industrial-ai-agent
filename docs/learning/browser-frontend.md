@@ -19,7 +19,8 @@ HTTP/JSON contract:
 
 ```text
 Browser frontend
-    -> FastAPI /api/v1
+    -> Nginx same-origin /api/ gateway
+    -> FastAPI /api/v1 with server-owned demo identity
     -> TroubleshootingRunService
     -> model routing and egress policy
     -> LangGraph
@@ -43,12 +44,15 @@ frontend/
     js/transcript-pdf.js
     js/markdown.js
     js/vendor/
+    nginx.conf
     package.json
 ```
 
-`js/api.js` is the only frontend module that knows the development API base URL, route
-paths, `fetch`, JSON parsing, and HTTP error handling. It provides `createRun(message)`
-and `getRun(runId)`. `js/app.js` owns DOM state and rendering only.
+`js/api.js` is the only frontend module that knows the same-origin API route paths,
+`fetch`, JSON parsing, and HTTP error handling. It provides `createRun(message)` and
+`getRun(runId)`. `js/app.js` owns DOM state and rendering only. `nginx.conf` forwards
+`/api/` to FastAPI and supplies the server-owned local demo credential; that credential
+never enters the static assets or browser runtime.
 `js/markdown.js` owns rendering of untrusted agent-answer Markdown only; it neither changes
 the API response nor any agent behavior.
 
@@ -71,20 +75,18 @@ persistence.
 
 ## Local Development
 
-Start the MCP Docker services and local FastAPI API, then serve the frontend from a
-separate origin:
+Start the Compose environment so the frontend gateway and its server-side demo identity
+are configured together:
 
 ```powershell
-docker compose up --build -d factory-mcp knowledge-mcp
-python -m industrial_ai_agent.infrastructure.agent_api
-python -m http.server 8080 --directory frontend
+docker compose up --build -d
 ```
 
-Open `http://localhost:8080` or `http://127.0.0.1:8080`. The default FastAPI entry
-point permits exactly these two loopback development origins through CORS. Set
-`AGENT_FRONTEND_ORIGIN` when changing the local frontend origin; that explicit setting
-replaces the local-demo defaults. Do not use a CORS wildcard; deployment-specific
-production origins need an explicit security design.
+Open `http://localhost:8080` or `http://127.0.0.1:8080`. Browser API requests use this
+same origin and are forwarded by Nginx. Port 8000 remains available on loopback for API
+documentation and explicit authenticated development clients, but the shipped browser UI
+does not call it directly. Do not use a CORS wildcard; deployment-specific production
+origins and authentication require an explicit security design.
 
 ## Run Lifecycle and Security
 
@@ -128,9 +130,11 @@ telemetry, model routing, or the agent loop.
 When a response is `waiting_for_approval`, the UI renders the action, summary,
 arguments, run ID, and status. It disables both decision buttons before calling the
 resume API through `frontend/js/api.js`, so a double click cannot issue a second
-browser action. The API client sends the operator-entered bearer token in the
-`Authorization` header and retains it only in memory. The server derives the maximum
-clearance and roles from that token; the selector can only request a lower or equal
-working clearance. The browser still cannot set classification, profile, provider, MCP
-server, or egress policy. Streaming and production-grade federated authentication remain
-future work.
+browser action. Browser requests remain same-origin and contain no bearer token. The local
+Nginx frontend gateway injects its server-configured restricted demo identity before
+forwarding `/api/` requests to the Agent API. The API still derives maximum clearance and
+roles from that credential, while the selector requests a lower or equal working
+clearance. This loopback-only identity represents the trusted local demo operator; a
+multi-user deployment requires federated authentication instead of this demo gateway.
+The browser still cannot set classification, profile, provider, MCP server, or egress
+policy. Streaming and production-grade federated authentication remain future work.

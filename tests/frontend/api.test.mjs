@@ -9,7 +9,6 @@ import {
   getInvestigation,
   resumeRun,
   saveModelAssignment,
-  setApiAccessToken,
 } from "../../frontend/js/api.js";
 
 const RUN_ID = "0ca96c57-66f6-4e12-b151-6f7f6ef9c9f8";
@@ -479,7 +478,7 @@ test("accepts a current HTTP error envelope with failure origin", async () => {
   );
 });
 
-test("downloads persisted investigation PDFs with bearer authorization", async () => {
+test("downloads persisted investigation PDFs through the same-origin API gateway", async () => {
   const originalFetch = globalThis.fetch;
   const originalDocument = globalThis.document;
   const originalUrl = globalThis.URL;
@@ -487,7 +486,7 @@ test("downloads persisted investigation PDFs with bearer authorization", async (
   let requestedUrl = null;
   globalThis.fetch = async (url, options) => {
     requestedUrl = url;
-    assert.equal(options.headers.Authorization, "Bearer pdf-token");
+    assert.equal(options.headers.Authorization, undefined);
     return new Response("pdf", {
       status: 200,
       headers: { "Content-Disposition": 'attachment; filename="investigation.pdf"' },
@@ -504,11 +503,9 @@ test("downloads persisted investigation PDFs with bearer authorization", async (
     createObjectURL: () => "blob:pdf",
     revokeObjectURL() {},
   };
-  setApiAccessToken("pdf-token");
   try {
     await downloadInvestigationPdf(RUN_ID, "CONFIDENTIAL");
   } finally {
-    setApiAccessToken("");
     globalThis.fetch = originalFetch;
     globalThis.document = originalDocument;
     globalThis.URL = originalUrl;
@@ -516,7 +513,7 @@ test("downloads persisted investigation PDFs with bearer authorization", async (
 
   assert.equal(
     requestedUrl,
-    `http://localhost:8000/api/v1/investigations/${RUN_ID}/pdf?user_clearance=CONFIDENTIAL`,
+    `/api/v1/investigations/${RUN_ID}/pdf?user_clearance=CONFIDENTIAL`,
   );
   assert.equal(clicked, true);
 });
@@ -524,7 +521,7 @@ test("downloads persisted investigation PDFs with bearer authorization", async (
 test("submits the current demo clearance with a resume decision", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
-    assert.equal(url, `http://localhost:8000/api/v1/runs/${RUN_ID}/resume`);
+    assert.equal(url, `/api/v1/runs/${RUN_ID}/resume`);
     assert.equal(options.method, "POST");
     assert.deepEqual(JSON.parse(options.body), {
       decision: "approve",
@@ -548,9 +545,9 @@ test("submits the current demo clearance with a resume decision", async () => {
 test("persists model configuration with stable model_id values", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
-    assert.equal(url, "http://localhost:8000/api/v1/model-assignments");
+    assert.equal(url, "/api/v1/model-assignments");
     assert.equal(options.method, "PUT");
-    assert.equal(options.headers.Authorization, "Bearer model-admin-token");
+    assert.equal(options.headers.Authorization, undefined);
     assert.deepEqual(JSON.parse(options.body), {
       consumer_id: "agent",
       data_classification: "RESTRICTED",
@@ -563,12 +560,10 @@ test("persists model configuration with stable model_id values", async () => {
       selection_mode: "MANUAL", selection_policy: null,
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
-  setApiAccessToken("model-admin-token");
   try {
     const saved = await saveModelAssignment("agent", "RESTRICTED", "local_quality");
     assert.equal(saved.model_id, "local_quality");
   } finally {
-    setApiAccessToken("");
     globalThis.fetch = originalFetch;
   }
 });
@@ -621,7 +616,7 @@ async function requestPayload(payload) {
 async function requestError(path, payload, request, status = 404) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
-    assert.equal(url, `http://localhost:8000${path}`);
+    assert.equal(url, path);
     return new Response(JSON.stringify(payload), {
       status,
       headers: { "Content-Type": "application/json" },

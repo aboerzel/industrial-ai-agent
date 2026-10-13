@@ -171,16 +171,21 @@ services:
   frontend:
     image: nginx:1.29-alpine
     restart: unless-stopped
+    environment:
+      MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN: ${MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN:?Set MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN in .env}
     ports:
       - "127.0.0.1:8080:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
-      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/nginx.conf:/etc/nginx/templates/default.conf.template:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/"]
       interval: 10s
       timeout: 3s
       retries: 3
+    depends_on:
+      agent-api:
+        condition: service_healthy
 
   observability-mcp:
     build:
