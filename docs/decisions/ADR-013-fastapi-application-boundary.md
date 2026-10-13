@@ -217,6 +217,33 @@ Resume checks authorization before `claim_resume`, then continues the same check
 thread with the persisted model and classification binding. The local demo uses opaque
 bearer tokens; production-grade federated identity remains future work.
 
+### Authenticated browser demo gateway
+
+The browser gateway must authenticate a client before translating its identity to an
+API bearer token. Nginx HTTP Basic authentication checks an externally mounted password
+file outside the document root. Only authenticated, explicitly mapped demo usernames
+receive their corresponding server-held token: `public`, `internal`, `confidential`,
+and `restricted` resolve to investigation principals with the matching maximum
+clearance and only `demo-user`. `model-admin` resolves to a separate API-only token and
+role at PUBLIC clearance. Normal investigations do not require model administration.
+Unmapped users receive no API credential. Client headers cannot select this mapping.
+
+FastAPI remains the authority for the token's clearance ceiling and roles. A requested
+`user_clearance` can only narrow the authenticated ceiling; elevation is rejected.
+The gateway must enforce the same authority as direct API use of the corresponding
+token. Anonymous and invalid-password requests are rejected before proxying. Gateway
+health checks are a dedicated process-only exception and never proxy to the API.
+
+This reuses the existing API principals and Nginx rather than introducing sessions,
+OAuth/OIDC, or a second authorization system. Passing privileged tokens into JavaScript,
+trusting arbitrary identity headers, and an anonymous privileged gateway are rejected.
+Passwords are provisioned separately from bearer tokens; neither password files nor
+rendered gateway configuration belong in the served assets. No credential is returned
+in HTML, JavaScript, API errors, or logs. Basic credentials are managed by the browser's
+native authentication mechanism, not application storage. This is a loopback-only
+shared-secret demo with browser credential caching, no application logout or user
+lifecycle, and no TLS. Remote/production identity requires a separate design.
+
 The deployed runtime uses Factory and Knowledge MCP for general troubleshooting and
 Hardware MCP for the bounded recovery profile. Runtime and Observability MCP are
 diagnostic/development services; RCA MCP is a read-only development consumer surface and

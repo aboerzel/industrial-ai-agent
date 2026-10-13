@@ -8,6 +8,7 @@ __pycache__/
 .coverage
 htmlcov/
 .env
+auth/
 *.de.md
 dist/
 build/

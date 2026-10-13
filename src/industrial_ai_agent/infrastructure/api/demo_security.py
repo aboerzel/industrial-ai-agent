@@ -63,12 +63,12 @@ class BearerTokenSecurityContextResolver:
             (
                 "MCP_INDUSTRIAL_AGENT_TOKEN",
                 DataClassification.CONFIDENTIAL,
-                ("demo-user", "model-admin"),
+                ("demo-user",),
             ),
             (
                 "MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN",
                 DataClassification.RESTRICTED,
-                ("demo-user", "model-admin"),
+                ("demo-user",),
             ),
         )
         principals = tuple(
@@ -84,6 +84,18 @@ class BearerTokenSecurityContextResolver:
             for variable, classification, roles in specifications
             if (value := environment.get(variable, "").strip())
         )
+        if admin_token := environment.get("AGENT_API_MODEL_ADMIN_TOKEN", "").strip():
+            principals += (
+                ApiPrincipal(
+                    token=admin_token,
+                    security_context=SecurityContext(
+                        subject_id="local-api-model-admin",
+                        roles=("model-admin",),
+                        clearance=DataClassification.PUBLIC,
+                        authenticated=True,
+                    ),
+                ),
+            )
         if not principals:
             raise RuntimeError("At least one API bearer token must be configured")
         return cls(principals)

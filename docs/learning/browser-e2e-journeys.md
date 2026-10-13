@@ -8,6 +8,15 @@ and PDF/document interactions.
 
 Run it after the local stack is healthy:
 
+Authentication migration note: the runner currently assumes an anonymously privileged
+gateway. That assumption is no longer valid. Before the next real-model milestone,
+configure Playwright browser contexts with explicit HTTP Basic demo credentials for
+the required investigation identity, and use a separate model-admin context for
+configuration. The clearance selector does not select identity. Do not put server bearer
+tokens into page JavaScript or storage. The runner is deliberately not migrated or run
+as part of Security Finding 1; the isolated gateway security integration test has no
+provider calls.
+
 ```text
 cd frontend
 npm run test:e2e

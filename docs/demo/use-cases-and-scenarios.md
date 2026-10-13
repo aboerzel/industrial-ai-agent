@@ -2,14 +2,19 @@
 
 This catalog is the manual acceptance script for synthetic `FACTORY-DEMO-01`. Submit
 normal questions in the Web UI or to `POST /api/v1/runs`; use authenticated MCP for
-direct tool and RCA checks. Enter one configured opaque bearer token in the UI access
-token field. The server maps that token to a principal with a maximum clearance. The UI
+direct tool and RCA checks. Sign in through the browser's native HTTP Basic prompt with
+an explicitly provisioned demo username/password. Nginx maps only an authenticated user
+to a server-held API token; no UI access-token field exists. The server resolves that
+token to a principal with a maximum clearance. The UI
 selector may request `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, or `RESTRICTED`, but only at or
 below that authenticated maximum; attempted elevation fails before any data access.
-For the local demo, use `MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN` for PUBLIC,
-`MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN` for INTERNAL, `MCP_INDUSTRIAL_AGENT_TOKEN` for
-CONFIDENTIAL plus model administration, or `MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN` for
-RESTRICTED plus model administration. Never copy these values into source or URLs.
+Use the `public`, `internal`, `confidential`, or `restricted` browser login for the
+corresponding ceiling. These identities have no `model-admin`. Model Configuration
+requires a separate `model-admin` browser session backed by
+`AGENT_API_MODEL_ADMIN_TOKEN` at PUBLIC clearance. Direct API callers use the
+corresponding bearer tokens; never copy tokens into UI code, source, or URLs.
+See [browser setup](../learning/browser-frontend.md#local-development). This is a
+loopback-only shared-secret demo, not production identity.
 
 Visibility follows `user clearance >= data classification`. Factory and knowledge lists
 are RLS-filtered before names, relationships, or classifications are returned. They
@@ -119,7 +124,7 @@ For UI/API acceptance inspect only run classification, selected tool names, and 
 answer. For the small live verification inspect Tempo/Langfuse metadata only:
 classification, model profile/provider/execution zone, tool names, token/cost provenance,
 and privacy boundaries. Do not print prompts, responses, tool payloads, retrieved
-content, or credentials. Use the existing message field, in-memory access-token field,
+content, or credentials. Use native browser authentication, the existing message field,
 and clearance selector.
 
 An explicitly selected response language is authoritative regardless of the language of

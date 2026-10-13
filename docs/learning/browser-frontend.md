@@ -19,8 +19,8 @@ HTTP/JSON contract:
 
 ```text
 Browser frontend
-    -> Nginx same-origin /api/ gateway
-    -> FastAPI /api/v1 with server-owned demo identity
+    -> Nginx same-origin /api/ gateway: verify demo username/password
+    -> FastAPI /api/v1: mapped API token -> principal ceiling and roles
     -> TroubleshootingRunService
     -> model routing and egress policy
     -> LangGraph
@@ -75,8 +75,25 @@ persistence.
 
 ## Local Development
 
-Start the Compose environment so the frontend gateway and its server-side demo identity
-are configured together:
+Provision distinct browser passwords before starting Compose. Set `FRONTEND_AUTH_FILE`
+in `.env` (default `./auth/frontend.htpasswd`) and a unique
+`AGENT_API_MODEL_ADMIN_TOKEN`; keep the latter separate from every investigation/MCP
+token. The password file is Git-ignored under `auth/`, mounted read-only outside the
+web root, and never included in an image. Use the Apache `htpasswd` utility (install
+locally if absent); these commands prompt without putting passwords in shell history:
+
+```text
+htpasswd -cB auth/frontend.htpasswd public
+htpasswd -B auth/frontend.htpasswd internal
+htpasswd -B auth/frontend.htpasswd confidential
+htpasswd -B auth/frontend.htpasswd restricted
+htpasswd -B auth/frontend.htpasswd model-admin
+```
+
+Create the `auth` directory first. Use `-c` only for the first user: it replaces the file.
+No default browser password is shipped. Missing credentials fail closed; Compose refuses
+to silently create a missing password file. Choose different strong passwords for each
+user, never API bearer tokens as passwords. Then start Compose:
 
 ```powershell
 docker compose up --build -d
@@ -87,6 +104,31 @@ same origin and are forwarded by Nginx. Port 8000 remains available on loopback 
 documentation and explicit authenticated development clients, but the shipped browser UI
 does not call it directly. Do not use a CORS wildcard; deployment-specific production
 origins and authentication require an explicit security design.
+
+The native browser login authenticates these fixed demo identities:
+
+| Browser username | API token variable (server only) | Maximum clearance | Roles |
+| --- | --- | --- | --- |
+| `public` | `MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN` | PUBLIC | `demo-user` |
+| `internal` | `MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN` | INTERNAL | `demo-user` |
+| `confidential` | `MCP_INDUSTRIAL_AGENT_TOKEN` | CONFIDENTIAL | `demo-user` |
+| `restricted` | `MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN` | RESTRICTED | `demo-user` |
+| `model-admin` | `AGENT_API_MODEL_ADMIN_TOKEN` | PUBLIC | `model-admin` |
+
+Use a separate browser profile/private session to change identity; the application has
+no session or logout and browsers may cache Basic credentials. Normal investigation
+users receive an authorization error when opening Model Configuration. Sign in explicitly
+as `model-admin` in a separate session for that dialog. This administrator can configure
+all model assignments but cannot read protected investigations. Direct API clients use
+the corresponding bearer token and receive the same authority.
+
+This is local demo authentication, not production identity: HTTP has no TLS, passwords
+are shared demo credentials, and there is no user lifecycle, federated identity, or
+application session management. Keep loopback binding; it does not authenticate users.
+Only gateway `/health` is anonymously reachable. Gateway access/error logging is disabled
+to avoid recording credentials, including malicious usernames; diagnostic visibility is
+therefore limited. Do not enable credential-bearing log formats or publish the password
+file/rendered configuration.
 
 ## Run Lifecycle and Security
 
@@ -131,10 +173,10 @@ When a response is `waiting_for_approval`, the UI renders the action, summary,
 arguments, run ID, and status. It disables both decision buttons before calling the
 resume API through `frontend/js/api.js`, so a double click cannot issue a second
 browser action. Browser requests remain same-origin and contain no bearer token. The local
-Nginx frontend gateway injects its server-configured restricted demo identity before
-forwarding `/api/` requests to the Agent API. The API still derives maximum clearance and
-roles from that credential, while the selector requests a lower or equal working
-clearance. This loopback-only identity represents the trusted local demo operator; a
-multi-user deployment requires federated authentication instead of this demo gateway.
+Nginx frontend gateway validates the user's password before forwarding `/api/` with
+the mapped server-held API token. Anonymous clients are denied; arbitrary identity
+headers are ignored. The API derives maximum clearance and roles from that token,
+while the selector requests a lower or equal working clearance. Requests above the
+principal ceiling are denied, never promoted. Model administration requires its own login.
 The browser still cannot set classification, profile, provider, MCP server, or egress
 policy. Streaming and production-grade federated authentication remain future work.

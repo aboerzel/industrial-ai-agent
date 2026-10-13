@@ -40,9 +40,12 @@ within an approved local model environment. The other levels may go to an extern
 only when that configured model is explicitly approved for the relevant protection level.
 Unknown free-form demo requests are conservatively `RESTRICTED`; unknown sensitivity
 never authorizes external model processing.
-The local API authenticates the browser with an opaque bearer token. Its server-owned
+Nginx authenticates the browser's demo username/password before translating it to a
+server-held API bearer token. Anonymous clients receive no authority. The server-owned
 principal defines the maximum clearance; the UI selector can only narrow it. Each
 request-specific context is applied to PostgreSQL RLS before records are returned.
+The four investigation users have no `model-admin`; Model Configuration requires its
+separate login/token. This shared-secret local demo has no production identity or TLS.
 
 ### Cost and efficiency
 

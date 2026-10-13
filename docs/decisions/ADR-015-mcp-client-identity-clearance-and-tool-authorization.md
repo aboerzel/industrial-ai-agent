@@ -140,6 +140,8 @@ token resolves to a fixed maximum clearance and roles. The browser's `user_clear
 value may only narrow that maximum and cannot establish or elevate identity. Each HTTP
 request creates its run-store adapter from the resulting `SecurityContext`, so
 transaction-local PostgreSQL RLS is authoritative before any run record reaches Python.
-Model-configuration reads and writes additionally require `model-admin`. The local UI
-keeps its token in memory only. MCP identity, permissions, RLS, and model egress remain
+Model-configuration reads and writes additionally require the separate `model-admin`
+principal. Nginx authenticates a demo username/password before mapping it to an API token;
+the UI never receives that token. Investigation principals have no model-admin role.
+See ADR-013 for this browser demo contract. MCP identity, permissions, RLS, and model egress remain
 independently deterministic.

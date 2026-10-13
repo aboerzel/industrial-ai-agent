@@ -43,7 +43,7 @@ For the full industrial-value and scope statement, see [Capabilities and Industr
 flowchart LR
     subgraph Clients["Users and authorized clients"]
         User["Operator / Engineer / Maintenance"] --> UI["Web UI"]
-        UI --> Gateway["Nginx same-origin gateway"]
+        UI --> Gateway["Nginx same-origin gateway<br/>authenticated demo user"]
         Gateway --> API["FastAPI API"]
         Codex["Codex / authorized AI clients"]
     end
@@ -331,13 +331,18 @@ Grafana keeps anonymous local dashboard access as a Viewer, not an Admin. Do not
 credentials to the repository. The frontend is a separate static client and communicates
 with the FastAPI JSON API only through its same-origin Nginx gateway.
 
-The local Nginx gateway authenticates browser requests with an environment-configured
-opaque bearer token that never enters browser code or storage. The token resolves to a
+The local Nginx gateway requires a distinct demo username/password via native browser
+HTTP Basic authentication. Provision the external password file before startup as
+described in the [browser setup guide](docs/learning/browser-frontend.md#local-development).
+Only after authentication does Nginx map that user to a server-held opaque API token;
+anonymous clients receive no authority. The token resolves to a
 server-owned maximum clearance; the UI selector may only narrow that clearance for a
 request and can never raise it. Every run-store request receives the resulting
 `SecurityContext`, and
 PostgreSQL RLS remains the authoritative visibility boundary. Model-configuration routes
-additionally require the server-owned `model-admin` role. Run classification, MCP
+require the separate `model-admin` login and API token. Investigation users have no
+`model-admin` role. This loopback-only shared-secret demo has no application logout,
+federated identity, or TLS; loopback binding is not user authorization. Run classification, MCP
 permissions, and model egress remain separate deterministic checks. Unknown free text is
 conservatively `RESTRICTED`: unknown sensitivity never authorizes external model
 processing.

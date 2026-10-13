@@ -838,6 +838,14 @@ agent exclusively through the public HTTP API. It must not import or depend on L
 LangChain, MCP, Domain capabilities, repositories, model routing, or provider-specific
 code.
 
+The browser gateway must authenticate an explicit demo username/password before mapping
+that verified identity to a server-held API token. Never inject a privileged API token
+for anonymous clients or trust client identity headers. Investigation principals have
+fixed clearance ceilings and no `model-admin`; model administration requires its separate
+API-only principal/token. `user_clearance` may only narrow authenticated authority.
+Password files and rendered gateway configuration must remain outside served assets.
+See ADR-013 for the local demo authentication contract and production limitations.
+
 ## Git
 
 Keep commits focused.

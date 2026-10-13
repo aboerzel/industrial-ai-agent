@@ -159,6 +159,16 @@ def test_frontend_is_a_loopback_only_static_service() -> None:
         frontend["environment"]["MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN"]
         == services["agent-api"]["environment"]["MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN"]
     )
+    for variable in (
+        "MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN",
+        "MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN",
+        "MCP_INDUSTRIAL_AGENT_TOKEN",
+        "AGENT_API_MODEL_ADMIN_TOKEN",
+    ):
+        assert (
+            frontend["environment"][variable]
+            == services["agent-api"]["environment"][variable]
+        )
     assert frontend["depends_on"]["agent-api"]["condition"] == "service_healthy"
     assert _published_ports(frontend) == (
         {
@@ -172,8 +182,22 @@ def test_frontend_is_a_loopback_only_static_service() -> None:
     assert frontend["volumes"] == [
         {
             "type": "bind",
-            "source": str(PROJECT_ROOT / "frontend"),
-            "target": "/usr/share/nginx/html",
+            "source": str(PROJECT_ROOT / "frontend" / "index.html"),
+            "target": "/usr/share/nginx/html/index.html",
+            "read_only": True,
+            "bind": {},
+        },
+        {
+            "type": "bind",
+            "source": str(PROJECT_ROOT / "frontend" / "js"),
+            "target": "/usr/share/nginx/html/js",
+            "read_only": True,
+            "bind": {},
+        },
+        {
+            "type": "bind",
+            "source": str(PROJECT_ROOT / "frontend" / "css"),
+            "target": "/usr/share/nginx/html/css",
             "read_only": True,
             "bind": {},
         },
@@ -184,6 +208,17 @@ def test_frontend_is_a_loopback_only_static_service() -> None:
             "read_only": True,
             "bind": {},
         },
+        {
+            "type": "bind",
+            "source": str(PROJECT_ROOT / "auth" / "frontend.htpasswd"),
+            "target": "/etc/nginx/auth/frontend.htpasswd",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+    ]
+    assert frontend["healthcheck"]["test"] == [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1/health",
     ]
 
 

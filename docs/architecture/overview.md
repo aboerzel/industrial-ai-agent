@@ -11,7 +11,7 @@ flowchart LR
     end
 
     subgraph Application["Industrial AI Agent"]
-        Gateway["Nginx frontend gateway<br/>server-owned demo identity"]
+        Gateway["Nginx frontend gateway<br/>authenticated demo user -> API token"]
         API["FastAPI"]
         Run["Run service and durable run state"]
         Agent["LangGraph troubleshooting workflow"]
@@ -428,7 +428,8 @@ requires their agent-authorized capabilities. Compose uses this dependency-aware
 operational readiness endpoint for the Agent API Docker healthcheck. `GET /api/v1/runs/{run_id}` reads the durable application
 record. The separate static `frontend/` browser client communicates only with this public
 HTTP/JSON API through its same-origin Nginx gateway. Compose serves that gateway on
-loopback at `http://localhost:8080`; it injects a server-owned local demo credential and
+loopback at `http://localhost:8080`; it authenticates a demo username/password before
+mapping that user to a server-owned API token and
 forwards `/api/` without exposing the credential to browser code or storage. The local API
 entry point also retains explicit CORS configuration for authenticated development clients
 and does not serve frontend assets. The API has no CORS wildcard, TLS, rate limiting, or
@@ -437,13 +438,22 @@ streaming endpoint. Its explicit
 `reject` decision contract for a persisted pending action.
 Swagger UI at `/docs` remains the generated API contract explorer.
 
-The Nginx gateway sends an opaque bearer token that the FastAPI adapter maps to a
+Nginx validates HTTP Basic credentials against an external password file outside the
+document root. Anonymous and invalid-password clients are denied before proxying;
+unmapped users receive no API token. The gateway sends only the mapped opaque bearer
+token that the FastAPI adapter maps to a
 server-owned principal, maximum clearance, and roles. The browser never receives that
 token. The clearance selector may narrow the authenticated maximum for a request but can
 never raise it. FastAPI constructs the run-store adapter with that request-specific
 `SecurityContext`; its transaction-local `app.clearance` makes PostgreSQL RLS the first
 and authoritative record-visibility boundary. Python visibility checks remain
-defense-in-depth only. Model-configuration endpoints require `model-admin`. These API
+defense-in-depth only. The four investigation logins (`public`, `internal`,
+`confidential`, `restricted`) have fixed corresponding ceilings and no `model-admin`.
+Model-configuration endpoints require the separate `model-admin` identity and API-only
+token at PUBLIC clearance. The gateway never increases authority relative to direct
+API use of the corresponding token. Native browser Basic credential caching is the
+only browser identity mechanism; there is no application session/logout, federated
+identity, or TLS. The unauthenticated gateway `/health` is liveness-only. These API
 roles do not set run classification, MCP identity or permissions, or model-egress
 eligibility. Unknown free text without a documented demo identifier is conservatively
 resolved as `RESTRICTED_TROUBLESHOOTING`: unknown sensitivity never authorizes
@@ -483,8 +493,9 @@ sequenceDiagram
     participant Telemetry as OpenTelemetry
 
     User->>UI: Troubleshooting request
-    UI->>Gateway: Same-origin request + requested clearance
-    Gateway->>API: Server-owned bearer token + request
+    UI->>Gateway: Basic credentials + request + requested clearance
+    Gateway->>Gateway: Verify password; reject anonymous/invalid credentials
+    Gateway->>API: Authenticated user's mapped bearer token + request
     API->>API: Authenticate principal; reject clearance elevation
     API->>Run: Create request-scoped RLS store and durable run
     Run->>Policy: Resolve classification and run policy

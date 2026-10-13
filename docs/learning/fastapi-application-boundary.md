@@ -10,11 +10,18 @@ Swagger UI is at `/docs` and OpenAPI is at `/openapi.json`.
 
 The browser UI in `frontend/` is a separate static HTTP/JSON client. It neither imports
 backend code nor selects a provider, model, MCP identity, classification, or permission.
-The local API authenticates the browser with an opaque bearer token configured only on
-the server. The verified token establishes a maximum clearance and roles.
+Nginx authenticates a demo username/password using native browser HTTP Basic login
+before translating the user to a server-held opaque API token. Anonymous clients receive
+no token or authority. The API verifies that token to establish maximum clearance and
+roles; direct API clients use the same corresponding bearer token.
 `user_clearance` may narrow that maximum for one request but can never raise it. The API
 creates its PostgreSQL run-store adapter from that request-specific `SecurityContext`, so
 RLS—not a later Python filter—is the authoritative record-visibility boundary.
+The four investigation identities have no `model-admin`; Model Configuration requires
+the separate API-only `AGENT_API_MODEL_ADMIN_TOKEN` / `model-admin` browser login at
+PUBLIC clearance. This is a loopback-only shared-secret demo without TLS, application
+sessions/logout, or federated production identity. See the
+[browser setup guide](browser-frontend.md#local-development) for password provisioning.
 
 ## Current API Surface
 
