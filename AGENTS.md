@@ -209,9 +209,12 @@ See `docs/decisions/ADR-002-provider-and-model-independent-llm-architecture.md` 
 
 Model Catalog, persistent assignments, consumer capability requirements, and security
 authorization are separate concerns. Assignment is configuration and never grants
-authorization. Resolution selects exactly the assigned stable model ID; do not rank or
-automatically fall back because of availability, capability, cost, latency, rate limits,
-or provider failures. Display names are presentation-only and never identity.
+authorization. `MANUAL` resolution selects exactly the assigned stable model ID.
+An explicitly persisted `AUTO` assignment selects before invocation using
+`QUALITY_FIRST` or `COST_FIRST`, after static credential availability, call-level
+capability, and ADR-009 security hard filters. Never rank a security-denied candidate.
+Provider failures, rate limits, timeouts, or connection errors must not trigger
+reselection or fallback. Display names are presentation-only and never identity.
 
 Data classification and model egress are deterministic Application policy boundaries,
 never LLM judgments. Apply security eligibility after assignment/capability resolution and a final egress check
@@ -758,7 +761,8 @@ substitute for explaining architectural rationale in an ADR.
 
 ### Current Architecture Decisions
 
-The currently accepted architecture decisions include:
+The architecture decision history includes the following entries. Check each ADR's
+status and later refinements; superseded mechanisms are not current requirements:
 
 ```text
 ADR-001  Project foundation
@@ -768,7 +772,7 @@ ADR-004  Agent orchestration strategy
 ADR-005  Testing and evaluation strategy
 ADR-006  Knowledge retrieval and RAG architecture
 ADR-007  Embedding model abstraction
-ADR-008  Task-level model routing
+ADR-008  Task-level model routing (superseded by ADR-019)
 ADR-009  Data classification and model egress policy
 ADR-010  LangGraph and LangChain orchestration migration
 ADR-011  Agent persistence and human-in-the-loop

@@ -111,8 +111,11 @@ action never executes. Hardware recovery additionally performs deterministic fre
 precondition checks and post-action verification through `ClosedLoopRecoveryService`.
 
 The demo records the approval clearance used for attribution, not a real authenticated
-user identity. This is deliberately not production approval attribution. Authentication,
-identity-bound authorization, TLS, and rate limiting remain production integration work.
+user identity. This is deliberately not production approval attribution. Current opaque
+demo-token authentication and classification authorization are already implemented;
+production identity attribution, TLS, and rate limiting remain integration work. The
+executing capability additionally requires the persisted action/profile/target-bound
+single-use approval, shared by graph and direct MCP calls (ADR-011).
 
 ## User Severity
 

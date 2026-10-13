@@ -29,7 +29,7 @@ equivalence.
 * the run status
 * an optional final answer
 * an optional pending action and its approval result
-* the selected profile name and explicit run classification for resumable runs
+* the selected stable model ID and explicit run classification for resumable runs
 
 Domain entities and repositories do not become graph state. A checkpointed local/test
 run additionally uses LangGraph's native `InMemorySaver`; it is not durable persistence.
@@ -77,8 +77,9 @@ small `LLMClientChatModel` Infrastructure adapter translates those contracts to 
 existing provider-independent `LLMClient` request and response models. It does not
 create a provider, select a profile, or define security policy.
 
-The full LangChain application framework is not adopted. Structured output may be used
-later when an implemented capability needs it.
+The full LangChain application framework is not adopted. The current final-output path
+uses a separate bounded structured normalization call; ADR-019 checks capabilities per
+invocation rather than combining Tool Calling and Structured Output in one request.
 
 ## What Remains Project-Owned
 
@@ -124,26 +125,29 @@ code before `interrupt()` is side-effect-free, and the Factory-MCP call is in a 
 post-approval node. The MCP request receives the original model tool-call ID as its
 idempotency key, and PostgreSQL protects against replay.
 
-The checkpoint retains the already selected profile name and explicit classification.
+The checkpoint retains the already selected stable model ID and explicit classification.
 Resume does not reroute, change classification, or introduce a cloud fallback. The
 same final `EgressCheckedLLMClient` remains the model boundary.
 
-## Manual Loop Compared with the Graph
+## Historical Manual Loop Compared with the Graph
 
-The manual path expresses progression with a Python loop and explicit message-list
+The removed manual path expressed progression with a Python loop and explicit message-list
 updates. The graph path represents progression as typed state, nodes, edges, and a
-conditional route. Their internal message structures differ, so equivalence tests
-compare observable behavior: status, executed tools and arguments, tool count, and final
+conditional route. Their internal message structures differed, so migration tests
+compared observable behavior: status, executed tools and arguments, tool count, and final
 answer presence.
 
-The same first-decision and trajectory datasets run against both paths. Framework
+The same first-decision and trajectory datasets now run against the sole LangGraph MCP path. Framework
 migration does not justify changing their ground truth.
 
-## Deliberately Deferred
+## Current Execution Boundary
 
 The production graph discovers Factory and Knowledge MCP tools, normalizes a
 `create_maintenance_ticket` proposal, and pauses with `interrupt()` before its first
 side-effecting node. Resume uses the same checkpointed thread and an MCP request ID
-derived from the original model tool-call ID. PostgreSQL unique constraints protect
-replay. The former action-only graph and its direct capability injection have been
+derived from the original model tool-call ID. Before the side effect, the executing
+capability consumes the persisted single-use approval bound to run/action/targets and
+checks current clearance and action profile. Direct MCP calls reach the same guard;
+UI/graph approval is not sufficient by itself. Replay and concurrent claims deny.
+The former action-only graph and its direct capability injection have been
 removed; MCP-Fake and PostgreSQL integration tests cover the retained guarantees.

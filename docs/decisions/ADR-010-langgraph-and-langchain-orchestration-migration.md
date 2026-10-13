@@ -4,6 +4,11 @@
 
 Accepted
 
+The initial migration's three-call budget was subsequently extended to four for durable
+HITL in ADR-004/011 and retained by ADR-018. Persistence/HITL deferral and Model Profile
+references below describe the initial migration; ADR-011 and ADR-019 govern those
+current boundaries. The migration rationale is retained.
+
 ## Context
 
 ADR-004 deliberately introduced the troubleshooting loop as explicit Python. That
@@ -36,8 +41,10 @@ owned by the removed implementation.
 ADR-010 supersedes only ADR-004's choice to keep the orchestration mechanism entirely
 handwritten and its deferral of an agent framework. ADR-004's behavioral guarantees
 remain binding: one tool call per model decision, deterministic validation and dispatch,
-at most three executed tools, one final model decision after the third tool, and no
-execution of a requested fourth tool.
+the current `MAX_TOOL_CALLS` limit from `agent/agent_run.py`, one final model decision
+after that budget is exhausted, and no execution of a further requested tool. The
+current fixed budget is four successfully executed tools per run; it is not a deployment
+setting.
 
 ### LangGraph Responsibilities
 

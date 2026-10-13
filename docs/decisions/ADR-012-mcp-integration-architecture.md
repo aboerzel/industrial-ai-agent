@@ -8,7 +8,11 @@ The original decision is retained as history. Its initially deferred write and
 approval scope is now implemented for the bounded `create_maintenance_ticket` action
 and the S04 Hardware MCP reference-calibration flow. Both remain explicitly
 allowlisted, authorization- and HITL-gated capabilities; generalized write tooling,
-dynamic server selection, and MCP-based authorization policy remain out of scope.
+dynamic server selection, and a new MCP-specific authorization policy remain out of scope.
+ADR-015 now authenticates local HTTP MCP; the absence of authentication described in the
+original slice below is historical. Executing capabilities share ADR-011's authoritative
+persisted approval guard with direct MCP callers; the graph interrupt is not the sole
+execution boundary.
 
 ## Context
 
@@ -41,7 +45,8 @@ exposes these cohesive factory tools:
   orientation and a visible product's latest production state.
 * `get_product_history(product_id)` for historical production information.
 * `get_machine_status(station_id)` for the current state of a station.
-* `create_maintenance_ticket(station_id, summary, request_id)` for an approved,
+* `get_maintenance_ticket(ticket_id)` for a bounded visible ticket read.
+* `create_maintenance_ticket(station_id, summary, request_id, run_id)` for an approved,
   idempotent local maintenance action.
 
 `knowledge_mcp` exposes exactly `search_documentation(query, top_k=3)`. It delegates
@@ -155,8 +160,11 @@ types and `extra="forbid"`; their advertised schemas declare
 `additionalProperties: false`. The compatibility bridge accepts only those strict
 schemas and maps their limited primitive constraints into the LangChain Pydantic
 contract. `create_maintenance_ticket` is now a deliberately exposed write tool, but the
-MCP protocol annotation is only descriptive: the application's explicit tool policy and
-LangGraph approval interrupt are the enforcement points.
+MCP protocol annotation is only descriptive. The graph's tool policy and approval
+interrupt govern proposals; immediately before execution the capability additionally
+requires MCP permission, current resource clearance, persisted action/profile
+authorization, and a valid single-use approval bound to run, action ID, and targets.
+Direct MCP callers reach that same execution guard (ADR-011).
 
 * MCP becomes the standard external tool transport for deliberately exposed project
   capabilities.

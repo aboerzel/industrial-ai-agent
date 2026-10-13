@@ -4,6 +4,11 @@
 
 Accepted
 
+The original unauthenticated demo context below is historical. HTTP MCP now uses
+ADR-015 request-derived authenticated contexts; the browser/API uses ADR-013's current
+authentication refinement. Explicit stdio test composition may still inject its demo
+context. RLS and classification semantics remain binding in each composition.
+
 ## Context
 
 The initial Factory and Knowledge MCP services use synthetic in-memory repositories and
@@ -99,9 +104,17 @@ Docling performs local ingestion for PDF, DOCX, PPTX, XLSX, and image assets int
 normalized representation. The pipeline is explicit:
 
 ```text
-Document catalog -> file -> Docling -> normalized document -> chunking
-                 -> classification propagation -> retrieval index
+Authenticated identity -> server-side SecurityContext -> catalog query under PostgreSQL RLS
+    -> eligible catalog metadata -> checksum-verified local file -> Docling
+    -> normalized document -> classified chunks
+    -> embedding egress authorization -> approved local SDK call -> retrieval index
 ```
+
+The inherited authoritative chunk labels reach the provider boundary; batches retain
+their maximum. Query embeddings use conservative `RESTRICTED` independently of caller
+clearance when authoritative per-query classification is absent (ADR-019). A denied
+embedding call never reaches the SDK. Application eligibility checks supplement RLS
+before file parsing and do not replace the database boundary.
 
 Retrieval applies clearance filtering before BM25, semantic retrieval, RRF, and
 reranking. The agent continues to see only `search_documentation`; neither it nor the

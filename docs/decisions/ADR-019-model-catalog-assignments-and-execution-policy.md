@@ -8,6 +8,11 @@ This decision supersedes the routing-oriented Model Profile selection in ADR-002
 ADR-008. It does not supersede ADR-009: the existing data-classification and model-egress
 policy remains authoritative and unchanged.
 
+The later **Deterministic automatic selection** refinement defines the current `AUTO`
+mode alongside exact `MANUAL` assignment. Statements about exact model IDs below describe
+`MANUAL`; they do not prohibit that explicit pre-invocation `AUTO` policy. Provider-failure
+fallback is prohibited in both modes.
+
 ## Context
 
 The first model-selection implementation combined deployment configuration, model
@@ -43,8 +48,9 @@ consumer and permits future specialized slots such as `vision.vlm`,
 `vision.object_detection`, `vision.segmentation`, and `knowledge.embedding` without a
 closed enum.
 
-PostgreSQL stores one assignment per `(consumer_id, data_classification)` and refers only
-to a catalog `model_id`. Assignment is configuration and never grants authorization.
+PostgreSQL stores one assignment per `(consumer_id, data_classification)`: `MANUAL`
+refers to a catalog `model_id`, while `AUTO` stores its selection policy without a model ID.
+Assignment is configuration and never grants authorization.
 Consumer capability requirements are application policy separate from catalog metadata.
 They describe one concrete provider invocation, not the union of capabilities used
 somewhere in a workflow. The implemented `agent` uses `text` + `tool_calling` for each
@@ -62,7 +68,7 @@ provider invocation. For example, a model that supports Tool Calling and Structu
 Output individually but not together remains compatible with an agent run that performs
 one tool-decision request followed by one separate structured-output request.
 
-Migration seeds `agent` assignments only where the previous effective intent is unique:
+The original migration 0019 seeded `agent` assignments only where the previous effective intent was unique:
 PUBLIC, INTERNAL, and CONFIDENTIAL use `nvidia_quality`. It does not seed RESTRICTED,
 because the old router selected `local_fast` for restricted information and
 `local_quality` for restricted troubleshooting. Inventing one would silently change one
@@ -71,9 +77,18 @@ operator makes an explicit assignment. The existing RCA reasoning choice is unam
 so migration also seeds `rca.reasoning` with `nvidia_quality` through CONFIDENTIAL and
 `local_fast` for RESTRICTED.
 
+That paragraph records the original migration, not today's defaults. Migration 0022
+creates missing `MANUAL / local_quality` assignments for `agent` and `rca.reasoning` at
+all four classifications and normalizes only rows whose `updated_by` is `migration:0019`.
+Other existing operator choices are preserved. Application startup's
+`ModelConfigurationService.ensure_default_assignments()` creates only missing compatible
+local assignments and never rewrites an existing `MANUAL` or `AUTO` choice. The model's
+provider settings come from the catalog files; bootstrap choices are demo defaults, not
+architectural model requirements.
+
 ### Resolution and execution
 
-The central resolution sequence is:
+The `MANUAL` resolution sequence is:
 
 ```text
 trusted effective DataClassification + consumer_id
@@ -85,7 +100,7 @@ trusted effective DataClassification + consumer_id
     -> invocation
 ```
 
-Missing assignments, unavailable providers, missing credentials, capability mismatch,
+In `MANUAL` mode, missing assignments, unavailable providers, missing credentials, capability mismatch,
 rate limits, cost, and latency never select another model. No automatic fallback exists.
 Capability mismatch denies with `CAPABILITY_MISMATCH`. The existing egress policy denies
 with `EGRESS_DENIED`. Missing configuration denies with `MODEL_NOT_CONFIGURED`.
@@ -171,8 +186,10 @@ queryable as `EXECUTED`, `EGRESS_DENIED`, `CAPABILITY_MISMATCH`, and
 
 ### Keep ranked Model Profiles
 
-Rejected. Availability and cost/quality ranking make selection implicit and blur the
+Rejected as the legacy implicit profile router. Availability and cost/quality ranking make selection implicit and blur the
 difference between operator preference and authorization.
+Explicit persisted `AUTO` is distinct from that historical router and keeps
+configuration, capability, and authorization separate.
 
 ### Store display names in assignments
 
@@ -198,9 +215,10 @@ fails deterministically and observably before provider access.
 
 Model choice becomes explicit, persistent, stable, and auditable. Security remains a
 separate fail-closed boundary and is checked twice without duplicating policy rules.
-Deployments must run the PostgreSQL migration and explicitly configure ambiguous
-assignments. Provider availability no longer changes model identity, so a configured but
-unavailable provider produces an observable provider error rather than fallback.
+Deployments must run the PostgreSQL migrations and inspect persistent assignments.
+`MANUAL` preserves model identity regardless of availability; `AUTO` considers static
+availability before selecting. A selected provider's execution failure produces an
+observable error rather than fallback in either mode.
 
 Phase 2 can build UI controls over the narrow API without treating labels as identifiers.
 Phase 3 can map stable model IDs to current display names in Grafana without rewriting

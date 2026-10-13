@@ -111,7 +111,9 @@ by ascending `chunk_id`.
 ## Semantic Baseline
 
 ADR-007 introduces a separate inner `EmbeddingClient` port with
-`embed_query(text)` and `embed_documents(texts)`. It returns only numeric vectors and
+`embed_query(text, classification=...)` and `embed_documents(texts, classification=...)`.
+Both require explicit trusted `DataClassification`; missing labels fail closed.
+It returns only numeric vectors and
 does not expose LangChain, Ollama, or provider SDK types. The local
 `OllamaEmbeddingClient` adapts LangChain `OllamaEmbeddings` with the baseline model
 `qwen3-embedding:0.6b` at `http://localhost:11434`.
@@ -124,7 +126,13 @@ its top-k vector matches, then maps results back to the original chunks by stabl
 `chunk_id`. It preserves the existing content and provenance. The score is the vector
 store's similarity score and is not numerically comparable to lexical scores.
 
-This is a local-only baseline. No document text or embedding is sent to a cloud provider.
+This is a technically enforced local-only baseline. At the SDK boundary the adapter
+authorizes the actual destination and data classification under ADR-019, disables
+environment proxies and redirects, and denies unapproved targets before any provider call.
+Document batches retain the maximum authoritative chunk label. HTTP/stdio query text uses
+conservative `RESTRICTED` because caller clearance authorizes reads but cannot classify
+arbitrary text. Standalone composition must supply trusted query classification.
+No document text or embedding is sent to a cloud provider.
 `numpy` is a direct dependency because LangChain's `InMemoryVectorStore` uses it for its
 implemented similarity calculation. The store is recreated during explicit adapter
 construction; it is neither a persistent vector database nor a project-wide similarity

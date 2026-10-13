@@ -50,13 +50,19 @@ The demo registrations are:
 
 | Identity | Clearance | Permissions |
 |---|---|---|
-| `industrial-agent` | `CONFIDENTIAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME`, `CREATE_MAINTENANCE_TICKET` |
+| `industrial-agent` | `CONFIDENTIAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME`, `CREATE_MAINTENANCE_TICKET`, `READ_HARDWARE_STATUS`, `PREPARE_HARDWARE_RECOVERY`, `EXECUTE_HARDWARE_RECOVERY` |
 | `industrial-agent-internal` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE` |
 | `codex-development` | `INTERNAL` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME`, `READ_RCA` |
+| `industrial-agent-public` (when configured) | `PUBLIC` | `READ_FACTORY`, `READ_KNOWLEDGE`, `READ_OBSERVABILITY`, `READ_AGENT_RUNTIME` |
+| `industrial-agent-restricted` (when configured) | `RESTRICTED` | Same capability permissions as `industrial-agent`; classification visibility uses RESTRICTED clearance |
 
-MCP permission authorizes a client to invoke a tool. It does not replace the Industrial
-Agent's `ToolPolicy` or LangGraph approval interrupt: maintenance-ticket execution still
-requires an explicit approved resume after the model proposes the action.
+MCP permission grants access to a capability, never all resources or protected execution.
+Run-scoped Runtime/Observability/RCA reads additionally require authoritative run
+visibility before telemetry access; unknown and inaccessible references share neutral
+results. Genuine service health remains service-scoped. Protected writes require the
+same persisted, action/profile/target-bound, single-use approval guard at the executing
+capability for direct MCP calls and graph resumes (ADR-011). The graph's interrupt
+remains the normal approval UX, but MCP permission alone cannot execute the action.
 
 W3C `traceparent` and `tracestate` are observability metadata only. They, baggage, and
 all other telemetry headers are excluded from identity resolution, clearance, permissions,

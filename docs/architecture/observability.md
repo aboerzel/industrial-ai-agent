@@ -265,7 +265,7 @@ default, so it is intentionally not installed on the engine in this slice. Expli
 run-store and service spans provide persistence timing without that leak risk.
 
 Telemetry is optional: `OTEL_ENABLED=false` leaves business execution usable if a
-Collector is unavailable. All three Compose application services set it to `true` and
+Collector is unavailable. The instrumented Compose application services set it to `true` and
 send OTLP to the Collector. OTel does not replace model-egress enforcement, MCP
 authorization, RLS, or human approval.
 

@@ -19,7 +19,8 @@ steps, and an S03 restricted process parameter. All data is synthetic.
 * **Authorization** answers whether a subject may see it. `SecurityContext` carries a
   provider-independent subject ID, roles, clearance, and authentication state.
 * **Egress** answers whether the accumulated context may leave an execution zone.
-  ADR-009 makes confidential and restricted data local-model-only.
+  ADR-009 permits RESTRICTED only locally; INTERNAL and CONFIDENTIAL may use cloud
+  models only with an explicitly approved model maximum. Clearance is not data sensitivity.
 
 These questions must not be delegated to an LLM or collapsed into a single Boolean.
 
@@ -71,8 +72,11 @@ inputs do not leave the local services.
 LangGraph begins with server-owned task requirements. On each tool observation, its
 effective classification is the maximum of previous and observed values. It can rise but
 cannot silently decrease. Before every later provider call, `EgressCheckedLLMClient`
-applies ADR-009 again. Consequently a confidential factory result blocks a public-cloud
-profile even if the original request was public.
+applies ADR-009 again, with a repeated check at the provider adapter. A confidential
+factory result denies a model capped below CONFIDENTIAL even if the initial request was
+public. It does not automatically forbid every approved CONFIDENTIAL-capable cloud model.
 
-Authentication is intentionally not implemented. A later FastAPI JWT/OIDC adapter will
-construct the same `SecurityContext`; the agent itself will not own identity handling.
+HTTP API and MCP already authenticate environment-only opaque bearer credentials at
+their outer boundaries; the browser gateway first verifies HTTP Basic demo credentials
+and maps them to a server-held API token (ADR-013/015). The agent does not own identity
+handling. Production JWT/OIDC remains future work.

@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Accepted; implementation mechanism superseded by ADR-010
+
+The bounded sequential behavior and four-call limit remain current. The handwritten
+loop, framework deferral, and Model Profile references below describe the original
+implementation; ADR-010/011 govern LangGraph and persistence, and ADR-019 governs model
+selection. Those historical mechanisms are not a second active runtime.
 
 ## Context
 

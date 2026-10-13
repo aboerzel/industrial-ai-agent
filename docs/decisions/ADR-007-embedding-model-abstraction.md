@@ -4,6 +4,12 @@
 
 Accepted
 
+The focused port and adapter separation remain current. The future-tense API and
+diagram below record the original design, not the current rollout state. Semantic
+retrieval and the port are implemented; ADR-019's **Embedding provider boundary**
+refinement governs explicit classification, approved local destinations, and rejection
+before SDK access. It does not authorize cloud embeddings today.
+
 ## Context
 
 The knowledge-retrieval subsystem currently compares deterministic lexical strategies

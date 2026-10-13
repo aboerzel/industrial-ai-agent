@@ -50,9 +50,11 @@ separate login/token. This shared-secret local demo has no production identity o
 ### Cost and efficiency
 
 Not every workflow needs the same model. The catalog describes capabilities, expected
-quality, cost category, and execution zone. Persistent assignments select one stable
-model ID for a consumer and classification; consumer requirements and security policy
-are validated separately.
+quality, cost category, and execution zone. Persistent `MANUAL` assignments select one
+stable model ID for a consumer and classification. Explicit `AUTO` assignments persist
+`QUALITY_FIRST` or `COST_FIRST` and rank only statically available, capable,
+security-eligible candidates before invocation. Consumer requirements and security policy
+remain separate hard boundaries in both modes (ADR-019).
 
 This lets a team select a suitable model without rebuilding data-protection rules for
 each model vendor. An assignment never authorizes egress, and provider availability,

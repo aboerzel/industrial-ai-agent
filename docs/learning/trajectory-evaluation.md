@@ -28,7 +28,8 @@ The initial ten cases cover a direct answer without a tool, single product-histo
 lookups, single machine-status lookups for the available demo stations, and two-step
 product-history-to-machine-status investigations supported by the deterministic demo
 data. No `LIMIT_REACHED` case is included yet because the current data provides no
-natural troubleshooting task that should require more than three successful calls.
+natural troubleshooting task that should exhaust the current four-call budget and then
+request another tool. The dataset's short trajectories are not a separate three-call limit.
 
 `AgentRunResult.executed_tool_calls` exposes the normalized, actually executed
 trajectory without provider-specific call IDs or SDK types. The final answer is also

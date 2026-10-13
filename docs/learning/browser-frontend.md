@@ -130,6 +130,24 @@ to avoid recording credentials, including malicious usernames; diagnostic visibi
 therefore limited. Do not enable credential-bearing log formats or publish the password
 file/rendered configuration.
 
+## Credential Ownership
+
+| Credential | Consumer / scope | Browser exposure |
+| --- | --- | --- |
+| Demo username/password in external htpasswd file | Nginx HTTP Basic verifies the browser identity | Browser manages Basic credentials; never an API token |
+| `MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN`, `MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN`, `MCP_INDUSTRIAL_AGENT_TOKEN`, `MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN` | Gateway maps verified username to server-held API bearer; API resolver and independent MCP resolver establish their own contexts | Never HTML, JavaScript, URLs, or browser storage |
+| `MCP_CODEX_DEVELOPMENT_TOKEN` | Read-only INTERNAL diagnostic MCP client | No browser mapping |
+| `AGENT_API_MODEL_ADMIN_TOKEN` | Separate PUBLIC `model-admin` API principal; gateway maps only verified `model-admin` login | Never returned to browser; not an MCP/workflow credential |
+| `E2E_FRONTEND_PASSWORD`, `E2E_MODEL_ADMIN_PASSWORD` | Local runner supplies corresponding Basic credentials; direct API/MCP probes use the existing bearer variables | Test-process secrets; excluded from normal reports/traces |
+| `GROQ_API_KEY`, `MISTRAL_API_KEY`, `NVIDIA_API_KEY` | Provider adapters read catalog-declared environment keys | Never browser/MCP identity credentials |
+
+These are the existing variables in `.env.example`, not a new token exchange protocol.
+Nginx replaces the upstream Authorization header after Basic verification; it does not
+forward browser-selected bearer authority. Investigation users have fixed clearance
+ceilings and no `model-admin`. Shared demo tokens do not establish per-user ownership;
+the current run/investigation boundary is classification visibility, not tenant isolation.
+Production ownership or federated identity requires its own contract.
+
 ## Run Lifecycle and Security
 
 Submitting a request disables the button, displays `Running`, waits for the synchronous
@@ -147,8 +165,9 @@ specialized consumers each show all four classifications. Security-ineligible mo
 visible but disabled; capability mismatches are warnings and never cause a fallback.
 
 Saving creates an explicit persistent assignment only. The server remains authoritative and
-rejects assignments forbidden by egress policy. In particular, `agent / RESTRICTED` is
-unconfigured until an operator explicitly selects an allowed local catalog model. Missing
+rejects assignments forbidden by egress policy. Fresh-install bootstrap assigns local
+`local_quality` to `agent` and `rca.reasoning` at all classifications; existing operator
+choices persist (ADR-019). Missing
 catalog references remain visibly unconfigured rather than being replaced. The API
 continues to establish run classification server-side, and ADR-009 controls model egress
 independently from MCP network traffic. The UI contains no secrets and must be treated as
@@ -179,4 +198,10 @@ headers are ignored. The API derives maximum clearance and roles from that token
 while the selector requests a lower or equal working clearance. Requests above the
 principal ceiling are denied, never promoted. Model administration requires its own login.
 The browser still cannot set classification, profile, provider, MCP server, or egress
-policy. Streaming and production-grade federated authentication remain future work.
+policy. On effective context changes, generation-bound requests are aborted, old responses
+are rejected, protected UI/export/model-dialog state is cleared, blob URLs are revoked,
+and investigations are fetched under the new authoritative context. Navigation and
+BFCache restoration use the same invalidation boundary. There is no in-page identity
+switch or active stream; identity changes require a separately authenticated gateway
+session. This client cleanup supplements backend authorization, never replaces it.
+Streaming and production-grade federated authentication remain future work.

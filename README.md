@@ -16,7 +16,7 @@ This is not a chatbot demo. The model is a replaceable component inside determin
 |---|---|
 | **Reliability** | Deterministic code owns validation, authorization, tool limits, and protected actions; versioned evaluations test defined model behavior. |
 | **Data and IP protection** | Data is classified as `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, or `RESTRICTED`; model egress is checked before every provider call. |
-| **Cost and efficiency** | A pure catalog describes models while persistent assignments select exactly one stable model ID per consumer and classification. There is no automatic fallback. |
+| **Cost and efficiency** | A pure catalog describes models. Persistent assignments select a stable model ID in `MANUAL` mode or an explicit, security-filtered policy in `AUTO` mode. There is no provider-failure fallback. |
 | **Access control** | Server-derived identity and permissions, MCP authorization, and PostgreSQL Row-Level Security (RLS) prevent the AI path from bypassing source-data access rules. |
 | **Operability and traceability** | Metadata-only telemetry, dashboards, and bounded root-cause analysis make runs, failures, and model/tool activity inspectable without exposing sensitive content. |
 
@@ -276,19 +276,26 @@ Windows NVIDIA driver before tuning Agent timeouts or model routing.
 
 ### Full Demo
 
-Set a valid `NVIDIA_API_KEY` in `.env` and apply the database migrations. The initial
-assignments select `nvidia_quality` for the `agent` consumer at `PUBLIC`, `INTERNAL`, and
-`CONFIDENTIAL`. `RESTRICTED` remains deliberately unassigned because the previous
-information and troubleshooting paths selected different local models. Configure it
-explicitly through `PUT /api/v1/model-assignments`; egress policy permits only a local
-model for that classification.
+Apply the database migrations and provision the browser credentials described below.
+The current fresh-install assignments are `MANUAL / local_quality` for `agent` and
+`rca.reasoning` at all four classifications. These are demo bootstrap choices, not
+architecture requirements. Existing operator assignments, including `AUTO`, are preserved.
+The authoritative sources are migration 0022 and
+`ModelConfigurationService.ensure_default_assignments()`; catalog/provider values live in
+`config/model_catalog.toml` and `config/model_catalog.docker.toml`.
+
+Using a cloud model requires its environment-only API key and an explicit eligible
+assignment through `PUT /api/v1/model-assignments` or Model Configuration. `RESTRICTED`
+permits only local model execution. See [ADR-019](docs/decisions/ADR-019-model-catalog-assignments-and-execution-policy.md).
 
 ### Local-only Demo
 
-Leave provider API keys unset and explicitly assign a local catalog model to each required
-`agent` classification through `PUT /api/v1/model-assignments`. Provider availability no
-longer changes selection and no automatic fallback exists. A missing assignment fails
-closed with `model_not_configured`.
+Leave provider API keys unset. A fresh database already receives the local demo assignments
+above. Inspect existing databases and explicitly change any operator-selected cloud or
+`AUTO` assignments when a strictly local demo is required; startup does not overwrite
+operator choices. `MANUAL` never substitutes a different model; `AUTO` filters static
+availability before selection. Neither mode falls back after provider failure. Missing
+assignments fail closed with `model_not_configured`.
 
 ```powershell
 Copy-Item .env.example .env
@@ -354,8 +361,8 @@ For service ports, MCP access, smoke checks, and detailed local setup, use the e
 - [Architecture Overview](docs/architecture/overview.md): implemented boundaries, orchestration, persistence, MCP, retrieval, and evolution.
 - [Capabilities and Industrial Value](docs/architecture/capabilities-and-industrial-value.md): industrial benefit, limits, and security posture.
 - [Observability](docs/architecture/observability.md): dashboards, telemetry security, bounded observability MCP, and RCA evidence sources.
-- [Use Cases and Scenarios](docs/demo/use-cases-and-scenarios.md): reproducible synthetic demo and acceptance cases.
-- [Architecture Decision Records](docs/decisions/): long-lived architecture decisions, including [model routing](docs/decisions/ADR-008-task-level-model-routing.md), [model egress](docs/decisions/ADR-009-data-classification-and-model-egress-policy.md), [MCP](docs/decisions/ADR-012-mcp-integration-architecture.md), and [RCA](docs/decisions/ADR-017-automated-root-cause-analysis.md).
+- [Use Cases and Scenarios](docs/demo/use-cases-and-scenarios.md): illustrative synthetic domain scenarios, distinguished from current classification and acceptance fixtures.
+- [Architecture Decision Records](docs/decisions/): long-lived architecture decisions, including current [model selection and execution](docs/decisions/ADR-019-model-catalog-assignments-and-execution-policy.md), [model egress](docs/decisions/ADR-009-data-classification-and-model-egress-policy.md), [MCP](docs/decisions/ADR-012-mcp-integration-architecture.md), and [RCA](docs/decisions/ADR-017-automated-root-cause-analysis.md).
 - [Tool Selection Evaluation](docs/learning/tool-selection-evaluation.md), [Trajectory Evaluation](docs/learning/trajectory-evaluation.md), and [Evidence Before Action](docs/learning/evidence-before-action-trajectory-evaluation.md): versioned model-quality baselines.
 
 ## Scope

@@ -1,5 +1,30 @@
 # Architecture Overview
 
+## Current Contracts and Source Authority
+
+Active ADR decisions, including explicitly later refinements, define the architecture.
+Superseded sections describe history; a bare `Accepted` heading does not reactivate an
+older mechanism. Implementation, migrations, configuration, and deterministic tests
+provide conformance evidence. This overview, README, and learning documents are derived
+descriptions. Example values and historical acceptance reports are not runtime policy.
+An unresolved implementation conflict with an active contract must be reported rather
+than corrected by silently choosing code or prose.
+
+Package paths in the table are relative to `src/industrial_ai_agent/`.
+
+| Current fact | Value | Authoritative contract and implementation source |
+| --- | --- | --- |
+| Model selection modes | `MANUAL`, `AUTO` | ADR-019; `agent/model_selection.py` |
+| Automatic selection policies | `QUALITY_FIRST`, `COST_FIRST` | ADR-019; `agent/model_selection.py` |
+| Executed tool-call budget | `4` | ADR-004/018; `MAX_TOOL_CALLS` in `agent/agent_run.py` |
+| Demo assignment bootstrap | `MANUAL / local_quality` for `agent` and `rca.reasoning`, all classifications | `application/model_configuration.py`; migration 0022 preserves operator choices |
+| Provider/model configuration | Catalog TOML plus declared environment overrides | `config/model_catalog.toml`, `config/model_catalog.docker.toml`; no universal chat/RCA/embedding default |
+| Embedding baseline | `qwen3-embedding:0.6b` | `infrastructure/ollama_embedding_client.py`; separate from chat/RCA assignments |
+
+The tool budget is currently fixed, not an environment/CLI setting. Demo model values
+are configuration/bootstrap choices, not required architectural model identities.
+Credential ownership is defined in [Browser Frontend](../learning/browser-frontend.md#credential-ownership).
+
 ## System Components and Control Boundaries
 
 ```mermaid
@@ -107,12 +132,12 @@ flowchart TD
     A[Request] --> B[Trusted DataClassification]
     B --> C[Model Consumer]
     C --> D[Required Capabilities]
-    D --> E{Selection Mode}
-    E -->|MANUAL| F[Load persisted assignment]
-    F --> G{Assignment exists?}
+    D --> F[Load persisted consumer/classification assignment]
+    F --> G{Valid assignment exists?}
     G -->|No| H[MODEL_NOT_CONFIGURED]
-    G -->|Yes| I[Selected model]
-    E -->|AUTO| J[Load models from runtime catalog]
+    G -->|Yes| E{Persisted selection mode}
+    E -->|MANUAL| I[Lookup assigned stable model_id]
+    E -->|AUTO| J[Load runtime catalog and persisted policy]
     J --> J1[Filter static runtime availability]
     J1 --> J2{Any statically available models?}
     J2 -->|No| H
@@ -224,7 +249,7 @@ dedicated migration Job instead.
 The project currently implements product-history retrieval, current machine-status
 retrieval, bounded maintenance-ticket retrieval by ticket ID, a provider-independent LLM integration boundary, and one bounded
 `LangGraphTroubleshootingAgent` path over runtime-discovered, allowlisted MCP tools. Its
-sole write tool is `create_maintenance_ticket`; the graph exposes only a strict proposal
+normal Factory write tool is `create_maintenance_ticket`; the graph exposes only a strict proposal
 schema to the model, then pauses for human approval before the separate execution step.
 Focused deterministic baselines evaluate the
 first LLM tool decision and complete bounded trajectories through the LangGraph MCP path.
@@ -370,24 +395,28 @@ structured factory records and document-catalog metadata. Local PDF, DOCX, PPTX,
 and image assets remain files and are normalized by local Docling ingestion only after
 their catalog row passes clearance. Each classified row is protected by PostgreSQL RLS;
 the non-superuser application role receives a parameterized transaction-local
-`app.clearance` from the server-injected `SecurityContext`. The same `PUBLIC < INTERNAL
-< CONFIDENTIAL < RESTRICTED` value propagates unchanged to parsed documents, chunks,
-MCP results, and the LangGraph run's effective classification. It is separate from
-subject authorization and from ADR-009 model egress eligibility.
+`app.clearance` from the server-injected `SecurityContext`. Each source label in
+`PUBLIC < INTERNAL < CONFIDENTIAL < RESTRICTED` is inherited by its parsed documents,
+chunks, and MCP results. The run retains the monotonic maximum of its trusted initial
+classification and observations; it does not replace source labels with caller clearance.
+Classification describes data, `SecurityContext.clearance` bounds subject access, and
+ADR-009 separately authorizes model egress.
 
 ADR-015 adds an authenticated HTTP MCP client boundary. The transport adapter verifies a
 local-demo opaque bearer token, resolves a server-owned identity to a request-specific
 `SecurityContext` and immutable MCP permissions, and does not accept client-selected
 identity, clearance, or permission headers. `industrial-agent` resolves to
-`CONFIDENTIAL` with Factory/Knowledge/Observability/Runtime read and maintenance-ticket
-permission;
+`CONFIDENTIAL` with Factory/Knowledge/Observability/Runtime read and protected
+maintenance/hardware capability permissions;
 `industrial-agent-internal` resolves to `INTERNAL` with Factory and Knowledge read-only
 permissions; and
 `codex-development` resolves to `INTERNAL` with Factory, Knowledge, Observability,
-Runtime, and RCA read permissions. Tool filtering runs for both `tools/list` and
+Runtime, and RCA read permissions. Optional PUBLIC and RESTRICTED registrations use
+their separate environment tokens; PUBLIC is read-only. The complete current permission
+table is in ADR-015. Tool filtering runs for both `tools/list` and
 `tools/call`; it supplements, but
 does not replace, LangGraph `ToolPolicy`, PostgreSQL RLS, ADR-009 egress checks, or the
-approval interrupt. Knowledge performs catalog RLS filtering before parsing, indexing,
+shared persisted-approval execution guard. Knowledge performs catalog RLS filtering before parsing, indexing,
 embedding, reranking, and result construction, and caches each retrieval pipeline by the
 complete `SecurityContext` so a higher-clearance index cannot be reused for an INTERNAL
 request.
@@ -396,11 +425,10 @@ request.
 flowchart LR
     Agent["Industrial AI Agent"] --> Client["MCP client"]
     Codex["Codex development client"] --> HTTP["Authenticated MCP HTTP boundary"]
-    Client --> Factory["Factory MCP"]
-    Client --> Knowledge["Knowledge MCP"]
+    Client --> HTTP
     HTTP --> Resolver["Server-side identity,<br/>clearance and permissions"]
-    Resolver --> Factory
-    Resolver --> Knowledge
+    Resolver --> Factory["Factory MCP"]
+    Resolver --> Knowledge["Knowledge MCP"]
     Resolver --> Runtime["Runtime MCP<br/>read-only"]
     Resolver --> Observe["Observability MCP<br/>read-only"]
     Resolver --> RCA["RCA MCP<br/>read-only"]
@@ -410,8 +438,8 @@ flowchart LR
     Runtime --> RLS
     Observe -->|run visibility before telemetry| RLS
     RCA --> RLS
-    Observe --> Evidence["Bounded Tempo, Loki,<br/>and Prometheus projections"]
-    RCA --> Evidence
+    RLS -->|"visible authoritative run only"| Gate["Run authorization before telemetry"]
+    Gate --> Evidence["Bounded Tempo, Loki,<br/>and Prometheus projections"]
 
     classDef client fill:#1e3a5f,stroke:#0f172a,color:#ffffff
     classDef mcp fill:#7c2d12,stroke:#431407,color:#ffffff
@@ -420,13 +448,14 @@ flowchart LR
     class Agent,Codex,Client client
     class Factory,Knowledge,Runtime,Observe,RCA mcp
     class HTTP,Resolver security
-    class Capabilities,RLS,Evidence data
+    class Capabilities,RLS,Gate,Evidence data
 ```
 
 FastAPI now provides the local/demo external Application Boundary. Its versioned
 `POST /api/v1/runs` free-form endpoint creates a UUID, records lifecycle state in the PostgreSQL
 `agent_runtime` schema, and awaits an injected troubleshooting run service. That service creates
-server-owned run requirements, routes a semantic profile, and invokes
+server-owned run requirements, resolves the bounded target profile and classified model
+assignment, and invokes
 the existing LangGraph MCP path. Public Pydantic API contracts contain only the run ID,
 status, narrative final answer, bounded structured investigation steps derived from the
 actual tool trajectory, bounded structured follow-up prompts, and normalized tool calls;
@@ -496,18 +525,19 @@ flowchart LR
 
 Compose publishes host-facing demo and diagnostic ports only on `127.0.0.1`; services
 communicating only within Compose, including the OTel Collector, have no host port.
-Grafana anonymous local access is restricted to Viewer. Persistent assignments select one
-catalog model explicitly and provider availability never changes that selection. The
+Grafana anonymous local access is restricted to Viewer. `MANUAL` names one catalog model;
+explicit `AUTO` considers static availability before selection. Provider errors never
+cause reselection. The
 bounded S04 position-reference recovery scenario uses the server-owned
 `CONFIDENTIAL_RECOVERY` scope and the configured `agent/CONFIDENTIAL` assignment; it does
-not fall back when that model is unavailable. That scope exposes only the three bounded
+not fall back when that model is unavailable. That scope exposes only the bounded
 position-reference recovery capabilities. All routes retain the same final egress check.
 
 `POST /api/v1/diagnostics` is the only INTERNAL run entry point. It accepts only
 bounded product and station identifiers, verifies the required projections through an
 INTERNAL RLS context, constructs its prompt server-side, and resolves
 `INTERNAL_DIAGNOSTIC`. That profile uses the separate `industrial-agent-internal` MCP
-identity and the three read-only Factory/Knowledge tools; it can neither discover nor
+identity and its admitted read-only Factory/Knowledge tools; it can neither discover nor
 execute the maintenance-ticket action. Unavailable targets remain neutral and never
 trigger a higher-clearance retry.
 
@@ -606,7 +636,11 @@ flowchart LR
     MSM -.->|"implements"| MSR
     RLS --> PHM
     RLS --> MSM
-    DOCS --> DOCLING
+    KMCP --> SC["Authenticated server-side SecurityContext"]
+    SC --> Catalog["PostgreSQL document catalog query"]
+    Catalog --> RLS
+    RLS -->|"eligible catalog rows only"| DOCS
+    DOCS -->|"classification and checksum verified before parsing"| DOCLING
     DOCLING --> RER
     BM25 -.->|"implements"| KR
     SEM -.->|"implements"| KR
@@ -619,7 +653,7 @@ flowchart LR
     SEM --> HYB
     HYB --> RER
     CEP --> RER
-    SEM -->|"embeds through"| EP
+    SEM -->|"text + trusted DataClassification"| EP
     SEM --> VEC
     OEC --> EG["Embedding egress authorization<br/>trusted classification + approved destination"]
     EG -->|"ALLOW only: SDK call"| OLLAMA
@@ -636,7 +670,7 @@ flowchart LR
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     class PHC,MSC,DSC core
     class PHR,MSR,KR,EP port
-    class PHM,MSM,RLS,DOCS,DOCLING,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,KMCP,MCPCLIENT,MCPBRIDGE,LG adapter
+    class PHM,MSM,SC,Catalog,RLS,DOCS,DOCLING,BM25,SEM,HYB,RER,CEP,OEC,VEC,KB,OLLAMA,FMCP,KMCP,MCPCLIENT,MCPBRIDGE,LG adapter
 ```
 
 Each capability converts its string identifier into the appropriate Domain Value
@@ -682,7 +716,7 @@ per-request `CapabilityCheckedLLMClient` and `EgressCheckedLLMClient`. Local HTT
 service transport, not permission to egress tool data to a public model. Knowledge MCP
 uses local Ollama embeddings and a local Hugging Face cache for reranking; queries,
 chunks, embeddings, and reranker inputs do not reach a public provider. The local Docker
-demo uses distinct environment-only opaque bearer tokens for its two authenticated MCP
+demo uses distinct environment-only opaque bearer tokens for its server-registered MCP
 identities; remote or production exposure requires stronger identity, secret
 distribution, TLS, and deployment isolation. The write tool remains fixed, strict, and
 approval-gated; this slice does not add generalized multi-server routing or automatic
@@ -697,13 +731,14 @@ as `error_codes::chunk-002`.
 
 ```mermaid
 flowchart LR
-    Query["Authorized documentation query"] --> MCP["Knowledge MCP"]
-    MCP --> RLS["Catalog RLS and<br/>classification filter"]
+    Query["Documentation query + authenticated MCP credential"] --> MCP["Knowledge MCP"]
+    MCP --> SC["Server-side SecurityContext + READ_KNOWLEDGE"]
+    SC --> RLS["PostgreSQL catalog RLS<br/>transaction-local app.clearance"]
     RLS --> Docs["Permitted cataloged documents"]
     Docs --> Chunk["Normalized heading chunks<br/>with stable provenance"]
     Chunk --> Lexical["BM25"]
     Chunk --> DC["Maximum authoritative chunk classification"]
-    MCP --> QC["Query classification from server-owned context"]
+    MCP --> QC["Conservative query DataClassification = RESTRICTED<br/>independent of caller clearance"]
     DC --> EG["Embedding egress authorization<br/>at provider boundary"]
     QC --> EG
     EG -->|"ALLOW"| SDK["Approved local Ollama SDK call"]
@@ -720,7 +755,7 @@ flowchart LR
     classDef data fill:#334155,stroke:#0f172a,color:#ffffff
     classDef processing fill:#0f766e,stroke:#134e4a,color:#ffffff
     class Query,MCP,Agent entry
-    class RLS,DC,QC,EG,Stop security
+    class SC,RLS,DC,QC,EG,Stop security
     class Docs,Chunk,Results data
     class Lexical,Semantic,Fusion,Rerank processing
 ```
@@ -814,7 +849,9 @@ flowchart LR
 ```
 
 `config/model_catalog.toml` describes models and never assigns one to a classification.
-The persistent assignment chooses one stable `model_id`; consumer requirements validate
+The persistent `MANUAL` assignment names a stable `model_id`; `AUTO` stores its explicit
+policy and selects only after static availability, capability, and security hard filters.
+Consumer requirements validate
 capabilities; ADR-009 then authorizes the execution zone. The current policy still allows
 all classifications locally, allows `PUBLIC`, `INTERNAL`, and `CONFIDENTIAL` in
 `PUBLIC_CLOUD`, and keeps `RESTRICTED` local. Missing assignments and unknown models,
@@ -835,11 +872,16 @@ The implemented tool-calling flow is:
 
 ```mermaid
 flowchart TD
-    Start["User request + discovered MCP tool definitions"] --> Decide["LLM decision<br/>assigned model_id"]
+    Start["User request + admitted evidence-eligible MCP tools"] --> Decide["LLM decision<br/>resolved model_id"]
     Decide --> Shape{"Response shape"}
-    Shape -->|"final text"| Success["AgentRunResult<br/>SUCCESS + final answer"]
-    Shape -->|"multiple or malformed calls"| Invalid["Deterministic error"]
-    Shape -->|"exactly one tool call"| Budget{"3 tools already executed?"}
+    Shape -->|"candidate final text"| Complete{"Trusted required evidence complete?"}
+    Complete -->|"yes"| Normalize["Bounded final-output and language validation"]
+    Normalize -->|"valid"| Success["AgentRunResult<br/>SUCCESS + final answer"]
+    Complete -->|"no"| Missing["Bounded missing-evidence retry<br/>or terminal evidence error"]
+    Missing -->|"retry budget remains"| Decide
+    Shape -->|"malformed response"| Invalid["Deterministic error"]
+    Shape -->|"one or more tool calls"| Admit["Admit first call only; discard others"]
+    Admit --> Budget{"MAX_TOOL_CALLS budget exhausted?"}
     Budget -->|"yes"| Limit["AgentRunResult<br/>LIMIT_REACHED<br/>call not executed"]
     Budget -->|"no"| Validate["Validate discovered name<br/>and tool-specific arguments"]
     Validate -->|"invalid"| Invalid
@@ -853,7 +895,7 @@ flowchart TD
     classDef success fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class Decide,Shape llm
-    class Start,Budget,Validate,Dispatch,Observe,Count deterministic
+    class Start,Admit,Budget,Validate,Dispatch,Observe,Count,Complete,Normalize,Missing deterministic
     class Success success
     class Invalid,Limit failure
 ```
@@ -861,8 +903,9 @@ flowchart TD
 The LLM chooses one discovered tool or answers directly. Deterministic Python code
 validates one selected call per response, validates the discovered tool schema,
 dispatches through the opened MCP session, serializes each structured result, and keeps
-the complete current-run message context. The authorized Factory and Knowledge tools
-remain available at every decision step.
+the complete current-run message context. During evidence acquisition, ADR-020 intersects
+admitted tools with prerequisite-ready evidence sources; normal authorized tool
+visibility resumes only after the ledger is complete. Discovery alone never grants admission.
 
 `MAX_TOOL_CALLS = 4` counts successfully executed tools rather than LLM requests. After
 the fourth observation, exactly one final LLM decision is allowed. Final text returns
@@ -870,6 +913,9 @@ the fourth observation, exactly one final LLM decision is allowed. Final text re
 no further LLM request. Unknown tools and invalid arguments remain deterministic
 failures. If a provider returns multiple calls in one response, only the first is
 admitted to the checkpointed sequential dispatch; every other call is discarded.
+
+This bounds tool-decision steps; the separate bounded structured normalization and
+language-correction invocations do not grant further tool execution.
 
 The LangGraph MCP path preserves that behavior in an explicit graph:
 
@@ -907,7 +953,7 @@ and minimal bound run context. A custom tool node adapts discovered MCP contract
 LangChain `StructuredTool` contracts. This keeps argument validation and sequential
 one-call dispatch explicit instead of adopting a framework default that could change
 ADR-004 behavior. The Graph does not select a model: the Composition Root injects an
-already routed profile and a client whose final capability and ADR-009 egress checks remain active.
+already resolved stable model ID and a client whose final capability and ADR-009 egress checks remain active.
 
 For the resumable write path, the graph is compiled with LangGraph's official
 `AsyncPostgresSaver` and invoked
@@ -1137,8 +1183,10 @@ The current implementation defines `LLMClient`, stable `ModelId` values,
 small request and response models, `LangGraphTroubleshootingAgent`, and project-owned
 run-result contracts. It also provides model definitions, extensible consumer IDs,
 capability requirements, assignment ports, and `ModelResolutionService`. The resolver
-loads exactly one assignment, validates capabilities, and invokes the authoritative
-model-execution authorizer without ranking or fallback. The agent preserves the bounded
+loads one assignment and resolves `MANUAL` by stable model ID or explicit `AUTO` by
+security-filtered deterministic ranking. Capability validation and the authoritative
+model-execution authorizer remain mandatory; provider failure never causes fallback.
+The agent preserves the bounded
 sequential loop over discovered MCP tools. `AgentRunResult` distinguishes `SUCCESS`
 from `LIMIT_REACHED` and reports both the executed-tool count and the normalized executed
 trajectory. The agent does not construct the router, import the OpenAI SDK, or name a
@@ -1210,7 +1258,7 @@ Examples may later include:
 
 Contains separate versioned datasets and focused runners for first-decision tool
 selection, complete bounded trajectories, and isolated retrieval quality. Agent eval
-runners explicitly select `manual` or `langgraph` while keeping datasets and scoring
+runner uses the sole LangGraph MCP path while keeping datasets and scoring
 unchanged. Parsing, per-case scoring, and aggregation are deterministic and covered by unit tests without a
 live LLM. Generated JSON reports belong under the Git-ignored `evals/results/`
 directory unless deliberately curated.
@@ -1231,7 +1279,7 @@ cost, latency, or provider errors never trigger fallback.
 ```mermaid
 flowchart TD
     Catalog["Model Catalog<br/>stable model_id + metadata"] --> Lookup["Catalog lookup"]
-    Assignment["Persistent Assignment<br/>consumer_id + classification -> model_id"] --> Lookup
+    Assignment["MANUAL assignment<br/>consumer_id + classification -> model_id"] --> Lookup
     Requirements["Consumer Requirements<br/>required capabilities"] --> Capability["Capability validation"]
     Lookup --> Capability
     Capability -->|"pass"| Security["ADR-009 security authorization"]
@@ -1251,6 +1299,7 @@ flowchart TD
     class Executed execution
 ```
 
+This diagram expands `MANUAL`; the Model Selection diagram above also defines `AUTO`.
 The implemented consumers are `agent` and the existing specialized
 `rca.reasoning` slot. The agent requires `text`, `tool_calling`, and
 `structured_output`; RCA reasoning requires `text` and `structured_output`. Consumer IDs
@@ -1269,18 +1318,21 @@ and [ADR-009](../decisions/ADR-009-data-classification-and-model-egress-policy.m
 
 ```mermaid
 flowchart LR
-    Trusted["Trusted Run Security Context<br/>immutable effective classification"] --> DB["PostgreSQL / RLS"]
-    Trusted --> Docs["Documents / Retrieval"]
-    Trusted --> Tools["Tools / MCP"]
-    Trusted --> Models["Agent + specialized models"]
+    Identity["Authenticated identity"] --> Subject["Server-side SecurityContext<br/>clearance bounds data access"]
+    Subject --> DB["PostgreSQL / RLS<br/>transaction-local app.clearance"]
+    DB --> Docs["Authorized documents / Retrieval"]
+    Subject --> Tools["Tools / MCP<br/>capability + resource authorization"]
+    Trusted["Trusted effective DataClassification<br/>monotonic sensitivity, distinct from clearance"] --> Egress["Final model egress authorization"]
     Tools --> Derived["Derived observations"]
-    Derived -->|"classification retained or raised"| Models
+    Docs --> Derived
+    Derived -->|"classification retained or raised"| Trusted
+    Egress -->|"ALLOW only"| Models["Agent + specialized model provider"]
     Untrusted["Prompt / tool / MCP arguments"] -.->|"cannot lower or replace"| Trusted
 
     classDef trusted fill:#fee2e2,stroke:#b91c1c,color:#450a0a
     classDef boundary fill:#e8f1ff,stroke:#2563eb,color:#172554
-    class Trusted,Untrusted trusted
-    class DB,Docs,Tools,Models,Derived boundary
+    class Trusted,Untrusted,Subject,Egress trusted
+    class Identity,DB,Docs,Tools,Models,Derived boundary
 ```
 
 ### Retrieval Evolution

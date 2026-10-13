@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted
+Superseded by ADR-019 for model selection and configuration
+
+The profile router, possible fallback, and `LOCAL_ONLY_MODE` described below are
+historical. Current selection uses persisted `MANUAL` or explicit `AUTO` assignments
+under ADR-019, with no provider-failure fallback. ADR-009 remains the egress authority.
+The original rationale and diagrams are retained as history.
 
 ## Context
 

@@ -2,24 +2,28 @@
 
 ## Purpose
 
-The MCP slices expose two read-only capability areas: `factory_mcp` for factory evidence
-and `knowledge_mcp` for documentation retrieval. The LangGraph read-only path uses both
-through real protocol clients; there is no direct read-only agent path.
+The normal LangGraph evidence path uses `factory_mcp` and `knowledge_mcp` through protocol
+clients. Factory also exposes a protected maintenance action. The dedicated recovery
+path uses Hardware MCP; Runtime, Observability, and RCA MCP are separate read-only
+diagnostic services. See [ADR-012](../decisions/ADR-012-mcp-integration-architecture.md)
+and the [Architecture Overview](../architecture/overview.md).
 
 ## Roles
 
 An **MCP host** is the application that manages one or more MCP client connections. An
 **MCP client** establishes one connection to a server, initializes the protocol, and
 uses the server's advertised features. An **MCP server** publishes interoperable
-capabilities. This project has one official-SDK client infrastructure and two local
+capabilities. This project has one official-SDK client infrastructure and six deployed
 servers. The LangGraph MCP path holds one explicit connection per configured server per
 agent run; it is not a generalized multi-server multiplexer or router.
 
 ## Tools, Resources, and Prompts
 
 MCP **tools** are callable operations with discoverable input schemas. `factory_mcp`
-currently advertises exactly `get_product_history(product_id)` and
-`get_machine_status(station_id)`. `knowledge_mcp` advertises exactly
+advertises bounded station/product discovery and overview, product history, machine
+status, ticket retrieval, and protected ticket creation. The canonical Factory tool
+contracts are listed in ADR-012; do not infer a fixed read-only catalogue from this example.
+`knowledge_mcp` advertises exactly
 `search_documentation(query, top_k=3)`. Its result preserves the normalized query and
 results with a one-based `rank`, stable `chunk_id`, `document_id`, relative `source`,
 score, and provenance metadata. No framework document or vector-store object crosses
@@ -50,7 +54,8 @@ slice deliberately has no session-per-call behavior or connection pool.
 
 Docker packages each networked server as a reproducible, non-root Python 3.12 service.
 The local `compose.yaml` adds PostgreSQL, maps factory port `8001` and knowledge port
-`8002`, and uses a one-shot migration/seed service. Factory uses PostgreSQL through its
+`8002`. Factory runs migration/seed bootstrap before opening its MCP listener and Knowledge
+waits for its health check; there is no current one-shot migration service. Factory uses PostgreSQL through its
 non-superuser application role. Knowledge reads RLS-eligible `document_catalog` rows
 and local multi-format assets through Docling before building the unchanged retrieval
 pipeline. Knowledge contains no model artifact, uses the host's local Ollama endpoint
@@ -58,14 +63,14 @@ for `qwen3-embedding:0.6b`, and uses a persistent named Hugging Face cache volum
 `BAAI/bge-reranker-v2-m3`; CPU is the default. Local in-process execution
 can use CUDA, while the Compose demo has no NVIDIA or Ollama-container requirement.
 Docker is not MCP: Docker starts and isolates processes, whereas MCP defines discovery,
-schemas, messages, and tool-call semantics. Internal Docker networking, an agent
-container, TLS, and a reverse proxy are deferred.
+schemas, messages, and tool-call semantics. Compose already includes internal networking,
+Agent API, and the authenticated Nginx browser gateway; TLS and production identity remain deferred.
 
 ## LangGraph Tool Execution
 
 For one asynchronous LangGraph MCP run, the adapter opens every selected stdio or HTTP
 session, calls `initialize()` and tool discovery once per server, rejects duplicate tool
-names, filters tools through explicit read-only authorization sets, and creates LangChain
+names, filters tools through the server-owned run/tool policies, and creates LangChain
 `StructuredTool` objects. The graph awaits each tool sequentially through `ainvoke()`,
 then closes every session after its final result. There is no `asyncio.run()` inside a
 graph node or tool handler; the CLI owns the top-level event loop.
@@ -77,9 +82,10 @@ structured result. It must be reviewed and removed when stable
 
 MCP discovery and agent authorization are separate: discovery observes everything the
 server advertises, while the troubleshooting agent receives only its fixed authorized
-tools. The current allowlist contains three `READ` tools and the
-approval-required `WRITE` tool `create_maintenance_ticket`; a discovered tool is never
-authorized merely because it is advertised.
+tools. `AgentRunClassificationPolicy` selects the bounded profile's admitted set;
+ADR-020 further restricts tools to eligible evidence sources while requirements are
+incomplete. `READ`, side-effect-free `PREPARE`, and protected execution are distinct.
+A discovered tool is never authorized merely because it is advertised.
 
 ## Strict Tool Contracts and Write Proposals
 
@@ -93,10 +99,12 @@ object with `additionalProperties: false`; it retains only the supported Pydanti
 constraints instead of implementing a second JSON-schema validator.
 
 `create_maintenance_ticket` has two deliberately different contracts. Its published MCP
-execution schema requires `station_id`, `summary`, and `request_id`. The model receives
+execution schema requires `station_id`, `summary`, `request_id`, and `run_id`. The model receives
 only the proposal schema (`station_id`, `summary`), so it cannot supply or replace the
 idempotency key. After a native LangGraph approval resume, the execution node injects
-the actual tool-call ID as `request_id` and calls the strict MCP tool exactly once.
+the actual tool-call ID as `request_id` and the persisted `run_id`. The executing capability
+validates and atomically consumes its authoritative approval before any side effect;
+direct authenticated MCP calls reach the same guard. IDs are references, not proof of approval.
 
 ## Security Boundary
 
@@ -118,9 +126,20 @@ model artifacts into local runtime caches. This bootstrap is not factory-data eg
 no document content, query, chunk, embedding, or reranker input is uploaded. A
 deployment with fully pre-provisioned artifacts can disable that initial network need.
 
-The first Docker demo deliberately has no MCP authentication because it binds a local
-host port for development. That is not a remote-deployment security model. Authentication
-and transport security are required design work before any remote or production exposure.
+Current HTTP MCP authenticates environment-only opaque bearer tokens and resolves a
+server-side identity, clearance, and capability permission (ADR-015). Discovery and
+invocation both enforce permissions, with RLS/run visibility and protected-action claims
+additionally applied at resource/execution boundaries. PUBLIC principals are read-only.
+stdio development/tests inject explicit contexts; they do not establish HTTP authority.
+Loopback binding is deployment isolation, not authentication. Remote/production exposure
+still requires stronger identity, TLS, and secret distribution.
+
+Query text has no authoritative classification in the current Knowledge MCP arguments.
+HTTP and stdio therefore use conservative `RESTRICTED`, independently of caller clearance.
+Document batches inherit their maximum authoritative chunk classification. Both reach
+the embedding provider guard before SDK access, with only explicitly approved local
+Ollama destinations and no environment proxy/redirect forwarding (ADR-019). DENY makes
+zero provider calls.
 
 ## OBSOLETE CANDIDATES AFTER MCP MIGRATION
 
@@ -151,6 +170,5 @@ standardizes AI-oriented capability discovery, tool schemas, and multiple transp
 Both can coexist when a system needs them.
 
 MCP is not an agent. It does not select tools, reason about results, route models, or
-enforce model egress. Existing capabilities retain their semantics, and ADR-008 and
-ADR-009 remain responsible for model routing and security when a later agent integration
-is introduced.
+enforce model egress. Existing capabilities retain their semantics; ADR-019 governs
+current model selection and ADR-009 governs security. ADR-008's profile router is historical.

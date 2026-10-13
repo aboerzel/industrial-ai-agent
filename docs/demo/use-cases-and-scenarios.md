@@ -1,7 +1,9 @@
 # Industrial AI Agent Demo: Use Cases and Scenarios
 
-This catalog is the manual acceptance script for synthetic `FACTORY-DEMO-01`. Submit
-normal questions in the Web UI or to `POST /api/v1/runs`; use authenticated MCP for
+This catalog describes illustrative domain scenarios for synthetic `FACTORY-DEMO-01`,
+not the current executable acceptance plan or proof that every sample prompt is admitted.
+Current measured acceptance belongs to the [Quality Gates](../quality/quality-gates.md).
+Submit authorized requests in the Web UI or to `POST /api/v1/runs`; use authenticated MCP for
 direct tool and RCA checks. Sign in through the browser's native HTTP Basic prompt with
 an explicitly provisioned demo username/password. Nginx maps only an authenticated user
 to a server-held API token; no UI access-token field exists. The server resolves that
@@ -19,10 +21,17 @@ loopback-only shared-secret demo, not production identity.
 Visibility follows `user clearance >= data classification`. Factory and knowledge lists
 are RLS-filtered before names, relationships, or classifications are returned. They
 never reveal hidden entities, hidden counts, or required clearance. Higher user clearance
-authorizes lower data but does not raise its run classification: a RESTRICTED P4711
-request stays CONFIDENTIAL and remains public-cloud eligible.
+authorizes lower data but does not itself classify request text. The supported neutral
+request `Investigate P4711 at S04.` remains CONFIDENTIAL even for a RESTRICTED caller.
+Unknown free prose is conservatively RESTRICTED; identifiers never suppress that rule.
+Thus longer illustrative prompts below are domain goals, not authoritative classification
+fixtures, and may be denied under lower clearance. Public-cloud eligibility additionally
+requires the actual run classification and approved model maximum (ADR-009/019).
 
-Sections 1-6 cover normal agent behavior; section 7 covers read-only RCA. The
+Sections 1-6 describe domain behavior conditional on authorized request classification;
+their longer illustrative prompts and expected domain results are non-normative examples,
+not clearance regression fixtures. The supported neutral example above is encoded in
+`tests/unit/test_run_classification_policy.py`. Section 7 covers read-only RCA. The
 deterministic RCA report is authoritative. Optional reasoning may add labelled hypotheses
 but cannot confirm a cause. All records and documents are synthetic.
 
@@ -54,7 +63,7 @@ but cannot confirm a cause. All records and documents are synthetic.
 | Use Case / Scenario | Prompt | User Clearance | Expected Result |
 |---|---|---|---|
 | P4711 history | Investigate the complete production history of P4711. Summarize its station sequence, warnings, and final error. | CONFIDENTIAL | Shows S01 completion, S02 POSITION-ENC-02 warning, S03 completion, and S04 QUALITY-09 failure chronologically. |
-| Higher user, lower run | Investigate why product P4711 failed at station S04. Check the relevant product history, inspection results, and error codes, and use the available documentation if needed. | RESTRICTED | Resolves CONFIDENTIAL run/RLS ceiling, not RESTRICTED; public-cloud routing remains possible. |
+| Higher user, lower run | Investigate P4711 at S04. | RESTRICTED | Supported neutral form resolves CONFIDENTIAL run and bounded RLS scope; approved CONFIDENTIAL-capable cloud models remain eligible. |
 | Confidential denial | Investigate the available history and failure details for product P4711 at station S04. | INTERNAL | Returns neutral `requested_data_unavailable`; no model call or existence disclosure. |
 | Warning relevance | Review P4711's production history and assess whether earlier warnings are relevant to its later failure at station S04. | CONFIDENTIAL | Separates S02 warning from S04 failure; any causal link is explicitly an inference. |
 

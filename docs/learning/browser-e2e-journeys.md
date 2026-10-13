@@ -205,5 +205,7 @@ PASS/FAIL/BLOCKED/HARNESS_ERROR/INCOMPLETE; no P0/P1 or GREEN/YELLOW/RED scoring
 implemented by this runner. A PASS applies only to its listed executed assertions.
 
 This Manual Real-Model E2E suite is deliberately not intended for every development
-change. The next quality-protection task will formalize the FAST / INTEGRATION /
-MANUAL_REAL_MODEL ladder; this document describes the currently implemented workflow.
+change. The implemented FAST / INTEGRATION / MANUAL_REAL_MODEL ladder and its commands
+are defined in [Quality Gates](../quality/quality-gates.md). Authenticated calls, explicit
+expected statuses, fail-closed aggregation/exit codes, and complete REQUIRED assertions
+govern the current runner; OPTIONAL and MANUAL_ONLY claims remain separate.

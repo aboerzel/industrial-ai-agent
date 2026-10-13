@@ -4,7 +4,60 @@ import json
 import re
 from pathlib import Path
 
+from industrial_ai_agent.agent.agent_run import MAX_TOOL_CALLS
+from industrial_ai_agent.agent.model_selection import (
+    ModelSelectionMode,
+    ModelSelectionPolicy,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_current_architecture_fact_table_matches_core_selection_and_budget() -> None:
+    documentation = (PROJECT_ROOT / "docs/architecture/overview.md").read_text(
+        encoding="utf-8"
+    )
+    facts = {
+        columns[0].strip(): re.findall(r"`([^`]+)`", columns[1])
+        for line in documentation.splitlines()
+        if line.startswith("| ") and len(columns := line.strip("|").split("|")) == 3
+    }
+
+    assert set(facts["Model selection modes"]) == {
+        mode.value for mode in ModelSelectionMode
+    }
+    assert set(facts["Automatic selection policies"]) == {
+        policy.value for policy in ModelSelectionPolicy
+    }
+    assert facts["Executed tool-call budget"] == [str(MAX_TOOL_CALLS)]
+    for relative_path in (
+        "docs/architecture/overview.md",
+        "docs/decisions/ADR-004-agent-orchestration-strategy.md",
+        "docs/learning/langgraph-langchain-orchestration.md",
+    ):
+        text = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+        budgets = re.findall(r"MAX_TOOL_CALLS\s*=\s*(\d+)", text)
+        assert budgets and {int(budget) for budget in budgets} == {MAX_TOOL_CALLS}
+
+
+def test_documented_credential_variables_exist_in_configuration_example() -> None:
+    documentation = (PROJECT_ROOT / "docs/learning/browser-frontend.md").read_text(
+        encoding="utf-8"
+    )
+    credentials = documentation.split("## Credential Ownership", maxsplit=1)[1].split(
+        "## Run Lifecycle", maxsplit=1
+    )[0]
+    documented_variables = set(re.findall(r"`([A-Z][A-Z_]+)`", credentials))
+    configured_variables = set(
+        re.findall(
+            r"^([A-Z][A-Z_]+)=",
+            (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        )
+    )
+
+    assert documented_variables
+    assert documented_variables <= configured_variables
 
 
 def test_fastapi_boundary_documented_routes_exist_in_api_source() -> None:

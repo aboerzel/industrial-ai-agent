@@ -4,6 +4,13 @@
 
 Accepted
 
+The original future-tense design and pre-refinement examples below are historical.
+**Initial Egress Matrix**, **Profile Maximum Classification Refinement**, and **Agent Run
+Classification Policy Refinement** describe the current security rules. ADR-019 replaces
+profile-based routing with `MANUAL`/explicit `AUTO`, forbids provider-failure fallback,
+and specifies the implemented embedding boundary; it does not weaken this egress policy.
+The original rationale remains intact.
+
 ## Context
 
 An agent model request may contain more than the original user text. During a bounded
@@ -119,9 +126,10 @@ effective_classification <= profile.max_data_classification
 
 For the local demo, public-cloud profiles explicitly permit up to `CONFIDENTIAL` and
 local profiles explicitly permit up to `RESTRICTED`. The execution-zone matrix remains
-an independent restriction; profile maximums do not replace it. Routing applies security
-eligibility first and then deterministically prefers an eligible public-cloud profile
-for non-RESTRICTED normal agent tasks. `RESTRICTED` has no eligible public-cloud profile.
+an independent restriction; model maximums do not replace it. The former preference for
+public-cloud profiles is historical routing, superseded by ADR-019. Neither `MANUAL`
+nor `AUTO` has an unconditional cloud preference. `RESTRICTED` has no eligible
+public-cloud model.
 
 ### Classification Propagation
 
@@ -145,11 +153,11 @@ or redaction mechanism requires an explicit, separately justified policy.
 Example:
 
 ```text
-PUBLIC user request
+PUBLIC user request with a selected model capped at PUBLIC
   -> get_product_history()
   -> CONFIDENTIAL production data
   -> effective classification = CONFIDENTIAL
-  -> PUBLIC_CLOUD profiles are no longer eligible
+  -> the selected PUBLIC-capped model is no longer eligible
 ```
 
 The strengthened classification applies to every subsequent model call in that run.
@@ -177,7 +185,9 @@ provenance alone is not an authorization decision.
 
 A `PUBLIC` user request does not make retrieved content public. If retrieval adds
 `CONFIDENTIAL` content, the effective classification becomes `CONFIDENTIAL`, and that
-content must not be sent to a `PUBLIC_CLOUD` model under the initial matrix.
+content must not be sent to a model whose approved maximum is below `CONFIDENTIAL`.
+An explicitly eligible CONFIDENTIAL-capable cloud model remains permitted by the
+current matrix; `RESTRICTED` content never does.
 
 ### Model Calls and Defense in Depth
 
@@ -231,7 +241,13 @@ secret mechanism under the existing rules. Local unauthenticated providers must 
 require artificial user-supplied secrets. Possession of a credential does not authorize
 data egress.
 
-### Testing
+### Testing (Original Pre-Refinement Plan)
+
+The original test list below predates the profile-maximum refinement. Current tests
+require `CONFIDENTIAL -> PUBLIC_CLOUD` to allow only with an explicitly eligible model
+maximum and to deny otherwise. `RESTRICTED -> PUBLIC_CLOUD`, missing/invalid labels,
+and unknown zones always deny before provider access. The legacy blanket confidential
+denial below is historical, not an instruction to change current security semantics.
 
 ADR-005 applies. The later implementation must include deterministic tests covering at
 least:

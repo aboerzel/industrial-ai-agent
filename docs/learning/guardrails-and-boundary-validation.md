@@ -13,7 +13,11 @@ flowchart TD
     Domain --> Access["DATA ACCESS: PostgreSQL RLS + clearance"]
     Access --> Context["MODEL CONTEXT: classification defense in depth"]
     Context --> Egress["MODEL EGRESS: EgressCheckedLLMClient"]
-    Tool --> SideEffect["SIDE EFFECT: LangGraph interrupt + approval"]
+    Proposal["Protected proposal"] --> HITL["LangGraph interrupt + persisted human decision"]
+    HITL --> Guard["EXECUTION GUARD: permission + RLS + action/profile<br/>atomic bound single-use approval claim"]
+    Tool --> Guard
+    Guard -->|"ALLOW only"| SideEffect["Protected side effect"]
+    Guard -->|"DENY"| Stop["No side effect"]
     Egress --> Output["OUTPUT: public response schema + sanitization"]
 ```
 
@@ -26,7 +30,8 @@ flowchart TD
 | Domain identifier validity | `ProductId` and `StationId` Value Objects | Project domain rule |
 | Tool availability and read/write behavior | fixed `ToolPolicy` allowlist | Project authorization policy |
 | Four executed calls maximum | LangGraph node routing plus `MAX_TOOL_CALLS` | Project orchestration policy required by ADR-004 |
-| Approval and idempotency | LangGraph `interrupt()` plus server-injected tool-call ID | Framework plus project side-effect policy |
+| Protected execution | Shared capability guard: permission, resource clearance, action/profile, persisted single-use bound approval | Project execution boundary; graph and direct MCP |
+| Approval UX and idempotency | LangGraph `interrupt()` plus server-injected run/action IDs | Framework plus project side-effect policy |
 | Classified record visibility | PostgreSQL RLS and transaction-local clearance | Database |
 | No over-clearance model context | classified result check before `ToolMessage`, then egress check | Defense in depth policy |
 | Provider egress | `EgressCheckedLLMClient` | Project policy required by ADR-009 |
@@ -43,11 +48,13 @@ Tool calls are already the structured model-decision contract: a name, call ID, 
 schema-bound arguments. The graph admits one call and validates it before dispatch. No
 second JSON planner is introduced.
 
-The current OpenAI-compatible local profile does not provide a demonstrated,
-provider-independent reliable JSON-schema final-answer mode. The final answer therefore
-remains text. Its existing internal `AgentRunResult` records deterministic status and
-executed calls; the public API projects only a user-facing answer and normalized calls.
-Adding manual JSON parsing would create a fragile, duplicate decision channel.
+The current final-output path supports a separate bounded structured normalization call
+using `text` + `structured_output`; tool decisions use `text` + `tool_calling` separately.
+ADR-019 validates capabilities per invocation, including incompatible combinations.
+The API projects narrative `answer`, structured `investigation_steps`, and `next_steps`
+alongside lifecycle and actual tool calls. Trusted observations and the ADR-020 evidence
+ledger, not model prose, establish findings and evidence completeness. Structured output
+does not authorize tools or replace deterministic output validation.
 
 ## Injection Boundary
 
