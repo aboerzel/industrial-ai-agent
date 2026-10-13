@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
 from industrial_ai_agent.domain.reranker import Reranker
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.hybrid_knowledge_retriever import (
     HybridKnowledgeRetriever,
 )
@@ -38,6 +39,7 @@ def create_reranked_knowledge_retriever(
     chunks: Sequence[KnowledgeRetrievalResult],
     *,
     embedding_base_url: str | None = None,
+    query_classification: DataClassification | None = None,
     reranker_device: str | None = None,
     reranker_local_files_only: bool = True,
     telemetry: Telemetry | None = None,
@@ -55,6 +57,7 @@ def create_reranked_knowledge_retriever(
         InMemorySemanticKnowledgeRetriever(
             chunks,
             embedding_client,
+            query_classification=query_classification,
         ),
         telemetry=telemetry,
         span_name="retrieval.semantic",

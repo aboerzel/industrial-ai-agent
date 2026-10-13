@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.hybrid_knowledge_retriever import (
     HybridKnowledgeRetriever,
 )
@@ -400,15 +401,22 @@ def _create_retriever(
     if strategy == "bm25":
         return InMemoryBm25KnowledgeRetriever(chunks)
     if strategy == "semantic":
-        return InMemorySemanticKnowledgeRetriever(chunks, OllamaEmbeddingClient())
+        return InMemorySemanticKnowledgeRetriever(
+            chunks,
+            OllamaEmbeddingClient(),
+            query_classification=DataClassification.RESTRICTED,
+        )
     if strategy == "reranked":
-        return create_reranked_knowledge_retriever(chunks)
+        return create_reranked_knowledge_retriever(
+            chunks, query_classification=DataClassification.RESTRICTED
+        )
     return HybridKnowledgeRetriever(
         chunks,
         bm25_retriever=InMemoryBm25KnowledgeRetriever(chunks),
         semantic_retriever=InMemorySemanticKnowledgeRetriever(
             chunks,
             OllamaEmbeddingClient(),
+            query_classification=DataClassification.RESTRICTED,
         ),
         candidate_limit=None,
     )

@@ -6,6 +6,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.knowledge_mcp_server import (
     _invoke_knowledge_search,
 )
@@ -43,7 +44,9 @@ def test_retrieval_stage_spans_share_the_knowledge_search_trace() -> None:
     )
 
     with telemetry.span("knowledge.search", {"mcp.tool": "search_documentation"}):
-        embedding.embed_query("private query")
+        embedding.embed_query(
+            "private query", classification=DataClassification.RESTRICTED
+        )
         candidates = lexical.search("private query", 3)
         fusion.search("private query", 3)
         reranker.rerank("private query", candidates)
@@ -107,10 +110,14 @@ def _recording_telemetry() -> tuple[Telemetry, InMemorySpanExporter]:
 
 
 class _EmbeddingClient:
-    def embed_query(self, text: str) -> tuple[float, ...]:
+    def embed_query(
+        self, text: str, *, classification: DataClassification | None = None
+    ) -> tuple[float, ...]:
         return (0.1, 0.2)
 
-    def embed_documents(self, texts: list[str]) -> tuple[tuple[float, ...], ...]:
+    def embed_documents(
+        self, texts: list[str], *, classification: DataClassification | None = None
+    ) -> tuple[tuple[float, ...], ...]:
         return tuple((0.1, 0.2) for _ in texts)
 
 

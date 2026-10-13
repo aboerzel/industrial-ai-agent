@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.hybrid_knowledge_retriever import (
     HybridKnowledgeRetriever,
 )
@@ -35,6 +36,7 @@ def main() -> None:
         semantic_retriever=InMemorySemanticKnowledgeRetriever(
             chunks,
             OllamaEmbeddingClient(),
+            query_classification=DataClassification.RESTRICTED,
         ),
         candidate_limit=DEFAULT_RERANK_CANDIDATE_LIMIT,
     )

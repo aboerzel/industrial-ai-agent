@@ -152,6 +152,7 @@ def create_default_knowledge_mcp_server(
     retriever = create_reranked_knowledge_retriever(
         chunks,
         embedding_base_url=embedding_base_url,
+        query_classification=DataClassification.RESTRICTED,
         reranker_device=reranker_device,
         reranker_local_files_only=reranker_local_files_only,
         telemetry=telemetry,
@@ -242,6 +243,8 @@ class ClearanceAwareDocumentationSearchFactory:
         retriever = create_reranked_knowledge_retriever(
             chunks,
             embedding_base_url=self._embedding_base_url,
+            # Caller clearance limits reads; it cannot classify arbitrary query text.
+            query_classification=DataClassification.RESTRICTED,
             reranker_device=self._reranker_device,
             reranker_local_files_only=self._reranker_local_files_only,
             telemetry=self._telemetry,

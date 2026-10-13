@@ -6,6 +6,7 @@ from industrial_ai_agent.domain.embedding_client import EmbeddingClient, Embeddi
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
 from industrial_ai_agent.domain.reranker import Reranker
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.telemetry import Telemetry
 
 
@@ -23,11 +24,19 @@ class ObservedEmbeddingClient:
         self._telemetry = telemetry
         self._model = model
 
-    def embed_query(self, text: str) -> EmbeddingVector:
-        return self._observe(lambda: self._delegate.embed_query(text))
+    def embed_query(
+        self, text: str, *, classification: DataClassification | None = None
+    ) -> EmbeddingVector:
+        return self._observe(
+            lambda: self._delegate.embed_query(text, classification=classification)
+        )
 
-    def embed_documents(self, texts: Sequence[str]) -> tuple[EmbeddingVector, ...]:
-        return self._observe(lambda: self._delegate.embed_documents(texts))
+    def embed_documents(
+        self, texts: Sequence[str], *, classification: DataClassification | None = None
+    ) -> tuple[EmbeddingVector, ...]:
+        return self._observe(
+            lambda: self._delegate.embed_documents(texts, classification=classification)
+        )
 
     def _observe(self, operation):
         if self._telemetry is None:

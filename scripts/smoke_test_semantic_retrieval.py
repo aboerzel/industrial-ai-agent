@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.in_memory_lexical_knowledge_retriever import (
     load_markdown_chunks,
 )
@@ -20,6 +21,7 @@ def main() -> None:
     retriever = InMemorySemanticKnowledgeRetriever(
         load_markdown_chunks(KNOWLEDGE_BASE_PATH),
         OllamaEmbeddingClient(),
+        query_classification=DataClassification.RESTRICTED,
     )
     results = retriever.search(QUERY, limit=3)
 

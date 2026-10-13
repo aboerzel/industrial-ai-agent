@@ -596,7 +596,8 @@ flowchart LR
     CEP --> RER
     SEM -->|"embeds through"| EP
     SEM --> VEC
-    OEC --> OLLAMA
+    OEC --> EG["Embedding egress authorization<br/>trusted classification + approved destination"]
+    EG -->|"ALLOW only: SDK call"| OLLAMA
     FMCP --> PHC
     FMCP --> MSC
     KMCP --> DSC
@@ -676,7 +677,13 @@ flowchart LR
     RLS --> Docs["Permitted cataloged documents"]
     Docs --> Chunk["Normalized heading chunks<br/>with stable provenance"]
     Chunk --> Lexical["BM25"]
-    Chunk --> Semantic["Local semantic retrieval"]
+    Chunk --> DC["Maximum authoritative chunk classification"]
+    MCP --> QC["Query classification from server-owned context"]
+    DC --> EG["Embedding egress authorization<br/>at provider boundary"]
+    QC --> EG
+    EG -->|"ALLOW"| SDK["Approved local Ollama SDK call"]
+    EG -->|"DENY"| Stop["No provider call"]
+    SDK --> Semantic["Local semantic retrieval"]
     Lexical --> Fusion["RRF fusion"]
     Semantic --> Fusion
     Fusion --> Rerank["Local cross-encoder reranking"]
@@ -688,7 +695,7 @@ flowchart LR
     classDef data fill:#334155,stroke:#0f172a,color:#ffffff
     classDef processing fill:#0f766e,stroke:#134e4a,color:#ffffff
     class Query,MCP,Agent entry
-    class RLS security
+    class RLS,DC,QC,EG,Stop security
     class Docs,Chunk,Results data
     class Lexical,Semantic,Fusion,Rerank processing
 ```
@@ -702,6 +709,23 @@ rank constant `60`; it never adds their incomparable raw scores. BM25 omits zero
 chunks and resolves ties by `chunk_id`; hybrid resolves equal fused scores
 the same way. Source path, document ID, chunk ID, section metadata, and score remain
 attached to every result.
+
+`EmbeddingClient` carries explicit classification to both provider methods. Document
+batches use the maximum authoritative chunk label and reject absent labels instead of
+using a default. The public versioned Markdown loader declares its label explicitly;
+catalog ingestion preserves the persisted label. Caller clearance governs resource
+access and does not establish query sensitivity. HTTP and stdio query embeddings use
+`RESTRICTED` because the current Knowledge MCP contract carries no authoritative
+per-query classification. Standalone smoke/eval composition also uses `RESTRICTED`;
+missing standalone query context fails closed.
+`OllamaEmbeddingClient` checks the same `ModelExecutionAuthorizer` used for Chat/RCA and
+the explicit embedding destination restriction immediately before each SDK call.
+Only HTTP port 11434 at loopback or the deployment-controlled Docker host alias is
+approved; localhost is pinned to numeric loopback. Proxies and redirects are disabled.
+Unknown, remote, HTTPS, credential-bearing, or path-prefixed targets deny with zero
+provider calls. Docker's `host-gateway` mapping and the local Ollama service remain
+trusted deployment infrastructure; neither may forward protected inputs externally.
+There is no embedding fallback, automatic model choice, or declassification.
 
 The focused retrieval eval is separate from the agent evals. Its 28 frozen v2 cases
 measure Hit@1, Hit@3, and Mean Recall@3 using structured relevant-chunk ground truth.
@@ -1273,7 +1297,8 @@ flowchart LR
     Semantic --> Hybrid
     Hybrid --> Reranked
     Reranker --> Reranked
-    Adapter --> Model["Local Ollama<br/>qwen3-embedding:0.6b"]
+    Adapter --> Guard["Embedding egress authorization<br/>trusted DataClassification + destination"]
+    Guard -->|"ALLOW only: SDK call"| Model["Local Ollama<br/>qwen3-embedding:0.6b"]
 
     classDef core fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22

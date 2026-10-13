@@ -97,6 +97,33 @@ vision, embedding, or specialized models. Tool/MCP data can raise effective
 classification monotonically but cannot lower it. Model selection never changes database
 RLS, document, retrieval, MCP, tool, hardware, or persisted-investigation access.
 
+### Embedding provider boundary
+
+The existing embedding role remains a separate `EmbeddingClient`, without catalog
+migration or routing. Each query and document-batch call carries an explicit trusted
+`DataClassification`; absent or invalid labels deny. Document batches retain the maximum
+authoritative chunk classification. Caller clearance authorizes resource access; it
+does not classify submitted query text. Knowledge HTTP and local stdio composition use
+the conservative `RESTRICTED` label because neither receives authoritative per-query
+data classification. Persisted effective run classification exists upstream but is not
+part of the current Knowledge MCP query contract. Standalone callers must supply a
+trusted query classification. Neither MCP arguments nor query text select that label.
+
+Immediately before either embedding SDK call, a specialized boundary validates the
+explicit deployment-approved destination and invokes the unchanged
+`ModelExecutionAuthorizer` with `LOCAL` and maximum `RESTRICTED`. Approved destinations
+are HTTP on port 11434 at `localhost`, `127.0.0.1`, `[::1]`, or the exact Docker host alias
+`host.docker.internal`. Localhost is pinned to numeric loopback; Docker approval relies
+on the existing deployment-controlled `host-gateway` mapping. Arbitrary private-network,
+remote, HTTPS, alternate-port, credential-bearing, or path-prefixed destinations deny.
+Environment proxies and redirect following are disabled. The host service and its
+network mapping remain trusted deployment infrastructure and must not forward inputs
+to a cloud provider. Destination syntax alone grants no permission.
+
+Denied calls reach the SDK zero times. This adds no fallback, model selection, or
+declassification and does not alter Chat/RCA policy. Custom embedding-port implementations
+must accept the classification argument; callers lacking it now fail closed.
+
 ### Deterministic automatic selection
 
 An assignment has an explicit selection mode. `MANUAL` preserves the assigned `model_id`

@@ -223,6 +223,15 @@ See `docs/decisions/ADR-008-task-level-model-routing.md`,
 `docs/decisions/ADR-009-data-classification-and-model-egress-policy.md`, and
 `docs/decisions/ADR-019-model-catalog-assignments-and-execution-policy.md`.
 
+Embedding calls must carry explicit trusted classification to the provider boundary.
+Query sensitivity comes from server-owned context, never model/tool arguments;
+caller clearance does not classify input text. Knowledge HTTP and stdio query
+composition uses RESTRICTED when authoritative per-query classification is absent;
+document batches retain the maximum authoritative chunk label. Missing labels deny.
+Both Ollama embedding methods enforce the existing model policy and the explicit
+local-destination restriction before SDK access; disable environment proxies and
+redirects. Do not broaden approved destinations or silently default to PUBLIC.
+
 ---
 
 ## Tool Design

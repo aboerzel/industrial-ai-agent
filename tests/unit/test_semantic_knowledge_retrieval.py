@@ -6,6 +6,7 @@ import pytest
 from industrial_ai_agent.domain.embedding_client import EmbeddingClient, EmbeddingVector
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
 from industrial_ai_agent.domain.knowledge_retriever import KnowledgeRetriever
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.in_memory_semantic_knowledge_retriever import (
     InMemorySemanticKnowledgeRetriever,
 )
@@ -16,11 +17,15 @@ class FakeEmbeddingClient:
         self.document_requests: list[tuple[str, ...]] = []
         self.query_requests: list[str] = []
 
-    def embed_query(self, text: str) -> EmbeddingVector:
+    def embed_query(
+        self, text: str, *, classification: DataClassification | None = None
+    ) -> EmbeddingVector:
         self.query_requests.append(text)
         return self._embed(text)
 
-    def embed_documents(self, texts: Sequence[str]) -> tuple[EmbeddingVector, ...]:
+    def embed_documents(
+        self, texts: Sequence[str], *, classification: DataClassification | None = None
+    ) -> tuple[EmbeddingVector, ...]:
         self.document_requests.append(tuple(texts))
         return tuple(self._embed(text) for text in texts)
 
@@ -44,14 +49,21 @@ def chunk(chunk_id: str, content: str) -> KnowledgeRetrievalResult:
         source=f"{document_id}.md",
         chunk_id=chunk_id,
         metadata={"title": chunk_id},
+        classification=DataClassification.PUBLIC,
     )
 
 
 def test_embedding_port_supports_single_query_and_batch_documents() -> None:
     client: EmbeddingClient = FakeEmbeddingClient()
 
-    assert client.embed_query("repair") == (1.0, 0.0, 0.0)
-    assert client.embed_documents(("repair", "camera")) == (
+    assert client.embed_query("repair", classification=DataClassification.PUBLIC) == (
+        1.0,
+        0.0,
+        0.0,
+    )
+    assert client.embed_documents(
+        ("repair", "camera"), classification=DataClassification.PUBLIC
+    ) == (
         (1.0, 0.0, 0.0),
         (0.0, 1.0, 0.0),
     )
@@ -72,6 +84,7 @@ def test_semantic_retriever_builds_document_index_once() -> None:
             chunk("vision::chunk-001", "Camera calibration procedure."),
         ),
         embeddings,
+        query_classification=DataClassification.RESTRICTED,
     )
 
     assert embeddings.document_requests == [
@@ -89,6 +102,7 @@ def test_semantic_retriever_preserves_provenance_and_stable_chunk_mapping() -> N
     retriever = InMemorySemanticKnowledgeRetriever(
         (source_chunk, chunk("vision::chunk-001", "Camera calibration procedure.")),
         FakeEmbeddingClient(),
+        query_classification=DataClassification.RESTRICTED,
     )
 
     result = retriever.search("Verify ready after repair", limit=1)[0]
@@ -109,6 +123,7 @@ def test_semantic_retriever_enforces_top_k_and_is_deterministic() -> None:
             chunk("vision::chunk-001", "Camera calibration procedure."),
         ),
         FakeEmbeddingClient(),
+        query_classification=DataClassification.RESTRICTED,
     )
 
     first_results = retriever.search("ready after repair", limit=2)
@@ -125,6 +140,7 @@ def test_semantic_retriever_rejects_empty_query_and_invalid_limit() -> None:
     retriever = InMemorySemanticKnowledgeRetriever(
         (chunk("station::chunk-001", "Confirm homing after repair."),),
         FakeEmbeddingClient(),
+        query_classification=DataClassification.RESTRICTED,
     )
 
     with pytest.raises(ValueError, match="query must not be empty"):
@@ -137,6 +153,7 @@ def test_semantic_retriever_fulfills_knowledge_retriever_port() -> None:
     retriever: KnowledgeRetriever = InMemorySemanticKnowledgeRetriever(
         (chunk("station::chunk-001", "Confirm homing after repair."),),
         FakeEmbeddingClient(),
+        query_classification=DataClassification.RESTRICTED,
     )
 
     results = retriever.search("ready after repair", limit=1)

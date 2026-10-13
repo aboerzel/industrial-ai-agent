@@ -6,6 +6,7 @@ from math import log
 from pathlib import Path
 
 from industrial_ai_agent.domain.knowledge_retrieval import KnowledgeRetrievalResult
+from industrial_ai_agent.domain.security import DataClassification
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*", re.IGNORECASE)
 _FAULT_IDENTIFIER_PATTERN = re.compile(
@@ -204,6 +205,8 @@ def load_markdown_chunks(directory: Path) -> tuple[KnowledgeRetrievalResult, ...
                     document_id=document_id,
                     source=path.relative_to(directory).as_posix(),
                     chunk_id=f"{document_id}::chunk-{position:03d}",
+                    # This loader is for the versioned public Markdown baseline.
+                    classification=DataClassification.PUBLIC,
                     metadata={
                         "title": title,
                         "format": "markdown",
