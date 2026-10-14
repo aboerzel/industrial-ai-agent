@@ -345,7 +345,8 @@ The header account menu shows the current username, clearance and roles, and con
 language selection, Switch user and Logout. It deliberately lets you switch to any
 predefined demo user, including admin, without typing a password. After logout, choose
 a demo user to log in again. The header Configuration button is enabled only for
-MODEL_ADMIN; the Investigation toolbar contains only Monitoring, PDF and New Chat.
+MODEL_ADMIN. Header controls are ordered Monitoring, Configuration, Account;
+the Investigation toolbar contains only PDF and New Chat.
 Clearance and roles come from the server session, never a browser clearance selector.
 
 **DEMO-ONLY CREDENTIALS — NOT FOR PRODUCTION OR SERVICE AUTHENTICATION**

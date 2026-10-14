@@ -83,7 +83,7 @@ svg {
 }
 
 .site-heading { min-width: 0; }
-.header-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.header-actions { position: relative; display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
 .account-area { position: relative; }
 .account-panel {
   position: absolute;
@@ -433,7 +433,8 @@ select:focus, textarea:focus {
   .clearance-control { flex: 1 1 145px; }
   .clearance-control select, .clearance-control input { width: 100%; }
   .toolbar-actions { justify-content: space-between; }
-  .monitoring-menu-panel { right: auto; left: 0; width: min(330px, calc(100vw - 32px)); }
+  .header-actions .monitoring-menu { position: static; }
+  .monitoring-menu-panel { right: 0; left: auto; width: min(330px, calc(100vw - 32px)); grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .model-assignment-row { grid-template-columns: 1fr; gap: 6px; padding: 12px 0; }
   .model-assignment-row h4 { margin-top: 0; }
   .model-assignment-meta { grid-column: auto; }

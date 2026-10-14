@@ -18,6 +18,8 @@ test("renders a JavaScript-independent declarative Monitoring menu", async () =>
   const links = [...(menu?.querySelectorAll(":scope > nav a") ?? [])];
 
   assert.ok(menu);
+  assert.equal(menu.parentElement.className, "header-actions");
+  assert.equal(menu.nextElementSibling.className, "configuration-control");
   assert.ok(summary);
   assert.equal(summary.textContent.trim(), "Monitoring");
   assert.equal(dom.window.document.querySelector("#monitoring-dialog"), null);

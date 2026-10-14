@@ -34,12 +34,12 @@ An existing valid demo session survives refresh. Logout stays logged out on refr
 use the compact demo-user list to log in again without typing credentials. Explicit
 username/password testing remains available through the existing `/login` API.
 
-The top-right header contains Configuration and an account button with the current
+The top-right header contains Monitoring, Configuration and an account button with the current
 username. The account menu shows clearance, roles, language, Switch user and Logout.
 Switch user lists all configured identities and marks the active user. Configuration
 is enabled only for the server-derived MODEL_ADMIN role; a restricted user's higher
-clearance does not enable it. The Investigation toolbar contains only Monitoring,
-PDF and New Chat. Language changes preserve identity and investigation. Account controls
+clearance does not enable it. The Investigation toolbar contains only PDF and New Chat.
+Language changes preserve identity and investigation. Account controls
 support keyboard use, outside-click dismissal and Escape; passwords are not rendered.
 
 The browser retrieves safe identity metadata from `GET /api/v1/auth/me`: username,

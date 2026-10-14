@@ -59,8 +59,9 @@ test("header account menu shows authoritative permissions, active user and keybo
   await page.locator("#result-title").click();
   await expect(page.locator("#account-panel")).toBeHidden();
   const toolbar = page.locator(".toolbar-controls");
-  await expect(toolbar.locator("button, summary")).toHaveText(["Monitoring", "PDF", "New Chat"]);
-  expect(await toolbar.locator("#logout-button, #response-language, #model-configuration-button, #account-button").count()).toBe(0);
+  await expect(toolbar.locator("button, summary")).toHaveText(["PDF", "New Chat"]);
+  expect(await toolbar.locator(".monitoring-menu, #logout-button, #response-language, #model-configuration-button, #account-button, select").count()).toBe(0);
+  expect(await page.locator(".header-actions").evaluate(node => [...node.children].map(child => child.className))).toEqual(["monitoring-menu", "configuration-control", "account-area"]);
 });
 
 test("language in account menu preserves investigation and server identity across refresh", async ({ page }) => {
@@ -92,6 +93,29 @@ test("compact header remains usable on a narrow viewport", async ({ page }) => {
   expect(panel.x).toBeGreaterThanOrEqual(0);
   expect(panel.x + panel.width).toBeLessThanOrEqual(390);
   expect(panel.y + panel.height).toBeLessThanOrEqual(844);
+});
+
+test("header Monitoring keeps its links and mouse/keyboard behavior on desktop and mobile", async ({ page }) => {
+  for (const width of [1280, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const summary = page.locator(".header-actions .monitoring-menu summary");
+    await summary.click();
+    const panel = page.locator(".monitoring-menu-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("a")).toHaveText(["System Overview", "Usage Analytics", "LLM Usage Analytics", "Failure Analytics"]);
+    const bounds = await panel.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await summary.press("Enter");
+    await expect(panel).toBeHidden();
+    await summary.press("Space");
+    await expect(panel).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(panel.locator("a").first()).toBeFocused();
+    await summary.press("Enter");
+    await expect(panel).toBeHidden();
+  }
 });
 
 for (const user of demoUsers) {

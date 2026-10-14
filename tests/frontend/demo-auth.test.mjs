@@ -28,17 +28,20 @@ async function switchUser(document, window, username) {
   await settle();
 }
 
-test("header owns account and configuration; investigation toolbar contains only its three actions", async (t) => {
+test("header orders Monitoring, Configuration and Account; investigation toolbar contains only PDF and New Chat", async (t) => {
   const { document } = await app(t);
   const header = document.querySelector(".site-header");
   assert.ok(header.querySelector("#account-button"));
   assert.ok(header.querySelector("#model-configuration-button"));
+  assert.deepEqual([...header.querySelector(".header-actions").children].map(node => node.className), ["monitoring-menu", "configuration-control", "account-area"]);
+  assert.equal(document.querySelectorAll(".monitoring-menu").length, 1);
   const toolbar = document.querySelector(".toolbar-controls");
-  assert.deepEqual([...toolbar.querySelectorAll("button, summary")].map(node => node.textContent.trim()), ["Monitoring", "PDF", "New Chat"]);
+  assert.deepEqual([...toolbar.querySelectorAll("button, summary")].map(node => node.textContent.trim()), ["PDF", "New Chat"]);
   for (const id of ["current-user", "logout-button", "response-language", "model-configuration-button", "demo-user-list", "user-clearance"]) {
     assert.equal(toolbar.querySelector(`#${id}`), null);
   }
-  assert.doesNotMatch(toolbar.textContent, /Logout|Logged out|Language|Configuration|Clearance/);
+  assert.equal(toolbar.querySelector(".monitoring-menu, .account-area, select"), null);
+  assert.doesNotMatch(toolbar.textContent, /Monitoring|Logout|Logged out|Language|Configuration|Clearance/);
 });
 
 test("account menu exposes identity, language and actions and marks the active server identity", async (t) => {

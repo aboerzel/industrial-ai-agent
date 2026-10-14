@@ -81,8 +81,8 @@ Its menu shows clearance and roles, language selection, Switch user and Logout.
 Switching and the user selection after logout never require typing a password.
 Explicit credential testing remains available through the existing login API.
 The separate header Configuration button is visible but disabled without MODEL_ADMIN,
-with a permission explanation. The Investigation toolbar contains only Monitoring,
-PDF and New Chat. Changing language preserves the session, investigation and existing
+with a permission explanation. Header controls are ordered Monitoring, Configuration,
+Account. The Investigation toolbar contains only PDF and New Chat. Changing language preserves the session, investigation and existing
 language preference; account labels follow the selected language. The menu closes on
 outside click or Escape and supports keyboard opening and normal Tab navigation.
 There is no Basic challenge or htpasswd provisioning. Disabled demo mode provides no
