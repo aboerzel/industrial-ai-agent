@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from enum import StrEnum
+from math import isfinite
 from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -205,11 +204,16 @@ class LlmRcaReasoner:
         client_factory: Callable[[DataClassification, RcaFocus], LLMClient],
         timeout_seconds: float = 30,
     ) -> None:
-        if timeout_seconds <= 0:
+        if not isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("RCA reasoning timeout must be positive")
         self._model_resolver = model_resolver
         self._client_factory = client_factory
         self._timeout_seconds = timeout_seconds
+
+    @property
+    def timeout_seconds(self) -> float:
+        """The optional operation budget, also enforced by the transport boundary."""
+        return self._timeout_seconds
 
     def reason(
         self,
@@ -269,18 +273,10 @@ def _chat_with_timeout(
     *,
     timeout_seconds: float,
 ):
-    """Bound optional provider waiting without delaying deterministic RCA output."""
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="rca-reasoning")
-    future = executor.submit(client.chat, model_id, request)
-    try:
-        return future.result(timeout=timeout_seconds)
-    except FutureTimeoutError as error:
-        future.cancel()
-        raise TimeoutError("RCA reasoning timed out") from error
-    finally:
-        # An in-flight provider call cannot be force-cancelled safely. Detach it because
-        # reasoning is optional and the deterministic response must remain available.
-        executor.shutdown(wait=False, cancel_futures=True)
+    """Pass the operation deadline to the provider port; create no provider workers."""
+    return client.chat(
+        model_id, request.model_copy(update={"timeout_seconds": timeout_seconds})
+    )
 
 
 class _RcaReasoningProviderOutput(_RcaReasoningModel):

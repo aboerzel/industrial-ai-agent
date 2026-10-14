@@ -5,12 +5,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from functools import partial
+from math import isfinite
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
+import anyio
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
@@ -75,6 +79,9 @@ from industrial_ai_agent.infrastructure.api.postgres_run_store import (
 from industrial_ai_agent.infrastructure.llm.configuration import (
     ModelCatalogConfiguration,
     load_model_catalog,
+)
+from industrial_ai_agent.infrastructure.llm.deadline_transport import (
+    DeadlineHTTPTransport,
 )
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
@@ -247,18 +254,73 @@ class _RcaReportProjection(_McpModel):
     reasoning: _ReasoningProjection
 
 
+class _ReasoningWorkers:
+    """Own bounded jobs until actual completion, including after caller cancellation."""
+
+    def __init__(self, capacity: int = 4) -> None:
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
+            raise ValueError("RCA reasoning capacity must be positive")
+        self._capacity = capacity
+        self._limiter = anyio.CapacityLimiter(capacity)
+        self._pending: set[asyncio.Task[RcaReasoningResult]] = set()
+        self._closed = False
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+    async def run(
+        self, action: Callable[[], RcaReasoningResult], timeout_seconds: float
+    ) -> RcaReasoningResult:
+        # Admission precedes queueing. A caller timeout never releases this capacity.
+        if self._closed or len(self._pending) >= self._capacity:
+            raise TimeoutError("RCA reasoning capacity unavailable")
+        job = asyncio.create_task(
+            anyio.to_thread.run_sync(action, limiter=self._limiter),
+            name="rca-reasoning-owned",
+        )
+        self._pending.add(job)
+        job.add_done_callback(self._completed)
+        return await asyncio.wait_for(asyncio.shield(job), timeout_seconds)
+
+    def _completed(self, job: asyncio.Task[RcaReasoningResult]) -> None:
+        self._pending.discard(job)
+        if not job.cancelled():
+            # Retrieve late failures even when the requesting coroutine has gone.
+            job.exception()
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._pending:
+            await asyncio.gather(*tuple(self._pending), return_exceptions=True)
+
+
 def create_rca_mcp_server(
     *,
     analysis_service: RcaAnalysisService,
     reasoner: RcaReasoner | None = None,
     access_control: McpHttpAccessControl | None = None,
     telemetry: Telemetry | None = None,
+    reasoning_max_concurrency: int = 4,
 ) -> MCPServer:
     """Expose one bounded projection over the existing deterministic RCA service."""
+    workers = _ReasoningWorkers(reasoning_max_concurrency)
+    timeout_seconds = getattr(reasoner, "timeout_seconds", 90.0)
+    if not isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("RCA reasoning timeout must be finite and positive")
+
+    @asynccontextmanager
+    async def lifespan(_server: MCPServer) -> AsyncIterator[dict[str, object]]:
+        try:
+            yield {}
+        finally:
+            await workers.close()
+
     server = MCPServer(
         name=RCA_MCP_SERVER_NAME,
         version=RCA_MCP_SERVER_VERSION,
         description="Read-only deterministic RCA for one RLS-authorized agent run.",
+        lifespan=lifespan,
     )
 
     @server.tool(
@@ -294,7 +356,7 @@ def create_rca_mcp_server(
         except RcaRuntimeEvidenceUnavailableError as error:
             raise RuntimeError("RCA runtime evidence is unavailable") from error
         focus_value = RcaFocus(focus)
-        reasoning_result = await asyncio.to_thread(
+        action = partial(
             _reasoning_result,
             report,
             focus=focus_value,
@@ -302,6 +364,29 @@ def create_rca_mcp_server(
             reasoner=reasoner,
             telemetry=telemetry,
         )
+        if reasoning != "explain" or reasoner is None:
+            reasoning_result = await asyncio.to_thread(action)
+        else:
+            try:
+                reasoning_result = await workers.run(action, timeout_seconds)
+            except TimeoutError:
+                if telemetry is not None:
+                    telemetry.log_error(
+                        event="rca.reasoning.unavailable",
+                        run_id=str(report.run_id),
+                        error_code="rca_reasoning_timeout_or_capacity",
+                    )
+                reasoning_result = RcaReasoningResult.unavailable(
+                    RcaReasoningStatus.UNAVAILABLE, report
+                )
+            except asyncio.CancelledError:
+                if telemetry is not None:
+                    telemetry.log_error(
+                        event="rca.reasoning.cancelled",
+                        run_id=str(report.run_id),
+                        error_code="rca_reasoning_cancelled",
+                    )
+                raise
         return _project_report(report, focus_value, reasoning_result).model_dump(
             mode="json"
         )
@@ -406,7 +491,12 @@ def _create_rca_reasoner(
         configuration = load_model_catalog(DEFAULT_MODEL_CATALOG_PATH)
     except (OSError, ValueError):
         return None
-    adapter = OpenAICompatibleLLMClient(configuration)
+    adapter = OpenAICompatibleLLMClient(
+        configuration,
+        http_client_factory=lambda: httpx.Client(
+            transport=DeadlineHTTPTransport(), trust_env=False, follow_redirects=False
+        ),
+    )
     authorizer = ModelExecutionAuthorizer()
     resolver = ModelResolutionService(
         catalog=configuration,

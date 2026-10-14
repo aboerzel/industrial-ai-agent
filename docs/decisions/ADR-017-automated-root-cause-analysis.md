@@ -284,3 +284,42 @@ independent of Agent and deterministic RCA timeouts. In the local Compose profil
 90 seconds: this bounded value covers the measured local Ollama generation range of
 approximately 63 to 82 seconds, including one cold start, while preserving failure
 isolation if the provider does not return.
+
+RCA's provider operation carries that budget as the provider-independent
+`LLMRequest.timeout_seconds` option, never as prompt content or a provider header.
+The existing SDK connect/read/write/pool limits are `min(45 seconds, RCA budget)`.
+The RCA-specific `DeadlineHTTPTransport` additionally enforces the full RCA budget
+across connection establishment, headers, and the complete response body. A phase can
+fail earlier; the 90-second local budget does not extend the 45-second phase limits.
+Other model consumers retain their existing SDK defaults and transport.
+
+The synchronous reasoner and SDK execute in the existing AnyIO worker pool. Their
+HTTP transport uses native async HTTPX on the owning server event loop through
+`anyio.from_thread.run`; it creates neither an additional event loop nor an executor.
+Each HTTP operation closes its async transport on success or timeout. Environment
+proxies and redirects remain disabled, with the existing routing/capability/egress
+guards before transport access.
+
+The RCA MCP adapter admits at most four active plus queued explanation jobs per server.
+It owns every job until actual completion, consumes late failures, and drains jobs at
+server shutdown. Capacity exhaustion returns optional `unavailable` without dispatch.
+The request wait is bounded by the same RCA budget. Request cancellation or timeout
+does not kill a Python thread or release admission capacity early: the owned job can
+finish briefly afterwards, bounded by its transport deadline, and its late result is
+discarded. Provider failures and timeouts preserve the deterministic RCA projection;
+there is no retry, fallback, or change to the 1024-token/schema/semantic contract.
+
+```mermaid
+sequenceDiagram
+    participant Request as RCA request
+    participant Jobs as Owned RCA jobs (limit 4)
+    participant Worker as AnyIO worker
+    participant HTTP as Async HTTP transport
+    Request->>Jobs: Admit explanation within RCA budget
+    Jobs->>Worker: Authorized sync reasoner and SDK call
+    Worker->>HTTP: Existing event loop; total transport deadline
+    Note over Request,Jobs: Caller may time out or cancel; job stays owned
+    HTTP-->>Worker: Response or transport timeout; close transport
+    Worker-->>Jobs: Actual completion; reclaim capacity
+    Jobs-->>Request: Publish only while caller still awaits
+```

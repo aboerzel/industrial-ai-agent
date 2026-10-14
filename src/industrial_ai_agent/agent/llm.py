@@ -162,6 +162,8 @@ class LLMRequest(BaseModel):
     reasoning_effort: LLMReasoningEffort | None = None
     # An explicit use-case budget overrides the adapter's catalog default.
     max_output_tokens: int | None = Field(default=None, ge=1, le=4096, strict=True)
+    # Optional per-call transport budget; never part of model input.
+    timeout_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class LLMRequestDiagnostics(BaseModel):

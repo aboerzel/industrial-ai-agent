@@ -37,6 +37,7 @@ from industrial_ai_agent.infrastructure.llm.configuration import (
     ModelCatalogConfiguration,
     ModelConfig,
 )
+from industrial_ai_agent.infrastructure.llm.deadline_transport import operation_deadline
 
 _FINISH_REASONS = {
     "stop": FinishReason.STOP,
@@ -72,10 +73,12 @@ class OpenAICompatibleLLMClient:
         *,
         environment: Mapping[str, str] | None = None,
         client_factory: Callable[..., Any] = OpenAI,
+        http_client_factory: Callable[[], httpx.Client] | None = None,
     ) -> None:
         self._configuration = configuration
         self._environment = environment if environment is not None else os.environ
         self._client_factory = client_factory
+        self._http_client_factory = http_client_factory
         self._clients: dict[str, Any] = {}
 
     def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
@@ -127,9 +130,12 @@ class OpenAICompatibleLLMClient:
             parameters["reasoning_effort"] = request.reasoning_effort.value
 
         request_diagnostics = _request_diagnostics(parameters)
+        if request.timeout_seconds is not None:
+            parameters["timeout"] = min(_SDK_TIMEOUT_SECONDS, request.timeout_seconds)
 
         try:
-            completion = client.chat.completions.create(**parameters)
+            with operation_deadline(request.timeout_seconds):
+                completion = client.chat.completions.create(**parameters)
         except Exception as error:
             classified = _classify_provider_error(error)
             if classified is not None:
@@ -188,7 +194,11 @@ class OpenAICompatibleLLMClient:
             self._clients[model_id.value] = self._client_factory(
                 api_key=self._resolve_api_key(profile_config),
                 base_url=base_url,
-                http_client=httpx.Client(trust_env=False, follow_redirects=False),
+                http_client=(
+                    self._http_client_factory()
+                    if self._http_client_factory is not None
+                    else httpx.Client(trust_env=False, follow_redirects=False)
+                ),
                 # Let the application classify a provider limit immediately. The
                 # OpenAI SDK otherwise retries 429 responses with backoff inside
                 # the bounded Agent execution deadline.

@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from time import sleep
+from threading import Event
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -634,11 +634,12 @@ class _FailingClient(LLMClient):
 
 class _BlockingClient(LLMClient):
     def chat(self, profile: object, request: LLMRequest) -> LLMResponse:
-        del profile, request
-        sleep(0.05)
-        return LLMResponse(
-            text=json.dumps(_valid_output()), finish_reason=FinishReason.STOP
-        )
+        del profile
+        assert request.timeout_seconds == 0.01
+        # The fake implements the same bounded-operation obligation as the transport.
+        if not Event().wait(request.timeout_seconds):
+            raise TimeoutError("Synthetic provider operation deadline exceeded")
+        raise AssertionError("Unreleased synthetic operation unexpectedly completed")
 
 
 @dataclass(frozen=True)
