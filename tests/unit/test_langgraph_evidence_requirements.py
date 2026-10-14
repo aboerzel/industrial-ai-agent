@@ -432,14 +432,11 @@ def test_checkpoint_state_reconstructs_exactly_and_preserves_classification() ->
 
 
 def test_station_list_and_status_only_requirements_remain_proportional() -> None:
+    # The allowlisted inventory read now precedes the first model explanation.
+    list_client = FakeLLMClient([_final("S04")])
     station_list = LangGraphTroubleshootingAgent(
         LLMClientChatModel(
-            FakeLLMClient(
-                [
-                    _tool("list_stations", {}, "stations-1"),
-                    _final("S04"),
-                ]
-            ),
+            list_client,
             ModelProfile("test"),
         ),
         mcp_tool_provider=cast(McpToolProvider, EvidenceMcpToolProvider()),
@@ -453,6 +450,7 @@ def test_station_list_and_status_only_requirements_remain_proportional() -> None
     assert list_state["run_status"] is AgentRunStatus.SUCCESS
     assert list_state["evidence_required"] == ()
     assert list_state["executed_tool_count"] == 1
+    assert len(list_client.requests) == 1
 
     status_client = FakeLLMClient(
         [

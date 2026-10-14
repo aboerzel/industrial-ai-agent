@@ -874,7 +874,9 @@ The implemented tool-calling flow is:
 
 ```mermaid
 flowchart TD
-    Start["User request + admitted evidence-eligible MCP tools"] --> Decide["LLM decision<br/>resolved model_id"]
+    Start["User request + admitted evidence-eligible MCP tools"] --> Inventory{"Exact neutral demo inventory?"}
+    Inventory -->|"yes: first list_stations/list_products"| Admit
+    Inventory -->|"no"| Decide["LLM decision<br/>resolved model_id"]
     Decide --> Shape{"Response shape"}
     Shape -->|"candidate final text"| Complete{"Trusted required evidence complete?"}
     Complete -->|"yes"| Normalize["Bounded final-output and language validation"]
@@ -897,12 +899,17 @@ flowchart TD
     classDef success fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class Decide,Shape llm
-    class Start,Admit,Budget,Validate,Dispatch,Observe,Count,Complete,Normalize,Missing deterministic
+    class Start,Inventory,Admit,Budget,Validate,Dispatch,Observe,Count,Complete,Normalize,Missing deterministic
     class Success success
     class Invalid,Limit failure
 ```
 
-The LLM chooses one discovered tool or answers directly. Deterministic Python code
+Complete allowlisted neutral demo inventory requests deterministically schedule their
+first read-only list call through the same admission/validation boundary. Their run/data
+ceiling comes solely from authenticated server context, not arbitrary query sensitivity;
+unknown/mixed text and sensitive identifiers/context remain conservative. See the
+[manual visibility matrix](../demo/demo-user-visibility.md). Otherwise the LLM chooses
+one discovered tool or answers directly. Deterministic Python code
 validates one selected call per response, validates the discovered tool schema,
 dispatches through the opened MCP session, serializes each structured result, and keeps
 the complete current-run message context. During evidence acquisition, ADR-020 intersects

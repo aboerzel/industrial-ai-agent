@@ -152,7 +152,9 @@ single-agent tool-loop strategy defined by ADR-004 unless a new ADR supersedes i
 
 For the bounded loop:
 
-* the LLM decides between one next tool call and a final answer using prior observations
+* the LLM decides between one next tool call and a final answer using prior observations;
+  the ADR-004 bounded exception deterministically schedules the first read-only list
+  for complete allowlisted demo inventory requests through the same tool guard
 * deterministic code owns validation, dispatch, execution, limits, and termination
 * execute at most one tool call per iteration and do not add parallel execution,
   Planner/Executor, multi-agent orchestration, or an agent framework without a new or

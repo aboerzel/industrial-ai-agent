@@ -119,6 +119,25 @@ test("header Monitoring keeps its links and mouse/keyboard behavior on desktop a
 });
 
 for (const user of demoUsers) {
+  test(`${user.username}: exact station discovery succeeds with only authorized IDs`, async ({ page }) => {
+    await select(page, user.username);
+    const levels = [["S01", "S05"], ["S02", "S03"], ["S04", "S06"], ["S07", "S08"]];
+    const rank = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].indexOf(user.clearance);
+    const expected = levels.slice(0, rank + 1).flat().sort();
+    const responsePromise = page.waitForResponse(response => response.url().endsWith("/api/v1/runs") && response.request().method() === "POST");
+    await page.locator("#composer-message").fill("welche stationen kennst du");
+    await page.locator("#composer-form").evaluate(form => form.requestSubmit());
+    const response = await responsePromise;
+    expect(response.status()).toBe(200);
+    const run = await response.json();
+    expect(run.status).toBe("success");
+    expect(run.tool_calls.map(call => call.tool)).toEqual(["list_stations"]);
+    expect(run.identifiers.filter(item => item.type === "station").map(item => item.value).sort()).toEqual(expected);
+    await expect(page.locator("#conversation-history")).toContainText(expected.join(", "));
+    for (const hidden of levels.flat().filter(id => !expected.includes(id))) await expect(page.locator("#conversation-history")).not.toContainText(hidden);
+    await expect(page.locator("#conversation-history")).not.toContainText("Die angeforderten Daten sind nicht verfügbar.");
+  });
+
   test(`${user.username}: real server resource matrix and orthogonal model administration`, async ({ page }) => {
     await select(page, user.username);
     const metadata = await (await page.request.get(`${origin}/api/v1/auth/me`)).json();

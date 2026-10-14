@@ -25,6 +25,13 @@ multiple agents, orchestration frameworks, or MCP as a prerequisite.
 
 ## Decision
 
+For complete, explicitly allowlisted demo station/product inventory requests,
+deterministic code schedules the first read-only `list_stations`/`list_products`
+call through the same validated sequential tool boundary. This bounded discovery
+exception does not admit arbitrary prose or mixed target requests. Repository/RLS
+authorization filters evidence before the model receives it; the model still owns
+the subsequent explanation. Tool budgets, classification and egress remain enforced.
+
 The `TroubleshootingAgent` uses an explicit, bounded, sequential single-agent tool loop
 implemented in Python.
 
@@ -42,7 +49,9 @@ bypass validation, increase the limit, or control termination policy.
 
 ```mermaid
 flowchart TD
-    Start["User request + available tools"] --> LLM["LLM decision<br/>via LLMClient and Model Profile"]
+    Start["User request + available tools"] --> Inventory{"Exact neutral demo inventory?"}
+    Inventory -->|"yes: first list call"| Limit
+    Inventory -->|"no"| LLM["LLM decision<br/>via LLMClient and Model Profile"]
     LLM --> Decision{"Response shape"}
     Decision -->|"final text, no tool call"| Final["SUCCESS<br/>return final answer"]
     Decision -->|"one or more tool calls"| Limit{"Fewer than 4 tools executed?"}
@@ -59,7 +68,7 @@ flowchart TD
     classDef terminal fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class LLM,Decision llm
-    class Start,Validate,Limit,Dispatch,Observation deterministic
+    class Start,Inventory,Validate,Limit,Dispatch,Observation deterministic
     class Final terminal
     class Invalid,Exhausted failure
 ```

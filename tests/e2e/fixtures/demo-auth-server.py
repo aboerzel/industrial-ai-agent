@@ -17,6 +17,7 @@ from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunSto
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/integration"))
+from test_demo_discovery_rls import DiscoveryRunService
 from test_frontend_gateway_security import Assignments, Catalog, Documents
 
 from industrial_ai_agent.agent.model_egress import (
@@ -26,13 +27,44 @@ from industrial_ai_agent.agent.model_selection import (
     AGENT_CONSUMER,
     CURRENT_MODEL_CONSUMERS,
 )
+from industrial_ai_agent.agent.run_classification_policy import (
+    resolve_demo_discovery_tool,
+)
 from industrial_ai_agent.application.model_configuration import (
     ModelConfigurationService,
+)
+from industrial_ai_agent.domain.factory_discovery import StationDiscovery
+from industrial_ai_agent.domain.product_history import StationId
+from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.infrastructure.in_memory_factory_discovery_repository import (
+    InMemoryFactoryDiscoveryRepository,
+)
+from industrial_ai_agent.infrastructure.persistence.demo_seed import (
+    STATION_CLASSIFICATIONS,
 )
 
 
 class SyntheticRunService:
-    async def run_with_policy(self, *args, **kwargs):
+    async def run_with_policy(self, message, **kwargs):
+        if resolve_demo_discovery_tool(message):
+            # Browser-only recording repository; real PostgreSQL RLS is covered by
+            # test_demo_discovery_rls using the same API/graph/capability path.
+            service = DiscoveryRunService(
+                lambda context: InMemoryFactoryDiscoveryRepository(
+                    stations=tuple(
+                        StationDiscovery(
+                            station_id=StationId(code),
+                            name=f"Synthetic {code}",
+                            state=None,
+                            active_error_code=None,
+                            classification=DataClassification(level),
+                        )
+                        for code, level in STATION_CLASSIFICATIONS.items()
+                        if level <= context.clearance
+                    )
+                )
+            )
+            return await service.run_with_policy(message, **kwargs)
         return AgentRunResult(
             status=AgentRunStatus.SUCCESS,
             final_answer="SYNTHETIC CONFIDENTIAL CONVERSATION",

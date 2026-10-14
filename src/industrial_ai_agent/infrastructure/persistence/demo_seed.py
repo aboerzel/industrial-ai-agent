@@ -36,7 +36,9 @@ STATIONS = {
     "S03": "00000000-0000-0000-0000-000000000103",
     "S04": "00000000-0000-0000-0000-000000000104",
     "S05": "00000000-0000-0000-0000-000000000105",
+    "S06": "00000000-0000-0000-0000-000000000106",
     "S07": "00000000-0000-0000-0000-000000000107",
+    "S08": "00000000-0000-0000-0000-000000000108",
 }
 PRODUCTS = {
     "P4101": "00000000-0000-0000-0000-000000004101",
@@ -49,6 +51,18 @@ PRODUCTS = {
     "P4900": "00000000-0000-0000-0000-000000004900",
     "P4901": "00000000-0000-0000-0000-000000004901",
     "P9001": "00000000-0000-0000-0000-000000009001",
+    "P9002": "00000000-0000-0000-0000-000000009002",
+}
+
+STATION_CLASSIFICATIONS = {
+    "S01": 0,
+    "S05": 0,
+    "S02": 1,
+    "S03": 1,
+    "S04": 2,
+    "S06": 2,
+    "S07": 3,
+    "S08": 3,
 }
 
 
@@ -80,7 +94,9 @@ def _seed_factory(session: Session) -> None:
         ("S03", "Robot Assembly", 1),
         ("S04", "Quality Inspection", 2),
         ("S05", "Packaging", 0),
+        ("S06", "Synthetic Quality Review", 2),
         ("S07", "Prototype Commissioning", 3),
+        ("S08", "Synthetic Prototype Validation", 3),
     ):
         session.merge(
             StationRecord(
@@ -144,6 +160,7 @@ def _seed_product_events(session: Session) -> None:
         ("P4901", "S02", "2026-01-21T08:04:00+00:00", "FAILED", "POSITION-ENC-02"),
         ("P9001", "S07", "2026-02-02T10:00:00+00:00", "COMPLETED", None),
         ("P9001", "S07", "2026-02-02T10:06:00+00:00", "FAILED", "PROTO-COMM-07"),
+        ("P9002", "S08", "2026-02-03T10:07:00+00:00", "COMPLETED", None),
     )
     for index, (product_code, station_code, event_at, status, error_code) in enumerate(
         events, start=1
@@ -192,6 +209,8 @@ def _seed_operational_records(session: Session) -> None:
             ("S03", "2026-01-20T08:09:00+00:00", "RUNNING", None),
             ("S05", "2026-01-20T08:13:00+00:00", "RUNNING", None),
             ("S07", "2026-02-02T10:07:00+00:00", "FAULTED", "PROTO-COMM-07"),
+            ("S06", "2026-02-03T09:00:00+00:00", "RUNNING", None),
+            ("S08", "2026-02-03T10:07:00+00:00", "RUNNING", None),
         ),
         start=201,
     ):
@@ -202,15 +221,7 @@ def _seed_operational_records(session: Session) -> None:
                 observed_at=datetime.fromisoformat(observed_at),
                 state=state,
                 active_error_code=error_code,
-                classification=(
-                    3
-                    if station == "S07"
-                    else 1
-                    if station in {"S02", "S03"}
-                    else 2
-                    if station == "S04"
-                    else 0
-                ),
+                classification=STATION_CLASSIFICATIONS[station],
             )
         )
     session.merge(
@@ -335,7 +346,7 @@ def _uuid(value: str) -> UUID:
 
 
 def _product_classification(product_code: str) -> int:
-    if product_code == "P9001":
+    if product_code in {"P9001", "P9002"}:
         return 3
     if product_code in {"P4900", "P4901"}:
         return 1

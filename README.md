@@ -340,6 +340,8 @@ with the FastAPI JSON API only through its same-origin Nginx gateway.
 
 ## Demo Users
 
+For manual checks: [Demo users & visibility matrix](docs/demo/demo-user-visibility.md).
+
 With `DEMO_AUTH_MODE=true`, a fresh browser starts automatically as `demo-public`.
 The header account menu shows the current username, clearance and roles, and contains
 language selection, Switch user and Logout. It deliberately lets you switch to any

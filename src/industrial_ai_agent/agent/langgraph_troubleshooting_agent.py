@@ -56,6 +56,9 @@ from industrial_ai_agent.agent.response_language import (
     is_response_language_compliant,
     response_language_instruction,
 )
+from industrial_ai_agent.agent.run_classification_policy import (
+    resolve_demo_discovery_tool,
+)
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.agent.troubleshooting_run_service import ConversationTurn
 from industrial_ai_agent.application.evidence_source_capabilities import (
@@ -606,6 +609,18 @@ class LangGraphTroubleshootingAgent:
         factory_discovery_required = state[
             "executed_tool_count"
         ] == 0 and _is_explicit_factory_discovery_request(state["messages"])
+        discovery_tool = (
+            next(
+                (
+                    resolve_demo_discovery_tool(str(item.content))
+                    for item in reversed(state["messages"])
+                    if isinstance(item, HumanMessage)
+                ),
+                None,
+            )
+            if state["executed_tool_count"] == 0
+            else None
+        )
         if factory_discovery_required:
             visible_tools = tuple(
                 tool for tool in model_tools if tool.name == "list_stations"
@@ -628,7 +643,15 @@ class LangGraphTroubleshootingAgent:
             visible_tools = tuple(
                 tool for tool in model_tools if tool.name in eligible_names
             )
-        message = chat_model.bind_tools(visible_tools).invoke(state["messages"])
+        # Exact neutral inventory intents enter the normal validated tool node.
+        message = (
+            AIMessage(
+                content="",
+                tool_calls=[{"name": discovery_tool, "args": {}, "id": str(uuid4())}],
+            )
+            if discovery_tool is not None
+            else chat_model.bind_tools(visible_tools).invoke(state["messages"])
+        )
         response = to_llm_response(message)
         if len(response.tool_calls) > 1:
             # Some OpenAI-compatible local providers ignore parallel_tool_calls.

@@ -101,9 +101,12 @@ _DEMO_ENTITY_PROFILES = {
     "P4805": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
     "P4811": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
     "P9001": AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
+    "P9002": AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
     "S07": AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
+    "S08": AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
     "PROTO-COMM-07": AgentRunProfile.RESTRICTED_TROUBLESHOOTING,
     "S04": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
+    "S06": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
     "QUALITY-09": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
     "POSITION-ENC-02": AgentRunProfile.CONFIDENTIAL_TROUBLESHOOTING,
     "S02": AgentRunProfile.INTERNAL_DIAGNOSTIC,
@@ -170,18 +173,60 @@ _NEUTRAL_DEMO_REQUEST_FORMS = frozenset(
         "PRÜFE DEN AKTUELLEN STATUS VON STATION",
     }
 )
-_NEUTRAL_DEMO_DISCOVERY_FORMS = frozenset(
+_STATION_DISCOVERY_FORMS = frozenset(
     {
+        "WELCHE STATIONEN KENNST DU",
+        "LISTE DIE STATIONEN AUF",
+        "WELCHE STATIONEN STEHEN MIR ZUR VERFÜGUNG",
+        "WELCHE PRODUKTIONSSTATIONEN KANN ICH SEHEN",
+        "WHICH STATIONS DO YOU KNOW",
+        "LIST THE AVAILABLE STATIONS",
+        "WHICH PRODUCTION STATIONS ARE AVAILABLE TO ME",
         "WHICH STATIONS ARE AVAILABLE",
-        "WHICH PRODUCTS ARE AVAILABLE",
-        "LIST THE PRODUCTS AVAILABLE TO ME AND SUMMARIZE THEIR FINAL STATUS",
-        "IDENTIFY RECENTLY FAILED PRODUCTS AND SUMMARIZE THEIR VISIBLE FAILURE STATUS",
-        "LISTE VERFÜGBARE PRODUKTE",
-        "LISTE DIE MIR VERFÜGBAREN PRODUKTE AUF UND FASSE IHREN ENDSTATUS ZUSAMMEN",
-        "GIB MIR EINEN ÜBERBLICK ÜBER DIE MIR VERFÜGBAREN PRODUKTE UND IHREN ENDSTATUS",
-        "ERMITTLE DIE KÜRZLICH FEHLGESCHLAGENEN PRODUKTE UND FASSE IHREN FEHLERSTATUS ZUSAMMEN",
-        "KÜRZLICH FEHLGESCHLAGENE PRODUKTE",
     }
+)
+_PRODUCT_DISCOVERY_FORMS = frozenset(
+    {
+        "WELCHE PRODUKTE KENNST DU",
+        "LISTE DIE VERFÜGBAREN PRODUKTE AUF",
+        "WHICH PRODUCTS DO YOU KNOW",
+        "LIST THE AVAILABLE PRODUCTS",
+        "WHICH PRODUCTS ARE AVAILABLE",
+    }
+)
+
+
+def resolve_demo_discovery_tool(message: str) -> str | None:
+    """Only complete neutral forms admit an identity-scoped inventory read.
+
+    Query sensitivity is not clearance. For these fixed instructions alone, the
+    run label conservatively covers the server-authorized return ceiling.
+    Extra words/identifiers follow normal monotonic classification instead.
+    """
+    normalized = " ".join(message.strip().upper().rstrip(".!?").split())
+    if normalized in _STATION_DISCOVERY_FORMS:
+        return "list_stations"
+    if normalized in _PRODUCT_DISCOVERY_FORMS:
+        return "list_products"
+    return None
+
+
+_NEUTRAL_DEMO_DISCOVERY_FORMS = (
+    _STATION_DISCOVERY_FORMS
+    | _PRODUCT_DISCOVERY_FORMS
+    | frozenset(
+        {
+            "WHICH STATIONS ARE AVAILABLE",
+            "WHICH PRODUCTS ARE AVAILABLE",
+            "LIST THE PRODUCTS AVAILABLE TO ME AND SUMMARIZE THEIR FINAL STATUS",
+            "IDENTIFY RECENTLY FAILED PRODUCTS AND SUMMARIZE THEIR VISIBLE FAILURE STATUS",
+            "LISTE VERFÜGBARE PRODUKTE",
+            "LISTE DIE MIR VERFÜGBAREN PRODUKTE AUF UND FASSE IHREN ENDSTATUS ZUSAMMEN",
+            "GIB MIR EINEN ÜBERBLICK ÜBER DIE MIR VERFÜGBAREN PRODUKTE UND IHREN ENDSTATUS",
+            "ERMITTLE DIE KÜRZLICH FEHLGESCHLAGENEN PRODUKTE UND FASSE IHREN FEHLERSTATUS ZUSAMMEN",
+            "KÜRZLICH FEHLGESCHLAGENE PRODUKTE",
+        }
+    )
 )
 
 
@@ -510,24 +555,9 @@ def _is_restricted_information_request(
 
 
 def _is_discovery_request(normalized_message: str) -> bool:
-    return any(
-        phrase in normalized_message
-        for phrase in (
-            "STATIONS",
-            "STATION",
-            "PRODUCTS",
-            "PRODUCT",
-            "PRODUKTE",
-            "PRODUKT",
-            "AVAILABLE",
-            "VERFÜGBAR",
-            "RECENTLY FAILED",
-            "KÜRZLICH FEHLGESCHLAGEN",
-            "WARNINGS",
-            "FAILURES",
-            "WARNUNGEN",
-            "FEHLER",
-        )
+    return (
+        " ".join(normalized_message.rstrip(".!?").split())
+        in _NEUTRAL_DEMO_DISCOVERY_FORMS
     )
 
 
