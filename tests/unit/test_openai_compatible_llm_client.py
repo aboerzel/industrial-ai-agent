@@ -383,6 +383,9 @@ def test_maps_chat_request_and_text_response_without_network_call() -> None:
 
     response = client.chat(LOCAL_QUALITY_PROFILE, request)
 
+    transport = factory_arguments.pop("http_client")
+    assert not transport.trust_env and not transport.follow_redirects
+    transport.close()
     assert factory_arguments == {
         "api_key": "not-used",
         "base_url": "http://localhost:11434/v1",
@@ -524,6 +527,9 @@ def test_external_profiles_reuse_openai_compatible_tool_and_usage_contract(
 
     response = client.chat(profile, request)
 
+    transport = client_arguments.pop("http_client")
+    assert not transport.trust_env and not transport.follow_redirects
+    transport.close()
     assert client_arguments == {
         "api_key": api_key,
         "base_url": base_url_override,
@@ -834,6 +840,9 @@ def test_reads_authenticated_profile_api_key_from_environment_variable() -> None
 
     client.chat(LOCAL_QUALITY_PROFILE, request)
 
+    transport = factory_arguments.pop("http_client")
+    assert not transport.trust_env and not transport.follow_redirects
+    transport.close()
     assert factory_arguments == {
         "api_key": "test-api-key-from-environment",
         "base_url": "https://llm.example.com/v1",

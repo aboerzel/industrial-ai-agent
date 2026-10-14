@@ -21,6 +21,7 @@ import {
 import {
   assignmentSnapshot,
   assertAssignmentSnapshot,
+  assertArtifactProvenance,
   calculateHarnessFingerprint,
   createRunMetadata,
   createReadOnlyConfigurationGuard,
@@ -162,6 +163,12 @@ if (isMain) {
   } else if (command.aggregate) {
     await aggregateResults();
   } else {
+    if (command.resume) {
+      latestAssignmentSnapshot = assignmentSnapshot(await fetchJson(`${API_URL}/api/v1/model-assignments`));
+      const preflight = JSON.parse(await readFile(path.join(RESULTS_DIRECTORY, "preflight.json"), "utf8"));
+      assertArtifactProvenance(preflight.metadata, currentRunMetadata());
+      if (preflight.status !== "PASS") throw new Error("Resume requires a passing current preflight.");
+    }
     const requested = command.all ? Object.keys(JOURNEYS) : command.journeys;
     const identifiers = command.resume ? await incompleteJourneys(requested) : requested;
     const outcomes = [];
@@ -207,12 +214,22 @@ async function collectRunMetadata() {
     git_head: gitHead,
     dirty_paths: dirtyPaths,
     harness_fingerprint: await effectiveHarnessFingerprint(),
+    product_fingerprint: await effectiveProductFingerprint(),
   };
 }
 
 async function runGit(arguments_) {
   const { stdout } = await execFileAsync("git", arguments_, { cwd: ROOT, encoding: "buffer" });
   return Buffer.isBuffer(stdout) ? stdout.toString("utf8") : stdout;
+}
+
+async function effectiveProductFingerprint() {
+  const paths = (await runGit(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "src", "migrations", "config", "frontend", "Dockerfile.*", "docker-compose.yml"]))
+    .split("\0").filter(Boolean).sort();
+  const entries = await Promise.all(paths.map(async (relativePath) => ({
+    path: relativePath, content: await readFile(path.join(ROOT, relativePath), "utf8"),
+  })));
+  return calculateHarnessFingerprint(entries);
 }
 
 function parseDirtyPaths(statusOutput) {
@@ -257,6 +274,7 @@ function currentRunMetadata(finishedAt = null) {
     dirtyPaths: RUN_METADATA_BASE.dirty_paths,
     dirtyScope: classifyDirtyScope(RUN_METADATA_BASE.dirty_paths),
     harnessFingerprint: RUN_METADATA_BASE.harness_fingerprint,
+    productFingerprint: RUN_METADATA_BASE.product_fingerprint,
     assignmentSnapshot: latestAssignmentSnapshot,
   });
 }
@@ -736,9 +754,12 @@ function record(result, step) {
 function journeyResultPath(id) { return path.join(RESULTS_DIRECTORY, `journey-${id}.json`); }
 async function loadJourneyResult(id) {
   const result = JSON.parse(await readFile(journeyResultPath(id), "utf8"));
-  try { assertCurrentPlan(result, JOURNEYS[id]); }
-  catch { result.status = "BLOCKED"; result.assertion_plan_error = "Artifact requires measurement against the current assertion plan."; }
   if (result.status === "PASS") result.status = evaluatedJourneyStatus(result);
+  try { assertCurrentPlan(result, JOURNEYS[id]); assertArtifactProvenance(result.metadata, currentRunMetadata()); }
+  catch {
+    if (!["FAIL", "HARNESS_ERROR", "MISSING", "BLOCKED"].includes(result.status)) result.status = "BLOCKED";
+    result.assertion_plan_error = "Artifact requires measurement against the current assertion plan and baseline.";
+  }
   result.assertion_summary = assertionSummary(result.assertions);
   return result;
 }
@@ -780,9 +801,7 @@ async function writeTextAtomically(target, value) { await mkdir(path.dirname(tar
 
 async function aggregateResults() {
   let configurationError = null;
-  let preflightStatus = null;
-  try { preflightStatus = JSON.parse(await readFile(path.join(RESULTS_DIRECTORY, "preflight.json"), "utf8")).status; }
-  catch (error) { if (error.code !== "ENOENT") preflightStatus = "HARNESS_ERROR"; }
+  let preflightStatus = "BLOCKED";
   try {
     latestAssignmentSnapshot = assignmentSnapshot(
       await fetchJson(`${API_URL}/api/v1/model-assignments`),
@@ -790,6 +809,11 @@ async function aggregateResults() {
   } catch (error) {
     configurationError = runnerFailure(error, "aggregate configuration read");
   }
+  try {
+    const preflight = JSON.parse(await readFile(path.join(RESULTS_DIRECTORY, "preflight.json"), "utf8"));
+    assertArtifactProvenance(preflight.metadata, currentRunMetadata());
+    preflightStatus = preflight.status;
+  } catch (error) { preflightStatus = error.code === "ENOENT" ? "BLOCKED" : "HARNESS_ERROR"; }
   const journeys = [];
   for (const id of Object.keys(JOURNEYS)) {
     try { journeys.push(await loadJourneyResult(id)); } catch { journeys.push({ id, journey: JOURNEYS[id].name, status: "MISSING", steps: [] }); }

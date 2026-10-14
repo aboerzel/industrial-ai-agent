@@ -90,6 +90,10 @@ _TOOL_METADATA = {
     "get_machine_status": ("factory-mcp", "read", False),
     "search_documentation": ("knowledge-mcp", "read", False),
     "create_maintenance_ticket": ("factory-mcp", "write", True),
+    "get_maintenance_ticket": ("factory-mcp", "read", False),
+    "get_position_reference_status": ("hardware-mcp", "read", False),
+    "prepare_reference_calibration": ("hardware-mcp", "read", False),
+    "execute_reference_calibration": ("hardware-mcp", "write", True),
 }
 _LOOKBACKS = {
     "15m": timedelta(minutes=15),
@@ -131,8 +135,12 @@ class _TrajectoryEntry(BaseModel):
         "get_machine_status",
         "search_documentation",
         "create_maintenance_ticket",
+        "get_maintenance_ticket",
+        "get_position_reference_status",
+        "prepare_reference_calibration",
+        "execute_reference_calibration",
     ]
-    mcp_server: Literal["factory-mcp", "knowledge-mcp"]
+    mcp_server: Literal["factory-mcp", "knowledge-mcp", "hardware-mcp"]
     operation: Literal["read", "write"]
     approval_required: bool
 
@@ -143,7 +151,7 @@ class _ApprovalProjection(BaseModel):
     run_id: UUID
     approval_required: bool
     current_state: Literal["none", "waiting", "approved", "rejected"]
-    action: Literal["create_maintenance_ticket"] | None
+    action: Literal["create_maintenance_ticket", "execute_reference_calibration"] | None
     decision: Literal["approve", "reject"] | None
     requested_at: datetime | None
     decided_at: datetime | None

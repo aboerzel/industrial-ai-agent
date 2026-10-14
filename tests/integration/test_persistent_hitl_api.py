@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
+from hashlib import sha256
 from threading import Lock
 from uuid import UUID, uuid4
 
@@ -276,11 +277,7 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
         started = first_client.post(
             "/api/v1/runs",
             json={
-                "message": (
-                    "Investigate the recurring quality problem for product P4711 at "
-                    "station S04. Use factory and documentation information and "
-                    "create a maintenance ticket if justified."
-                ),
+                "message": "Investigate P4711.",
                 "user_clearance": "CONFIDENTIAL",
             },
         )
@@ -296,7 +293,7 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
     assert waiting["approval_request"]["model_id"] == "local_quality"
     run_id = UUID(waiting["run_id"])
     request_id = factory.ticket_request_ids[0]
-    assert _ticket_count(request_id) == 0
+    assert _ticket_count(sha256(f"{run_id}:{request_id}".encode()).hexdigest()) == 0
 
     second_client, second_sessions = _application(factory)
     try:
@@ -326,7 +323,7 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
         CREATE_MAINTENANCE_TICKET_TOOL_NAME,
     ]
     assert duplicate.status_code == 409
-    assert _ticket_count(request_id) == 1
+    assert _ticket_count(sha256(f"{run_id}:{request_id}".encode()).hexdigest()) == 1
 
     third_client, third_sessions = _application(factory)
     try:
@@ -370,7 +367,7 @@ def test_fastapi_hitl_reject_survives_runtime_recreation_without_ticket() -> Non
 
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "success"
-    assert _ticket_count(request_id) == 0
+    assert _ticket_count(sha256(f"{run_id}:{request_id}".encode()).hexdigest()) == 0
 
     third_client, third_sessions = _application(factory)
     try:
@@ -417,7 +414,7 @@ def test_fastapi_hitl_concurrent_approvals_claim_one_postgres_resume() -> None:
         status_codes = tuple(executor.map(lambda _: approve_once(), range(2)))
 
     assert sorted(status_codes) == [200, 409]
-    assert _ticket_count(request_id) == 1
+    assert _ticket_count(sha256(f"{run_id}:{request_id}".encode()).hexdigest()) == 1
 
 
 def test_fastapi_resume_contract_rejects_unknown_invalid_and_client_context() -> None:

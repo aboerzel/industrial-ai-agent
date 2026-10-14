@@ -381,6 +381,19 @@ def create_app(
             if payload.investigation_id is not None
             else ()
         )
+        previous_runs = tuple(
+            record
+            for record in previous_runs
+            if _is_run_visible(record, security_context)
+        )
+        if payload.investigation_id is not None and not previous_runs:
+            _raise_api_run_error(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="requested_data_unavailable",
+                message=user_facing_error_message(
+                    "requested_data_unavailable", response_language
+                ),
+            )
         try:
             policy = _classification_policy(request).resolve_request(
                 payload.message,
@@ -909,7 +922,10 @@ def _document_response(
         content=document.content,
         media_type=document.media_type,
         headers={
-            "Content-Disposition": f'{disposition}; filename="{document.filename}"'
+            "Content-Disposition": f'{disposition}; filename="{document.filename}"',
+            "Content-Security-Policy": "sandbox; default-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
         },
     )
 
@@ -940,14 +956,23 @@ async def _start_run(
             else ()
         )
     )
-    await store.create(
-        run_id,
-        investigation_id=investigation_id,
-        request_text=message,
-        data_classification=policy.data_classification,
-        run_profile=policy.run_profile,
-        response_language=response_language,
-    )
+    try:
+        await store.create(
+            run_id,
+            investigation_id=investigation_id,
+            request_text=message,
+            data_classification=policy.data_classification,
+            run_profile=policy.run_profile,
+            response_language=response_language,
+        )
+    except LookupError:
+        _raise_api_run_error(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="requested_data_unavailable",
+            message=user_facing_error_message(
+                "requested_data_unavailable", response_language
+            ),
+        )
     service = _run_service(request)
     conversation_context = _conversation_context(resolved_previous_runs, policy)
     try:

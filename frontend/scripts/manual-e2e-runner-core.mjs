@@ -161,6 +161,7 @@ export function createRunMetadata({
   dirtyPaths,
   dirtyScope,
   harnessFingerprint,
+  productFingerprint = null,
   assignmentSnapshot: assignments,
 }) {
   const workingTreeDirty = dirtyPaths.length > 0;
@@ -174,11 +175,21 @@ export function createRunMetadata({
     dirty_paths: dirtyPaths,
     dirty_scope: workingTreeDirty ? dirtyScope : "CLEAN",
     harness_fingerprint: harnessFingerprint,
+    product_fingerprint: productFingerprint,
     real_model_id: "local_quality",
     real_model_display_name: "Local Qwen 3.5 9B",
     external_provider_calls_expected: 0,
     assignment_snapshot: assignments,
   };
+}
+
+export function assertArtifactProvenance(artifact, current) {
+  for (const key of ["run_id", "git_head", "product_revision", "product_fingerprint", "harness_fingerprint", "real_model_id"]) {
+    if (!current?.[key] || artifact?.[key] !== current[key]) {
+      throw new Error("Artifact provenance does not match the current verification baseline.");
+    }
+  }
+  assertAssignmentSnapshot(artifact.assignment_snapshot, current.assignment_snapshot);
 }
 
 export function renderSummaryMarkdown(summary) {

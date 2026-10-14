@@ -4,8 +4,11 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from copy import deepcopy
+from ipaddress import ip_address
 from typing import Any, Self
+from urllib.parse import urlsplit
 
+import httpx
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -28,6 +31,7 @@ from industrial_ai_agent.agent.llm import (
     LLMUsage,
     ModelId,
 )
+from industrial_ai_agent.agent.model_egress import ExecutionZone
 from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
     ModelCatalogConfiguration,
@@ -175,13 +179,16 @@ class OpenAICompatibleLLMClient:
     def _get_client(self, model_id: ModelId) -> Any:
         if model_id.value not in self._clients:
             profile_config = self._configuration.get_model_config(model_id.value)
+            base_url = _resolve_configured_value(
+                str(profile_config.base_url),
+                profile_config.base_url_env,
+                self._environment,
+            )
+            _validate_destination(base_url, profile_config.execution_zone)
             self._clients[model_id.value] = self._client_factory(
                 api_key=self._resolve_api_key(profile_config),
-                base_url=_resolve_configured_value(
-                    str(profile_config.base_url),
-                    profile_config.base_url_env,
-                    self._environment,
-                ),
+                base_url=base_url,
+                http_client=httpx.Client(trust_env=False, follow_redirects=False),
                 # Let the application classify a provider limit immediately. The
                 # OpenAI SDK otherwise retries 429 responses with backoff inside
                 # the bounded Agent execution deadline.
@@ -201,6 +208,22 @@ class OpenAICompatibleLLMClient:
         if not api_key:
             raise ValueError(f"Missing API key environment variable: {api_key_env}")
         return api_key
+
+
+def _validate_destination(base_url: str, zone: ExecutionZone) -> None:
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Invalid model endpoint")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Invalid model endpoint")
+    if zone is ExecutionZone.LOCAL:
+        host = parsed.hostname.casefold()
+        try:
+            local = ip_address(host).is_loopback
+        except ValueError:
+            local = host in {"localhost", "host.docker.internal"}
+        if not local:
+            raise PermissionError("Local model endpoint must be a local destination")
 
 
 def _parse_tool_call(tool_call: Any) -> LLMToolCall:

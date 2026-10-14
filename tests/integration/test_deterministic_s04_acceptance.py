@@ -91,11 +91,7 @@ class _StaticSecurityContextResolver:
 
 _ACCEPTANCE_MODEL_ID = ModelId("acceptance_s04")
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_S04_REQUEST = (
-    "Untersuche Station S04 und ermittle die Ursache des aktuellen Fehlers. "
-    "Nutze Maschinenstatus und technische Dokumentation und schlage sinnvolle "
-    "nächste Schritte vor."
-)
+_S04_REQUEST = "Untersuche Station S04."
 _FACTORY_SERVER_SOURCE = """
 from industrial_ai_agent.infrastructure.factory_mcp_server import create_factory_mcp_server
 from industrial_ai_agent.infrastructure.in_memory_factory_discovery_repository import InMemoryFactoryDiscoveryRepository

@@ -349,7 +349,7 @@ class PostgreSqlMaintenanceTicketRepository:
                 return MaintenanceTicket(
                     ticket_id=existing.ticket_code,
                     request_id=request_id,
-                    station_id=station_id,
+                    station_id=StationId(existing.station.code),
                     summary=existing.summary or summary,
                     status=existing.status,
                     classification=DataClassification(existing.classification),
@@ -387,7 +387,7 @@ class PostgreSqlMaintenanceTicketRepository:
                 return MaintenanceTicket(
                     ticket_id=existing.ticket_code,
                     request_id=request_id,
-                    station_id=station_id,
+                    station_id=StationId(existing.station.code),
                     summary=existing.summary or summary,
                     status=existing.status,
                     classification=DataClassification(existing.classification),
@@ -506,8 +506,17 @@ def _document_content_relative_path(file_path: str) -> Path | None:
 
 def _safe_media_type(value: str) -> str:
     return (
-        value
-        if re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", value)
+        value.lower()
+        if value.lower()
+        in {
+            "application/pdf",
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp",
+            "text/plain",
+            "text/markdown",
+        }
         else "application/octet-stream"
     )
 

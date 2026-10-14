@@ -2,12 +2,18 @@ import asyncio
 import inspect
 import os
 import sys
+from uuid import uuid4
 
 import pytest
 from mcp.client.stdio import StdioServerParameters
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult
 
+from industrial_ai_agent.domain.security import DataClassification
+from industrial_ai_agent.infrastructure.action_approval import (
+    AgentRunStoreActionApprovalPort,
+)
+from industrial_ai_agent.infrastructure.api.run_store import InMemoryAgentRunStore
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     FactoryMcpSmokeResult,
     StreamableHttpServerParameters,
@@ -22,8 +28,12 @@ from industrial_ai_agent.infrastructure.factory_mcp_server import (
 from industrial_ai_agent.infrastructure.in_memory_factory_discovery_repository import (
     InMemoryFactoryDiscoveryRepository,
 )
+from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository import (
+    InMemoryMaintenanceTicketRepository,
+)
 from industrial_ai_agent.tools.factory_discovery import FactoryDiscoveryCapability
 from industrial_ai_agent.tools.machine_status import MachineStatusResult
+from industrial_ai_agent.tools.maintenance_ticket import MaintenanceTicketCapability
 from industrial_ai_agent.tools.product_history import ProductHistoryResult
 
 
@@ -62,6 +72,7 @@ def test_factory_mcp_server_advertises_read_and_maintenance_tool_schemas() -> No
         "station_id",
         "summary",
         "request_id",
+        "run_id",
     ]
     for tool in tools_by_name.values():
         assert tool.input_schema["additionalProperties"] is False
@@ -175,15 +186,43 @@ def test_factory_mcp_rejects_invalid_maintenance_ticket_id_before_dispatch() -> 
 
 
 def test_factory_mcp_reads_the_ticket_created_by_the_same_capability() -> None:
-    server = create_default_factory_mcp_server()
+    store = InMemoryAgentRunStore()
+    run_id = uuid4()
+    capability = MaintenanceTicketCapability(
+        InMemoryMaintenanceTicketRepository(),
+        approval_claims=AgentRunStoreActionApprovalPort(lambda _: store),
+    )
+    server = create_factory_mcp_server(
+        product_history=_RecordingProductHistoryCapability(),
+        machine_status=_RecordingMachineStatusCapability(),
+        maintenance_ticket=capability,
+        factory_discovery=FactoryDiscoveryCapability(
+            InMemoryFactoryDiscoveryRepository()
+        ),
+    )
 
     async def create_then_read() -> tuple[dict[str, object], dict[str, object]]:
+        await store.create(run_id)
+        await store.wait_for_approval(
+            run_id,
+            {
+                "action": "create_maintenance_ticket",
+                "action_id": "ticket-read-test",
+                "arguments": {"station_id": "S04", "summary": "Inspect QUALITY-09"},
+            },
+        )
+        await store.claim_resume(
+            run_id,
+            decision="approve",
+            approval_clearance=DataClassification.CONFIDENTIAL,
+        )
         created = await server.call_tool(
             "create_maintenance_ticket",
             {
                 "station_id": "S04",
                 "summary": "Inspect QUALITY-09",
                 "request_id": "ticket-read-test",
+                "run_id": str(run_id),
             },
         )
         assert isinstance(created, CallToolResult)

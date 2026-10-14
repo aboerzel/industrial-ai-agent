@@ -426,9 +426,9 @@ def create_default_factory_mcp_server(
             maintenance_ticket=MaintenanceTicketCapability(
                 PostgreSqlMaintenanceTicketRepository(
                     session_factory, DEMO_ENGINEER_SECURITY_CONTEXT
-                )
+                ),
+                approval_claims=approvals,
             ),
-            approval_claims=approvals,
             telemetry=telemetry,
         )
     return create_factory_mcp_server(

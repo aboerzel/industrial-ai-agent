@@ -21,7 +21,6 @@ async function runFixture(t, arguments_, environment = {}, prepare = async () =>
   const runId = `finding9-${randomUUID()}`;
   const directory = path.join(root, "evals/results/browser-e2e", runId);
   t.after(() => rm(directory, { recursive: true, force: true }));
-  await prepare(directory);
   const childArguments = npmCommand ? [
     path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js"),
     "run", "e2e:manual:preflight", "--", "--run-id", runId,
@@ -29,7 +28,7 @@ async function runFixture(t, arguments_, environment = {}, prepare = async () =>
     "--import", "../tests/frontend/fixtures/e2e-http-fake.mjs",
     "scripts/run-e2e-journey.mjs", ...arguments_, "--run-id", runId,
   ];
-  const result = await execute(process.execPath, childArguments, {
+  const childOptions = {
     cwd: path.join(root, "frontend"),
     env: { ...process.env, E2E_API_URL: "http://127.0.0.1:8000", E2E_FRONTEND_URL: "http://127.0.0.1:8080",
       ...(npmCommand ? { NODE_OPTIONS: `--import=${pathToFileURL(path.join(root, "tests/frontend/fixtures/e2e-http-fake.mjs")).href}`,
@@ -37,8 +36,15 @@ async function runFixture(t, arguments_, environment = {}, prepare = async () =>
       AGENT_API_MODEL_ADMIN_TOKEN: "fixture-admin-token",
       MCP_INDUSTRIAL_AGENT_TOKEN: "fixture-mcp-token", E2E_FRONTEND_USERNAME: "restricted",
       E2E_FRONTEND_PASSWORD: "fixture-browser-password", E2E_MODEL_ADMIN_PASSWORD: "fixture-admin-password", ...environment },
-  }).then((output) => ({ ...output, code: 0 }), (error) => ({ stdout: error.stdout, stderr: error.stderr, code: error.code }));
-  return { ...result, directory };
+  };
+  let fixturePreflight = null;
+  if (arguments_.some((argument) => ["--aggregate", "--resume"].includes(argument))) {
+    fixturePreflight = await execute(process.execPath, ["--import", "../tests/frontend/fixtures/e2e-http-fake.mjs", "scripts/run-e2e-journey.mjs", "--preflight", "--run-id", runId], childOptions)
+      .then((output) => ({ ...output, code: 0 }), (error) => ({ stdout: error.stdout, stderr: error.stderr, code: error.code }));
+  }
+  await prepare(directory);
+  const result = await execute(process.execPath, childArguments, childOptions).then((output) => ({ ...output, code: 0 }), (error) => ({ stdout: error.stdout, stderr: error.stderr, code: error.code }));
+  return { ...result, directory, fixturePreflight };
 }
 
 test("documented preflight sends model-admin bearer credentials and passes with fake services", async (t) => {
@@ -102,11 +108,12 @@ test("incorrect gateway password fails frontend readiness instead of accepting 4
 
 async function successfulArtifacts(directory, firstStatus = "PASS") {
   await mkdir(directory, { recursive: true });
+  const metadata = JSON.parse(await readFile(path.join(directory, "preflight.json"), "utf8")).metadata;
   const source = await readFile(path.join(root, "frontend/scripts/run-e2e-journey.mjs"), "utf8");
   const ids = [...source.split("const command =")[0].matchAll(/^  (?:"([^"]+)"|([a-z][a-z-]*)): \{/gm)].map((match) => match[1] ?? match[2]);
   for (const [index, id] of ids.entries()) {
     const assertions = assertionPlan(JOURNEYS[id]).map((item) => item.requirement === "MANUAL_ONLY" ? item : { ...item, status: "PASS", executed: true });
-    await writeFile(path.join(directory, `journey-${id}.json`), JSON.stringify({ id, journey: id,
+    await writeFile(path.join(directory, `journey-${id}.json`), JSON.stringify({ id, journey: id, metadata,
       status: index === 0 ? firstStatus : "PASS", steps: assertions.filter((item) => item.executed).map((item) => ({ assertion_id: item.id, requirement: item.requirement, test_result: "PASS", actual_severity: "SUCCESS" })), assertions,
       smoke: { model_configuration: "PASS", monitoring: "PASS" } }));
   }
@@ -123,7 +130,8 @@ test("aggregation authentication failure cannot make previously passing artifact
 test("blocked preflight cannot be overwritten by previously passing journey artifacts", async (t) => {
   const result = await runFixture(t, ["--aggregate"], {}, async (directory) => {
     await successfulArtifacts(directory);
-    await writeFile(path.join(directory, "preflight.json"), JSON.stringify({ status: "BLOCKED" }));
+    const preflight = JSON.parse(await readFile(path.join(directory, "preflight.json"), "utf8"));
+    await writeFile(path.join(directory, "preflight.json"), JSON.stringify({ ...preflight, status: "BLOCKED" }));
   });
   assert.notEqual(result.code, 0);
   const report = JSON.parse(await readFile(path.join(result.directory, "summary.json"), "utf8"));

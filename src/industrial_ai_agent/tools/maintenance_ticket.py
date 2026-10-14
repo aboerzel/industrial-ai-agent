@@ -1,3 +1,4 @@
+from hashlib import sha256
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -94,7 +95,9 @@ class MaintenanceTicketCapability:
         ):
             raise PermissionError("Protected action is not authorized")
         ticket = self._repository.create_maintenance_ticket(
-            request,
+            MaintenanceTicketRequestId(
+                sha256(f"{run_id}:{request.value}".encode()).hexdigest()
+            ),
             station,
             summary,
         )

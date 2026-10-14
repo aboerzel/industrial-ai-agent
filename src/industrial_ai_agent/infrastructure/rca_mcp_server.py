@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -293,7 +294,8 @@ def create_rca_mcp_server(
         except RcaRuntimeEvidenceUnavailableError as error:
             raise RuntimeError("RCA runtime evidence is unavailable") from error
         focus_value = RcaFocus(focus)
-        reasoning_result = _reasoning_result(
+        reasoning_result = await asyncio.to_thread(
+            _reasoning_result,
             report,
             focus=focus_value,
             requested=reasoning == "explain",

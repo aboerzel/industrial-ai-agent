@@ -775,7 +775,7 @@ class LangGraphTroubleshootingAgent:
                 ),
                 "documents": tuple(reference.model_dump() for reference in documents),
             }
-        if state["executed_tool_count"] == MAX_TOOL_CALLS:
+        if state["executed_tool_count"] >= MAX_TOOL_CALLS:
             if ledger is not None and not ledger.complete:
                 return _evidence_requirements_unsatisfied_update(
                     state,
@@ -978,6 +978,13 @@ class LangGraphTroubleshootingAgent:
         state: CheckpointedTroubleshootingGraphState,
     ) -> dict[str, object]:
         """Advance the bounded recovery lifecycle from trusted status to preparation."""
+        if state["executed_tool_count"] + 2 > MAX_TOOL_CALLS:
+            return _recovery_terminal_update(
+                state,
+                messages=(),
+                status=AgentRunStatus.LIMIT_REACHED,
+                error_code="recovery_incomplete",
+            )
         status = _recoverable_position_reference_status(state["messages"])
         if status is None:
             return _recovery_terminal_update(
@@ -1171,6 +1178,12 @@ class LangGraphTroubleshootingAgent:
         tool_policies: dict[str, ToolPolicy],
         state: CheckpointedTroubleshootingGraphState,
     ) -> dict[str, object]:
+        if state["executed_tool_count"] >= MAX_TOOL_CALLS:
+            return {
+                "run_status": AgentRunStatus.LIMIT_REACHED.value,
+                "pending_action": None,
+                "final_answer": None,
+            }
         pending_action = _require_pending_action(state)
         if state["approval_result"] != ApprovalDecision.APPROVE.value:
             raise RuntimeError("Controlled execution requires approval")

@@ -186,7 +186,12 @@ async function requestBinary(path, fallbackFilename) {
       errorMessageFor(response.status, publicError?.code, publicError?.message),
     );
   }
-  const content = await response.blob();
+  const receivedContent = await response.blob();
+  const passiveTypes = new Set(["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "text/plain", "text/markdown"]);
+  const mediaType = receivedContent.type.split(";", 1)[0].toLowerCase();
+  const content = passiveTypes.has(mediaType)
+    ? receivedContent
+    : new Blob([receivedContent], { type: "application/octet-stream" });
   requireCurrentSecurityContext(generation);
   return {
     content,

@@ -6,7 +6,8 @@ import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
 from industrial_ai_agent.agent.failure_origin import (
@@ -78,6 +79,10 @@ class PostgreSqlAgentRunStore(AgentRunStore):
     ) -> StoredAgentRun:
         with self._session_factory.session(self._security_context) as session:
             resolved_investigation_id = investigation_id or run_id
+            session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": resolved_investigation_id.int & ((1 << 63) - 1)},
+            )
             sequence = (
                 session.scalars(
                     select(AgentRunRecord.investigation_sequence)
@@ -117,8 +122,17 @@ class PostgreSqlAgentRunStore(AgentRunStore):
                 interrupted_at=None,
                 completed_at=None,
             )
-            session.add(record)
-            session.flush()
+            try:
+                with session.begin_nested():
+                    session.add(record)
+                    session.flush()
+            except IntegrityError as error:
+                constraint = getattr(
+                    getattr(error.orig, "diag", None), "constraint_name", None
+                )
+                if constraint == "agent_runs_investigation_sequence_unique":
+                    raise LookupError("Investigation context is unavailable") from error
+                raise
             return _stored(record)
 
     async def complete(self, run_id: UUID, result: AgentRunResult) -> StoredAgentRun:
@@ -497,6 +511,7 @@ _KNOWN_TOOL_NAMES = frozenset(
         "prepare_reference_calibration",
         "execute_reference_calibration",
         "create_maintenance_ticket",
+        "get_maintenance_ticket",
     }
 )
 
