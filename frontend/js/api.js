@@ -147,7 +147,7 @@ export async function downloadDocument(documentId, userClearance) {
   const objectUrl = createDocumentUrl(responseDocument.content, generation);
   const link = document.createElement("a");
   link.href = objectUrl;
-  link.download = document.filename;
+  link.download = responseDocument.filename;
   link.hidden = true;
   document.body.append(link);
   link.click();

@@ -159,10 +159,10 @@ denied in the fixture suite; the live registry does not claim a per-document aut
 
 Document steps require a persisted document reference, an actual opened blob with nonempty
 content, an actual download, matching bytes, appropriate type and matching server filename.
-**Known separate product defect:** `frontend/js/api.js` currently assigns the document
-download filename from `document.filename` rather than the response document. The assertion
-detects this and the affected live document journeys fail; this test-quality change does
-not repair that product code or retain a green acceptance claim.
+`frontend/js/api.js` uses the download response's filename parsed from `Content-Disposition`,
+with the existing `document` fallback when filename metadata is absent. The fixture suite
+checks the actual browser download and includes a deliberately incorrect filename control
+to prove that the assertion detects mismatches.
 
 MANUAL_ONLY / NOT_RUN claims in each report explicitly separate live gateway identity
 switching, independent MCP transport/result inspection and protected HITL execution.

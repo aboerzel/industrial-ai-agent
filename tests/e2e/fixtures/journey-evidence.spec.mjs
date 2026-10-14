@@ -188,11 +188,27 @@ test("missing document reference is BLOCKED rather than silently skipped", async
   await assert.rejects(checkDocument(page, result), /Required document reference missing/);
 });
 
-test("current document filename product defect is detected after actual open and download", async ({ page, context }) => {
+test("document open and download preserve bytes and the authoritative response filename", async ({ page, context }) => {
   scenario.document = true;
   const plan = definition();
   const result = startResult("fixture", plan, {});
   await step(page, context, result, plan.steps[0], 0, createApiStatusGuard(context));
+  await checkDocument(page, result);
+  assert.ok(requests.some((request) => request.path.endsWith("synthetic-doc/download")));
+});
+
+test("an incorrect browser filename still fails the document download assertion", async ({ page, context }) => {
+  scenario.document = true;
+  const plan = definition();
+  const result = startResult("fixture", plan, {});
+  await step(page, context, result, plan.steps[0], 0, createApiStatusGuard(context));
+  await page.evaluate(() => {
+    const originalClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      this.download = "stale-name.pdf";
+      return originalClick.call(this);
+    };
+  });
   await assert.rejects(checkDocument(page, result), /filename does not match metadata/);
   assert.ok(requests.some((request) => request.path.endsWith("synthetic-doc/download")));
 });

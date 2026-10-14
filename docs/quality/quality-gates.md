@@ -40,8 +40,9 @@ reload, context-transition and PDF-content assertions where declared. PASS certi
 only the complete current required assertion plan, never optional/manual-only claims.
 The separate `npm run test:e2e:fixtures` command runs the shipped UI against synthetic
 loopback HTTP fixtures without models; it validates the assertion paths and is not part
-of FAST or a live gateway/MCP certification. The current document-download filename
-defect makes affected live document journeys fail rather than silently pass. Baseline reports in
+of FAST or a live gateway/MCP certification. Document-download assertions require the
+browser filename to match the authoritative response metadata; a synthetic wrong-filename
+control verifies that mismatches fail rather than silently pass. Baseline reports in
 ignored `evals/results/browser-e2e/` are compared as release evidence, not committed test
 artifacts.
 
