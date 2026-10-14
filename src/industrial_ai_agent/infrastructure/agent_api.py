@@ -24,6 +24,7 @@ from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.demo_security import (
     BearerTokenSecurityContextResolver,
 )
+from industrial_ai_agent.infrastructure.api.demo_sessions import DemoSessions
 from industrial_ai_agent.infrastructure.api.observed_run_store import (
     ObservedAgentRunStore,
 )
@@ -128,6 +129,11 @@ def create_default_app():
         ),
         security_context_resolver=BearerTokenSecurityContextResolver.from_environment(
             os.environ
+        ),
+        demo_sessions=(
+            DemoSessions(Path("config/demo-users.toml"))
+            if _environment_bool("DEMO_AUTH_MODE", False)
+            else None
         ),
         allowed_origins=frontend_origins,
         telemetry=telemetry,

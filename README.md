@@ -338,22 +338,34 @@ Grafana keeps anonymous local dashboard access as a Viewer, not an Admin. Do not
 credentials to the repository. The frontend is a separate static client and communicates
 with the FastAPI JSON API only through its same-origin Nginx gateway.
 
-The local Nginx gateway requires a distinct demo username/password via native browser
-HTTP Basic authentication. Provision the external password file before startup as
-described in the [browser setup guide](docs/learning/browser-frontend.md#local-development).
-Only after authentication does Nginx map that user to a server-held opaque API token;
-anonymous clients receive no authority. The token resolves to a
-server-owned maximum clearance; the UI selector may only narrow that clearance for a
-request and can never raise it. Every run-store request receives the resulting
-`SecurityContext`, and
-PostgreSQL RLS remains the authoritative visibility boundary. Model-configuration routes
-require the separate `model-admin` login and API token. Investigation users have no
-`model-admin` role. This loopback-only shared-secret demo has no application logout,
-federated identity, or TLS; loopback binding is not user authorization. Run classification, MCP
-permissions, and model egress remain separate deterministic checks. Unknown free text is
-conservatively `RESTRICTED`: unknown sensitivity never authorizes external model
-processing.
+## Demo Users
 
+With `DEMO_AUTH_MODE=true`, a fresh browser starts automatically as `demo-public`.
+The header account menu shows the current username, clearance and roles, and contains
+language selection, Switch user and Logout. It deliberately lets you switch to any
+predefined demo user, including admin, without typing a password. After logout, choose
+a demo user to log in again. The header Configuration button is enabled only for
+MODEL_ADMIN; the Investigation toolbar contains only Monitoring, PDF and New Chat.
+Clearance and roles come from the server session, never a browser clearance selector.
+
+**DEMO-ONLY CREDENTIALS — NOT FOR PRODUCTION OR SERVICE AUTHENTICATION**
+
+| Username | Password | Clearance | Roles | Purpose |
+| --- | --- | --- | --- | --- |
+| demo-public | demo-public | PUBLIC | — | Public demo |
+| demo-internal | demo-internal | INTERNAL | — | Internal demo |
+| demo-confidential | demo-confidential | CONFIDENTIAL | — | Confidential demo |
+| demo-restricted | demo-restricted | RESTRICTED | — | Restricted demo |
+| demo-admin | demo-admin | PUBLIC | MODEL_ADMIN | Model administration |
+
+These credentials are intentionally public demo credentials and are not secrets.
+They authenticate only predefined local browser demo identities. Database, MCP, API
+bearer, service, provider and infrastructure credentials remain secret and are not
+covered by this exception. Admin does not imply higher data clearance. Ordinary
+ownership, RLS, HITL and egress remain authoritative. This is not production
+OIDC/authentication; disabled demo mode exposes no convenience login or quick switch.
+See [Demo authentication](docs/learning/demo-authentication.md) for session lifecycle,
+limits, credential ownership and the canonical `config/demo-users.toml` configuration.
 For service ports, MCP access, smoke checks, and detailed local setup, use the existing [Architecture Overview](docs/architecture/overview.md), [Observability guide](docs/architecture/observability.md), and the linked evaluation and implementation guides rather than treating this README as an operations manual.
 
 ## Documentation

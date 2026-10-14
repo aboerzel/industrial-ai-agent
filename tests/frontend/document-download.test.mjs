@@ -72,11 +72,11 @@ for (const [oldFilename, apiFilename] of [
   test(`document download uses API filename ${apiFilename} instead of ${oldFilename}`, async (t) => {
     const reference = { document_id: "synthetic", filename: oldFilename };
     const calls = harness(t, () => response(apiFilename), reference.filename);
-    await downloadDocument(reference.document_id, "CONFIDENTIAL");
+    await downloadDocument(reference.document_id);
     assert.deepEqual(calls.downloads, [{ filename: apiFilename, href: "blob:synthetic-document" }]);
     assert.equal(await calls.blobs[0].text(), CONTENT);
     assert.equal(calls.blobs[0].type, "application/pdf");
-    assert.equal(calls.requests[0].url, "/api/v1/documents/synthetic/download?user_clearance=CONFIDENTIAL");
+    assert.equal(calls.requests[0].url, "/api/v1/documents/synthetic/download");
     assert.equal(calls.requests[0].options.cache, "no-store");
     assert.equal(calls.requests[0].options.headers.Authorization, undefined);
     assert.equal(calls.removed, 1);
@@ -85,7 +85,7 @@ for (const [oldFilename, apiFilename] of [
 
 test("document download retains the existing fallback when API filename is absent", async (t) => {
   const calls = harness(t, () => response(null));
-  await downloadDocument("synthetic", "PUBLIC");
+  await downloadDocument("synthetic");
   assert.equal(calls.downloads[0].filename, "document");
 });
 
@@ -94,7 +94,7 @@ for (const status of [401, 403, 404, 500]) {
     const calls = harness(t, () => new Response(JSON.stringify({
       code: "document_not_found", message: "The requested resource does not exist.",
     }), { status, headers: { "Content-Type": "application/json" } }));
-    await assert.rejects(downloadDocument("synthetic", "PUBLIC"), (error) =>
+    await assert.rejects(downloadDocument("synthetic"), (error) =>
       error instanceof ApiClientError && error.status === status);
     assert.deepEqual(calls.blobs, []);
     assert.deepEqual(calls.downloads, []);
@@ -105,7 +105,7 @@ for (const status of [401, 403, 404, 500]) {
 test("document download rejects a stale response even when fetch ignores abort", async (t) => {
   let release;
   const calls = harness(t, () => new Promise((resolve) => { release = resolve; }));
-  const pending = downloadDocument("synthetic", "CONFIDENTIAL");
+  const pending = downloadDocument("synthetic");
   const rejected = assert.rejects(pending, SecurityContextChangedError);
   invalidateSecurityContext();
   assert.equal(calls.requests[0].options.signal.aborted, true);
@@ -123,7 +123,7 @@ test("document download rejects a body completed after a security context change
     ok: true, status: 200, headers: new Headers({ "Content-Disposition": 'attachment; filename="protected.pdf"' }),
     blob: () => new Promise((resolve) => { release = resolve; started(); }),
   }));
-  const pending = downloadDocument("synthetic", "CONFIDENTIAL");
+  const pending = downloadDocument("synthetic");
   const rejected = assert.rejects(pending, SecurityContextChangedError);
   await bodyStarted;
   invalidateSecurityContext();
@@ -135,7 +135,7 @@ test("document download rejects a body completed after a security context change
 
 test("successful document download revokes its URL at the existing cleanup deadline", async (t) => {
   const calls = harness(t, () => response("document.pdf"));
-  await downloadDocument("synthetic", "PUBLIC");
+  await downloadDocument("synthetic");
   assert.equal(calls.timers.length, 1);
   assert.equal(calls.timers[0].delay, 60_000);
   calls.timers[0].callback();
@@ -145,7 +145,7 @@ test("successful document download revokes its URL at the existing cleanup deadl
 
 test("security invalidation revokes a downloaded URL without duplicate timer cleanup", async (t) => {
   const calls = harness(t, () => response("document.pdf"));
-  await downloadDocument("synthetic", "CONFIDENTIAL");
+  await downloadDocument("synthetic");
   invalidateSecurityContext();
   calls.timers[0].callback();
   assert.deepEqual(calls.revoked, ["blob:synthetic-document"]);

@@ -485,7 +485,7 @@ Industrial safety must remain enforced by machine / PLC / safety systems indepen
 
 ## Security
 
-Never commit:
+Except the exact predefined browser demo credentials documented under ADR-013, never commit:
 
 * API keys
 * passwords
@@ -864,14 +864,18 @@ agent exclusively through the public HTTP API. It must not import or depend on L
 LangChain, MCP, Domain capabilities, repositories, model routing, or provider-specific
 code.
 
-The browser gateway must authenticate an explicit demo username/password before mapping
-that verified identity to a server-held API token. Never inject a privileged API token
-for anonymous clients or trust client identity headers. Investigation principals have
-fixed clearance ceilings and no `model-admin`; model administration requires its separate
-API-only principal/token. `user_clearance` may only narrow authenticated authority.
-Password files and rendered gateway configuration must remain outside served assets.
-See ADR-013 for the local demo authentication contract and production limitations.
-
+Browser demo authentication is explicitly gated by `DEMO_AUTH_MODE`. The canonical
+`config/demo-users.toml` contains intentionally public predefined browser demo credentials
+only; they may be versioned/documented. This narrow exception never covers database,
+MCP/API bearer, provider, telemetry, encryption or service/infrastructure credentials.
+Quick switch intentionally selects any configured demo principal, including admin.
+The API creates the authoritative SecurityContext from the server session; the browser
+never supplies clearance, roles, service tokens or its own SecurityContext. Admin has
+MODEL_ADMIN at PUBLIC clearance; restricted users have no admin role. Preserve ordinary
+ownership, RLS, egress and action-bound HITL authorization. Switch/logout must invalidate
+frontend generations, abort requests, clear sensitive state and revoke Blob URLs.
+Nginx must not inject tokens or use native Basic credentials. Disabled demo mode has no
+convenience session endpoints. See ADR-013 and docs/learning/demo-authentication.md.
 ## Git
 
 Keep commits focused.

@@ -10,7 +10,7 @@ import test from "node:test";
 import { JOURNEYS } from "../../frontend/scripts/run-e2e-journey.mjs";
 import { assertionPlan } from "../../frontend/scripts/journey-assertions.mjs";
 import {
-  assertHttpStatus, browserCredentials, completedJourneyStatus, createApiStatusGuard,
+  assertHttpStatus, checkDemoSession, completedJourneyStatus, createApiStatusGuard,
   executionStatus, exitCodeForStatuses, fetchExpected, getModelAdminJson, modelAdminHeaders, readExpectedJson,
 } from "../../frontend/scripts/e2e-http.mjs";
 
@@ -34,8 +34,7 @@ async function runFixture(t, arguments_, environment = {}, prepare = async () =>
       ...(npmCommand ? { NODE_OPTIONS: `--import=${pathToFileURL(path.join(root, "tests/frontend/fixtures/e2e-http-fake.mjs")).href}`,
         npm_config_offline: "true", npm_config_update_notifier: "false" } : {}),
       AGENT_API_MODEL_ADMIN_TOKEN: "fixture-admin-token",
-      MCP_INDUSTRIAL_AGENT_TOKEN: "fixture-mcp-token", E2E_FRONTEND_USERNAME: "restricted",
-      E2E_FRONTEND_PASSWORD: "fixture-browser-password", E2E_MODEL_ADMIN_PASSWORD: "fixture-admin-password", ...environment },
+      MCP_INDUSTRIAL_AGENT_TOKEN: "fixture-mcp-token", ...environment },
   };
   let fixturePreflight = null;
   if (arguments_.some((argument) => ["--aggregate", "--resume"].includes(argument))) {
@@ -87,7 +86,7 @@ for (const status of [403, 404, 500, 201, 302]) {
   });
 }
 
-for (const key of ["AGENT_API_MODEL_ADMIN_TOKEN", "MCP_INDUSTRIAL_AGENT_TOKEN", "E2E_FRONTEND_PASSWORD", "E2E_MODEL_ADMIN_PASSWORD"]) {
+for (const key of ["AGENT_API_MODEL_ADMIN_TOKEN", "MCP_INDUSTRIAL_AGENT_TOKEN"]) {
   test(`missing ${key} fails before HTTP requests and does not leak other credentials`, async (t) => {
     const result = await runFixture(t, ["--preflight"], { [key]: "" });
     assert.notEqual(result.code, 0);
@@ -98,11 +97,11 @@ for (const key of ["AGENT_API_MODEL_ADMIN_TOKEN", "MCP_INDUSTRIAL_AGENT_TOKEN", 
   });
 }
 
-test("incorrect gateway password fails frontend readiness instead of accepting 401", async (t) => {
-  const result = await runFixture(t, ["--preflight"], { E2E_FRONTEND_PASSWORD: "wrong-fixture-password" });
+test("disabled or rejected demo session blocks preflight instead of accepting 401", async (t) => {
+  const result = await runFixture(t, ["--preflight"], { FINDING9_DEMO_AUTH_STATUS: "401" });
   assert.notEqual(result.code, 0);
   const report = JSON.parse(await readFile(path.join(result.directory, "preflight.json"), "utf8"));
-  assert.equal(report.checks.find((check) => check.name === "frontend").status, "BLOCKED");
+  assert.equal(report.checks.find((check) => check.name === "authentication").status, "BLOCKED");
   assert.doesNotMatch(result.stdout + JSON.stringify(report), /wrong-fixture-password/);
 });
 
@@ -173,23 +172,25 @@ test("HTTP assertion rejects status before parsing a body which could echo crede
   await assert.rejects(readExpectedJson({ ...response, status: 200 }), (error) => !error.message.includes("fixture-secret"));
 });
 
-test("authenticated helpers use separate runner bearer and origin-scoped browser credentials", async (t) => {
+test("authenticated helpers separate secret API bearer credentials from public demo sessions", async (t) => {
+  const previous = globalThis.fetch;
   const saved = { ...process.env };
-  t.after(() => { process.env = saved; });
+  t.after(() => { process.env = saved; globalThis.fetch = previous; });
   process.env.AGENT_API_MODEL_ADMIN_TOKEN = "fixture-admin-token";
-  process.env.E2E_FRONTEND_USERNAME = "restricted";
-  process.env.E2E_FRONTEND_PASSWORD = "fixture-browser-password";
-  process.env.E2E_MODEL_ADMIN_PASSWORD = "fixture-admin-password";
   assert.deepEqual(await modelAdminHeaders(), { Authorization: "Bearer fixture-admin-token" });
-  const user = await browserCredentials("http://127.0.0.1:8080");
-  assert.equal(user.username, "restricted");
-  assert.equal(user.origin, "http://127.0.0.1:8080");
-  assert.equal(user.send, "always");
-  const admin = await browserCredentials("http://127.0.0.1:8080", true);
-  assert.equal(admin.username, "model-admin");
-  assert.notEqual(admin.password, user.password);
+  let username;
+  globalThis.fetch = async (url, options) => {
+    assert.equal(new URL(url).origin, "http://127.0.0.1:8080");
+    assert.equal(options.headers?.Authorization, undefined);
+    if (String(url).endsWith("/switch")) {
+      username = JSON.parse(options.body).username;
+      return Response.json({ username }, { headers: { "set-cookie": "industrial_demo_session=synthetic; HttpOnly" } });
+    }
+    if (String(url).endsWith("/logout")) return Response.json({ logged_out: true });
+    return Response.json({ username, clearance: "PUBLIC", roles: [] });
+  };
+  assert.equal((await checkDemoSession("http://127.0.0.1:8080", "demo-public")).username, "demo-public");
 });
-
 test("fetch helper disables redirects and reports bounded errors without credentials", async (t) => {
   const previous = globalThis.fetch;
   t.after(() => { globalThis.fetch = previous; });
@@ -235,18 +236,18 @@ for (const status of [401, 403, 404, 500, 204]) {
 test("expected downgrade reload denial is bound to the exact request and consumed once", () => {
   const context = new EventEmitter();
   const guard = createApiStatusGuard(context);
-  guard.expectResponse({ method: "GET", pathname: "/api/v1/investigations/fixture-id", query: { user_clearance: "PUBLIC" }, allowedStatuses: [200, 404] });
-  browserResponse(context, 404, "/api/v1/investigations/fixture-id?user_clearance=PUBLIC", "GET");
+  guard.expectResponse({ method: "GET", pathname: "/api/v1/investigations/fixture-id", query: { context: "PUBLIC" }, allowedStatuses: [200, 404] });
+  browserResponse(context, 404, "/api/v1/investigations/fixture-id?context=PUBLIC", "GET");
   guard.assertSuccessful();
-  browserResponse(context, 404, "/api/v1/investigations/fixture-id?user_clearance=PUBLIC", "GET");
+  browserResponse(context, 404, "/api/v1/investigations/fixture-id?context=PUBLIC", "GET");
   assert.throws(() => guard.assertSuccessful(), /HTTP status 404/);
 });
 
 test("expected negative browser status never authorizes a different run or clearance", () => {
-  for (const pathname of ["/api/v1/investigations/other-id?user_clearance=PUBLIC", "/api/v1/investigations/fixture-id?user_clearance=RESTRICTED"]) {
+  for (const pathname of ["/api/v1/investigations/other-id?context=PUBLIC", "/api/v1/investigations/fixture-id?context=RESTRICTED"]) {
     const context = new EventEmitter();
     const guard = createApiStatusGuard(context);
-    guard.expectResponse({ method: "GET", pathname: "/api/v1/investigations/fixture-id", query: { user_clearance: "PUBLIC" }, allowedStatuses: [404] });
+    guard.expectResponse({ method: "GET", pathname: "/api/v1/investigations/fixture-id", query: { context: "PUBLIC" }, allowedStatuses: [404] });
     browserResponse(context, 404, pathname, "GET");
     assert.throws(() => guard.assertSuccessful(), /HTTP status 404/);
   }
@@ -294,7 +295,7 @@ for (const fault of ["missing-plan", "pdf-not-run", "missing-reference", "securi
       const report = JSON.parse(await readFile(artifact, "utf8"));
       if (fault === "missing-plan") delete report.assertions;
       else {
-        const claim = fault === "pdf-not-run" ? "pdf" : fault === "security-not-run" ? "select" : "reference";
+        const claim = fault === "pdf-not-run" ? "pdf" : fault === "security-not-run" ? "switch-user" : "reference";
         Object.assign(report.assertions.find((item) => item.claim === claim), { status: "NOT_RUN", executed: false });
       }
       await writeFile(artifact, JSON.stringify(report));

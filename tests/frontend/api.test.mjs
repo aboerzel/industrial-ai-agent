@@ -17,7 +17,7 @@ import {
 const RUN_ID = "0ca96c57-66f6-4e12-b151-6f7f6ef9c9f8";
 
 test("rejects old-context JSON and binary responses even when fetch ignores abort", async (t) => {
-  for (const operation of [() => getRun(RUN_ID), () => openDocument("synthetic", "CONFIDENTIAL")]) {
+  for (const operation of [() => getRun(RUN_ID), () => openDocument("synthetic")]) {
     await t.test("stale response", async () => {
       const originalFetch = globalThis.fetch;
       let resolveFetch;
@@ -51,7 +51,7 @@ test("late binary body cannot create a document URL after invalidation", async (
     blob: () => new Promise((resolve) => { resolveBody = resolve; }),
   });
   try {
-    const pending = openDocument("synthetic", "CONFIDENTIAL");
+    const pending = openDocument("synthetic");
     const rejection = assert.rejects(pending, SecurityContextChangedError);
     await new Promise((resolve) => setTimeout(resolve, 0));
     invalidateSecurityContext();
@@ -75,7 +75,7 @@ test("context invalidation revokes previously opened document URLs", async () =>
   URL.createObjectURL = () => "blob:synthetic-protected";
   URL.revokeObjectURL = (url) => revoked.push(url);
   try {
-    await openDocument("synthetic", "CONFIDENTIAL");
+    await openDocument("synthetic");
     globalThis.window = undefined;
     invalidateSecurityContext();
     assert.deepEqual(revoked, ["blob:synthetic-protected"]);
@@ -578,7 +578,7 @@ test("downloads persisted investigation PDFs through the same-origin API gateway
     revokeObjectURL() {},
   };
   try {
-    await downloadInvestigationPdf(RUN_ID, "CONFIDENTIAL");
+    await downloadInvestigationPdf(RUN_ID);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.document = originalDocument;
@@ -587,19 +587,18 @@ test("downloads persisted investigation PDFs through the same-origin API gateway
 
   assert.equal(
     requestedUrl,
-    `/api/v1/investigations/${RUN_ID}/pdf?user_clearance=CONFIDENTIAL`,
+    `/api/v1/investigations/${RUN_ID}/pdf`,
   );
   assert.equal(clicked, true);
 });
 
-test("submits the current demo clearance with a resume decision", async () => {
+test("submits a resume decision without caller-controlled clearance", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     assert.equal(url, `/api/v1/runs/${RUN_ID}/resume`);
     assert.equal(options.method, "POST");
     assert.deepEqual(JSON.parse(options.body), {
       decision: "approve",
-      user_clearance: "CONFIDENTIAL",
     });
     return new Response(JSON.stringify({
       run_id: RUN_ID,
@@ -610,7 +609,7 @@ test("submits the current demo clearance with a resume decision", async () => {
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
   try {
-    await resumeRun(RUN_ID, "approve", "CONFIDENTIAL");
+    await resumeRun(RUN_ID, "approve");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -666,7 +665,7 @@ async function requestInvestigation(payload) {
       headers: { "Content-Type": "application/json" },
     });
   try {
-    return await getInvestigation(RUN_ID, "CONFIDENTIAL");
+    return await getInvestigation(RUN_ID);
   } finally {
     globalThis.fetch = originalFetch;
   }

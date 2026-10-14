@@ -9,32 +9,25 @@ functions with the shipped UI and a local fake HTTP server, without Compose, MCP
 
 Run it after the local stack is healthy:
 
-Configure credentials in the Git-ignored root `.env` or the runner process environment
-before using the commands below. Explicit process values take precedence; an empty
-value fails closed rather than falling back to `.env`. Use the existing
-`AGENT_API_MODEL_ADMIN_TOKEN` for runner-only catalog/assignment reads and
-`MCP_INDUSTRIAL_AGENT_TOKEN` for MCP readiness. Browser login uses
-`E2E_FRONTEND_USERNAME` (default `restricted`) and `E2E_FRONTEND_PASSWORD`, matching
-an identity/password provisioned in the external `FRONTEND_AUTH_FILE`. Manual-runner
-model-configuration smoke uses a separate `model-admin` browser context with
-`E2E_MODEL_ADMIN_PASSWORD`. These passwords must be provisioned locally; placeholders
-from `.env.example` are rejected. No token or password is committed or written to
-normal reports. Authenticated Playwright traces are disabled to avoid credential capture.
+Configure only the existing secret `AGENT_API_MODEL_ADMIN_TOKEN` for direct runner
+catalog/assignment reads and `MCP_INDUSTRIAL_AGENT_TOKEN` for MCP readiness in the ignored
+`.env` or process environment. Browser journeys require `DEMO_AUTH_MODE=true` and use
+server-managed demo sessions, not native Basic credentials. No E2E browser password
+variables or htpasswd file are required. The canonical demo identities are documented in
+[Demo authentication](demo-authentication.md); only their fixed browser credentials are
+intentionally public. All API/MCP/service/provider secrets remain private.
 
-The default URLs are `E2E_API_URL=http://127.0.0.1:8000` and
-`E2E_FRONTEND_URL=http://127.0.0.1:8080`. Direct API reads send the model-admin Bearer
-header; browser requests authenticate with origin-scoped HTTP Basic, and Nginx maps
-the verified identity to its server-held API token. Bearer tokens are never injected
-into page JavaScript or storage. The clearance selector only narrows the authenticated
-identity's ceiling; it does not switch identity. The `restricted` default permits all
-requested clearance levels in the existing registry without granting model-admin to
-the investigation context. A lower-ceiling identity requires a compatible journey subset.
-
+Default URLs remain `E2E_API_URL=http://127.0.0.1:8000` and
+`E2E_FRONTEND_URL=http://127.0.0.1:8080`. Browser startup is PUBLIC; journeys select a
+configured identity and verify its authoritative username, clearance and roles through
+`auth/me`. Recorded observations contain that safe metadata, never passwords or cookies.
+Model-configuration smoke uses a separate `demo-admin` session at PUBLIC clearance.
+Identity-change assertions require immediate purge and saved-investigation read/PDF
+authorization under the new clearance, with denial for inaccessible classifications. No prior UI investigation state is automatically transferred. Traces remain disabled to avoid credential/content capture.
 Missing required credentials block preflight before network access and return a non-zero
 exit. HTTP success is explicitly 200 (MCP notifications require 202); redirects and
 unexpected 401/403/4xx/5xx fail. Expected negative responses must declare the exact status
-or a bounded allowed set: a context-change reload accepts 200 or neutral 404 only for its
-specific investigation and new clearance. Status is checked before JSON parsing, and
+or a bounded allowed set: an identity-change check requires neutral 404 for the saved investigation. Status is checked before JSON parsing, and
 error bodies/headers are not recorded. `FAIL`, `BLOCKED`, `HARNESS_ERROR`, failed critical
 smoke checks, and incomplete aggregates all produce non-zero exits. Aggregate API failures
 remain visible; an unevaluated product gate is `NOT_EVALUATED`, never PASS. Aggregation
@@ -99,7 +92,7 @@ before each model call and after the journey. A difference stops further model c
 
 Install Chromium once on a new developer machine with `npx playwright install chromium`. Before any user journey, the suite verifies that every Agent assignment is `local_quality` (Local Qwen 3.5 9B) and that the catalog resolves it to the local Ollama model. It uses `reasoning_effort="none"`; it must not call any public-cloud provider. The suite does not mutate model assignments.
 
-Reference steps capture the actual run request, validate the selected clearance and DE/EN
+Reference steps capture the actual run request, validate the server-derived identity/clearance and DE/EN
 language, require run/investigation IDs and a matching persisted terminal turn, check the
 target in the result, and require the relevant executed-tool name, target arguments and
 recorded finding. `tool_calls` is the API projection of server-recorded `executed_tool_calls`;
@@ -150,13 +143,14 @@ context helpers; A, D and E also require PDF export. Journey E saves the ID befo
 downgrade and submits an explicit denied query after the frontend purges old references.
 Compound report flags derive from complete measured assertions instead of constant PASS values.
 
-Downgrades require previously visible higher-classification data, a changed selector,
-the saved investigation's neutral 404, purged rendered/export state and a direct PDF 404
-under the lower context. A later request uses the new selection. Upgrades reload under
-the new context; they do not switch gateway identity. Individual document classifications
-are independent of the enclosing run. A protected synthetic document download is explicitly
-denied in the fixture suite; the live registry does not claim a per-document authorization matrix.
-
+Identity switches require visible pre-transition evidence, a changed authenticated
+username, purged rendered/export state and reauthorization of saved investigation/PDF reads.
+Inaccessible classified turns remain denied; authorized shared turns may be read. Both upgrades and downgrades purge frontend state; the next request begins a new
+investigation under the selected server principal. Backend reads retain the existing
+shared, classification-based authorization: inaccessible turns deny or disappear, while
+authorized shared turns remain readable. Individual document classifications
+remain independent of the enclosing run. Protected synthetic document denial and the
+five-user real-server permission matrix are exercised by the fixture suite.
 Document steps require a persisted document reference, an actual opened blob with nonempty
 content, an actual download, matching bytes, appropriate type and matching server filename.
 `frontend/js/api.js` uses the download response's filename parsed from `Content-Disposition`,
@@ -164,8 +158,8 @@ with the existing `document` fallback when filename metadata is absent. The fixt
 checks the actual browser download and includes a deliberately incorrect filename control
 to prove that the assertion detects mismatches.
 
-MANUAL_ONLY / NOT_RUN claims in each report explicitly separate live gateway identity
-switching, independent MCP transport/result inspection and protected HITL execution.
+MANUAL_ONLY / NOT_RUN claims separate independent MCP transport/result inspection and
+protected HITL execution. Browser session identity switching is automatically asserted.
 The read journeys never propose or approve a write. Existing deterministic backend and
 boundary tests cover those contracts separately; these browser reports do not certify them.
 Real-model answer correctness, full PDF layout/content semantics and physical recovery

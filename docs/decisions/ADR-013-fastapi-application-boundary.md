@@ -250,3 +250,45 @@ diagnostic/development services; RCA MCP is a read-only development consumer sur
 is not an `agent-api` dependency. Deployed MCP readiness is protocol-aware: authenticated
 session establishment, `initialize`, `tools/list`, and required-tool visibility are all
 required, rather than TCP reachability alone.
+
+## Browser Demo Sessions — Current Authentication Refinement
+
+This section supersedes the native browser Basic-auth refinement above. In explicit
+`DEMO_AUTH_MODE=true`, an application-managed, process-local session authenticates
+predefined identities from `config/demo-users.toml`. A fresh browser establishes
+`demo-public`; an existing session survives refresh. Explicit logout remains logged out
+until login or quick switch. Quick switch intentionally permits every configured demo
+identity, including `demo-admin`, without manual password entry. This is the accepted
+local demo trust model, not an authentication bypass. Disabled mode exposes no demo
+login, bootstrap or quick-switch endpoint and no browser identity chooser.
+
+DEMO-ONLY CREDENTIALS — NOT FOR PRODUCTION OR SERVICE AUTHENTICATION. Only the fixed
+browser credentials in that exact canonical file and their documented table are public.
+Database, MCP, API bearer, provider, telemetry and infrastructure credentials remain
+secret. Nginx serves static assets and proxies cookies, with no Basic challenge, secret
+token mapping or password mount. Direct service/API bearer authentication remains
+separate; browser requests never supply tokens or arbitrary clearance.
+
+The server resolves each session to a normal `SecurityContext`. Roles and clearance
+are independent: `demo-admin` has `MODEL_ADMIN` and PUBLIC clearance;
+`demo-restricted` has RESTRICTED clearance and no administrative role. Existing ownership,
+RLS, egress, MCP and HITL boundaries remain authoritative. Session authentication never
+bypasses them. Session requests reject obsolete caller-controlled clearance fields.
+
+Sessions use random HttpOnly, SameSite=Strict, path-scoped cookies, finite TTL and bounded
+process-local storage. State-changing cookie requests require a same-origin custom
+header and reject cross-site Origins/Fetch-Metadata. Switch/logout revoke the prior
+session; late frontend JSON/binary results are rejected by context generation. Identity
+changes purge conversation, references, exports, Blob URLs and sensitive dialogs before
+switching. Refresh/BFCache revalidates the identity before restoring any saved reference.
+No session IDs, passwords, bearer tokens or classified responses appear in auth metadata.
+
+This is a single-process, loopback HTTP demo; worker restart expires sessions. It does
+not establish production authentication. Disabled mode keeps direct bearer APIs but
+provides no replacement browser login; production TLS/OIDC remains a separate decision.
+
+The existing demo run/investigation visibility is shared and classification-based, not
+per-user tenancy. Identity changes always purge prior frontend state; explicit backend
+reads are reauthorized using the new principal's clearance. A higher-clearance principal
+may read shared earlier records. No ownership schema or RLS policy is changed here.
+Server-owned operation scopes retain their existing bounds, including INTERNAL diagnostics.

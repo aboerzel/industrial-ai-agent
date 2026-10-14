@@ -1,0 +1,31 @@
+# DEMO-ONLY CREDENTIALS — NOT FOR PRODUCTION OR SERVICE AUTHENTICATION
+# This exact file is the sole credential allowlist; infrastructure secrets are excluded.
+[[users]]
+username = "demo-public"
+password = "demo-public"
+clearance = "PUBLIC"
+roles = []
+
+[[users]]
+username = "demo-internal"
+password = "demo-internal"
+clearance = "INTERNAL"
+roles = []
+
+[[users]]
+username = "demo-confidential"
+password = "demo-confidential"
+clearance = "CONFIDENTIAL"
+roles = []
+
+[[users]]
+username = "demo-restricted"
+password = "demo-restricted"
+clearance = "RESTRICTED"
+roles = []
+
+[[users]]
+username = "demo-admin"
+password = "demo-admin"
+clearance = "PUBLIC"
+roles = ["MODEL_ADMIN"]

@@ -36,7 +36,7 @@ class RunStatus(StrEnum):
 
 
 class DemoUserClearance(StrEnum):
-    """Closed UI contract for the local demo authn/authz simulation."""
+    """Legacy direct-bearer narrowing; browser sessions derive clearance server-side."""
 
     PUBLIC = "PUBLIC"
     INTERNAL = "INTERNAL"
@@ -146,7 +146,7 @@ class CreateRunRequest(BaseModel):
     )
     user_clearance: DemoUserClearance = Field(
         default=DemoUserClearance.PUBLIC,
-        description="Demo-only simulated user clearance; it never sets run classification.",
+        description="Optional direct-bearer clearance narrowing; rejected for browser sessions.",
     )
     response_language: ResponseLanguage | None = Field(
         default=None,
@@ -256,8 +256,8 @@ class ResumeRunRequest(BaseModel):
     user_clearance: DemoUserClearance = Field(
         default=DemoUserClearance.PUBLIC,
         description=(
-            "Demo-only simulated user clearance; resolved by the server before "
-            "an approval can be claimed."
+            "Optional direct-bearer clearance narrowing; browser sessions resolve "
+            "clearance server-side and reject this field."
         ),
     )
 

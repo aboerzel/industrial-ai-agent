@@ -18,12 +18,12 @@ export function assertionPlan(definition) {
     id: `step-${index + 1}:${step.kind}`,
     claim: step.kind,
     expectations: { language: definition.language ?? null, initial_clearance: definition.clearance ?? null,
-      clearance: step.clearance ?? null, target: step.target ?? null, tool: step.tool ?? null, severity: step.expected ?? null },
+      username: step.username ?? null, target: step.target ?? null, tool: step.tool ?? null, severity: step.expected ?? null },
     checks: {
       typed: ["run/investigation IDs", "persisted terminal run and nonempty result", "request context and continuation", "rendered severity and target", ...(step.tool ? ["executed tool, arguments and recorded finding"] : [])],
       reference: ["rendered reference and target action triggered", "run/investigation binding", "persisted tool, arguments and finding", "authorized rendered result"],
       document: ["persisted document reference", "open blob content", "download artifact and response", "matching content, type and filename"],
-      select: ["protected pre-transition state for downgrade", "effective selection changed", "saved-ID backend read", "UI and export purge", "protected PDF denial on downgrade"],
+      "switch-user": ["visible pre-transition evidence", "authoritative identity changed", "saved-ID clearance authorization", "UI and export purge", "classified PDF authorization"],
       "new-chat": ["investigation reference cleared", "rendered turns cleared", "export disabled"],
       reload: ["same investigation restored", "persisted run retained", "result rendered under selected context"],
       pdf: ["UI export triggered", "bound investigation and clearance", "successful binary download", "PDF type/signature", "investigation ID and relevant contents"],
@@ -32,7 +32,6 @@ export function assertionPlan(definition) {
     status: "NOT_RUN",
     executed: false,
   })), ...[
-    ["gateway_identity_switch", "Live gateway principal switching is outside these journeys."],
     ["mcp_transport", "Persisted tool evidence does not prove the live MCP transport or physical side effects."],
     ["hitl_execution", "These read journeys do not propose or approve protected actions."],
   ].map(([id, note]) => ({ id, requirement: "MANUAL_ONLY", status: "NOT_RUN", executed: false, note }))];
@@ -93,7 +92,7 @@ export function assertPersistedTurn({ run, investigation, request, clearance, la
   assert.equal(investigation.investigation_id, run.investigation_id);
   if (previousId) assert.equal(request.investigation_id, previousId, "Follow-up was not bound to the current investigation.");
   else assert.ok(!request.investigation_id, "A new context reused an unexpected investigation reference.");
-  assert.equal(request.user_clearance, clearance);
+  assert.equal(request.user_clearance, undefined, "Browser must not submit caller-controlled clearance.");
   assert.equal(request.response_language, language);
   const turn = requireEvidence(investigation.turns.find((item) => item.run_id === run.run_id), "Required matching persisted run missing.");
   assert.equal(turn.sequence, run.investigation_sequence);

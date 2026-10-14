@@ -13,11 +13,45 @@
   <body>
     <main class="shell">
       <header class="site-header">
+        <div class="site-heading">
         <p class="eyebrow">LOCAL DEMO / CLASSIFIED DATA</p>
         <h1>Industrial AI Agent</h1>
         <p class="subtitle">
           Troubleshooting assistant using LangGraph and MCP-based industrial services.
         </p>
+        </div>
+        <div class="header-actions">
+          <span class="configuration-control" title="Requires MODEL_ADMIN permission.">
+            <button class="secondary-button compact-button" id="model-configuration-button" type="button" title="Requires MODEL_ADMIN permission." aria-label="Model configuration" aria-describedby="configuration-permission" disabled>
+              <svg class="settings-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.75v2M12 19.25v2M2.75 12h2M19.25 12h2M5.46 5.46l1.42 1.42M17.12 17.12l1.42 1.42M18.54 5.46l-1.42 1.42M6.88 17.12l-1.42 1.42"/></svg>
+              <span data-account-text="configuration">Configuration</span>
+            </button>
+            <span id="configuration-permission" class="visually-hidden">Requires MODEL_ADMIN permission.</span>
+          </span>
+          <div class="account-area">
+            <button class="secondary-button compact-button" id="account-button" type="button" aria-expanded="false" aria-controls="account-panel" disabled>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg>
+              <span id="current-user">Connecting…</span><span aria-hidden="true">▾</span>
+            </button>
+            <section class="account-panel" id="account-panel" aria-label="Account" hidden>
+              <strong id="account-username"></strong>
+              <dl id="account-permissions">
+                <dt data-account-text="clearance">Clearance</dt><dd id="account-clearance"></dd>
+                <dt data-account-text="roles">Roles</dt><dd id="account-roles"></dd>
+              </dl>
+              <label class="account-language" for="response-language">
+                <span data-account-text="language">Language</span>
+                <select id="response-language" name="response-language">
+                  <option value="DE">Deutsch</option><option value="EN" selected>English</option>
+                </select>
+              </label>
+              <button class="secondary-button" id="switch-user-button" type="button" aria-expanded="false" aria-controls="demo-user-list" data-account-text="switchUser">Switch user</button>
+              <p id="demo-user-heading" hidden data-account-text="selectUser">Select demo user</p>
+              <div id="demo-user-list" class="demo-user-list" aria-label="Demo users" hidden></div>
+              <button class="secondary-button" id="logout-button" type="button" hidden data-account-text="logout">Logout</button>
+            </section>
+          </div>
+        </div>
       </header>
 
       <section class="result-panel" aria-labelledby="result-title">
@@ -26,30 +60,8 @@
             <h2 id="result-title">Investigation</h2>
           </div>
           <div class="toolbar-controls">
-            <div class="toolbar-selectors">
-              <label class="clearance-control" for="user-clearance" title="Demo access level for the next request.">
-                <span>Demo clearance</span>
-                <select id="user-clearance" name="user-clearance">
-                  <option value="PUBLIC" selected>PUBLIC</option>
-                  <option value="INTERNAL">INTERNAL</option>
-                  <option value="CONFIDENTIAL">CONFIDENTIAL</option>
-                  <option value="RESTRICTED">RESTRICTED</option>
-                </select>
-              </label>
-              <label class="clearance-control" for="response-language" title="Language for the next agent response.">
-                <span>Response language</span>
-                <select id="response-language" name="response-language">
-                  <option value="DE">Deutsch</option>
-                  <option value="EN" selected>English</option>
-                </select>
-              </label>
-            </div>
             <div class="toolbar-actions">
               <span class="status-badge" data-status="idle" id="run-status" hidden></span>
-              <button class="secondary-button icon-button" id="model-configuration-button" type="button" title="Model configuration" aria-label="Model configuration">
-                <svg class="settings-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.75v2M12 19.25v2M2.75 12h2M19.25 12h2M5.46 5.46l1.42 1.42M17.12 17.12l1.42 1.42M18.54 5.46l-1.42 1.42M6.88 17.12l-1.42 1.42"/></svg>
-                <span class="visually-hidden">Model configuration</span>
-              </button>
               <details class="monitoring-menu">
                 <summary title="Open monitoring dashboards">
                   <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 15v2M12 11v6M17 7v10"/></svg>

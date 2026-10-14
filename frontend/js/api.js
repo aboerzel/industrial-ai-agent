@@ -14,6 +14,10 @@ export function getSecurityContextGeneration() {
   return securityContextGeneration;
 }
 
+export function getSecurityContextSignal() {
+  return securityContextController.signal;
+}
+
 export function isCurrentSecurityContext(generation) {
   return generation === securityContextGeneration;
 }
@@ -85,7 +89,6 @@ export async function saveModelConfiguration(consumerId, dataClassification, con
 
 export async function createRun(
   message,
-  userClearance,
   responseLanguage,
   investigationId = null,
 ) {
@@ -93,7 +96,6 @@ export async function createRun(
     method: "POST",
     body: JSON.stringify({
       message,
-      user_clearance: userClearance,
       response_language: responseLanguage,
       ...(investigationId ? { investigation_id: investigationId } : {}),
     }),
@@ -104,23 +106,21 @@ export async function getRun(runId) {
   return request(`/api/v1/runs/${encodeURIComponent(runId)}`);
 }
 
-export async function resumeRun(runId, decision, userClearance) {
+export async function resumeRun(runId, decision) {
   return request(`/api/v1/runs/${encodeURIComponent(runId)}/resume`, {
     method: "POST",
-    body: JSON.stringify({ decision, user_clearance: userClearance }),
+    body: JSON.stringify({ decision }),
   });
 }
 
-export async function getInvestigation(investigationId, userClearance) {
-  const suffix = new URLSearchParams({ user_clearance: userClearance });
-  return request(`/api/v1/investigations/${encodeURIComponent(investigationId)}?${suffix}`,
+export async function getInvestigation(investigationId) {
+  return request(`/api/v1/investigations/${encodeURIComponent(investigationId)}`,
     {}, isInvestigationResponse);
 }
 
-export async function downloadInvestigationPdf(investigationId, userClearance) {
+export async function downloadInvestigationPdf(investigationId) {
   const generation = getSecurityContextGeneration();
-  const suffix = new URLSearchParams({ user_clearance: userClearance });
-  const path = `/api/v1/investigations/${encodeURIComponent(investigationId)}/pdf?${suffix}`;
+  const path = `/api/v1/investigations/${encodeURIComponent(investigationId)}/pdf`;
   const responseDocument = await requestBinary(path, "investigation.pdf");
   const objectUrl = createDocumentUrl(responseDocument.content, generation);
   const link = document.createElement("a");
@@ -133,17 +133,17 @@ export async function downloadInvestigationPdf(investigationId, userClearance) {
   revokeObjectUrlLater(objectUrl);
 }
 
-export async function openDocument(documentId, userClearance) {
+export async function openDocument(documentId) {
   const generation = getSecurityContextGeneration();
-  const responseDocument = await requestDocument(documentId, userClearance, false);
+  const responseDocument = await requestDocument(documentId, false);
   const objectUrl = createDocumentUrl(responseDocument.content, generation);
   window.open(objectUrl, "_blank", "noopener");
   revokeObjectUrlLater(objectUrl);
 }
 
-export async function downloadDocument(documentId, userClearance) {
+export async function downloadDocument(documentId) {
   const generation = getSecurityContextGeneration();
-  const responseDocument = await requestDocument(documentId, userClearance, true);
+  const responseDocument = await requestDocument(documentId, true);
   const objectUrl = createDocumentUrl(responseDocument.content, generation);
   const link = document.createElement("a");
   link.href = objectUrl;
@@ -155,9 +155,8 @@ export async function downloadDocument(documentId, userClearance) {
   revokeObjectUrlLater(objectUrl);
 }
 
-async function requestDocument(documentId, userClearance, download) {
-  const suffix = new URLSearchParams({ user_clearance: userClearance });
-  const path = `/api/v1/documents/${encodeURIComponent(documentId)}${download ? "/download" : ""}?${suffix}`;
+async function requestDocument(documentId, download) {
+  const path = `/api/v1/documents/${encodeURIComponent(documentId)}${download ? "/download" : ""}`;
   return requestBinary(path, "document");
 }
 
@@ -224,6 +223,7 @@ async function request(path, options = {}, validator = isRunResponse) {
       cache: "no-store",
       headers: {
         Accept: "application/json",
+        "X-Demo-Session": "1",
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...options.headers,
       },

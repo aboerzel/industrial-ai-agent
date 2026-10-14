@@ -1,10 +1,12 @@
+import { setResponseLanguage } from "../../../frontend/scripts/demo-account-controls.mjs";
+import { demoHttpAuth, demoHttpUser } from "../../frontend/fixtures/demo-auth-fake.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { executeStep, startResult } from "../../../frontend/scripts/run-e2e-journey.mjs";
+import { executeStep, startResult, selectDemoIdentity } from "../../../frontend/scripts/run-e2e-journey.mjs";
 import { assertionSummary, evaluatedJourneyStatus, plannedSteps, requireEvidence } from "../../../frontend/scripts/journey-assertions.mjs";
 import { createApiStatusGuard } from "../../../frontend/scripts/e2e-http.mjs";
 import { checkDeniedDocument, checkDocument, checkPdf } from "../../../frontend/scripts/browser-journey-checks.mjs";
@@ -24,17 +26,20 @@ test.beforeAll(async () => {
   server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, origin);
+      if (await demoHttpAuth(request, response, url)) return;
+      const user = demoHttpUser(request);
       if (url.pathname.startsWith("/api/")) {
-        requests.push({ path: url.pathname, clearance: url.searchParams.get("user_clearance") });
+        requests.push({ path: url.pathname, clearance: user?.clearance, username: user?.username });
         if (url.pathname === "/api/v1/runs" && request.method === "POST") {
           let raw = "";
           for await (const chunk of request) raw += chunk;
           const body = JSON.parse(raw);
+          scenario.owner = user.username;
           requests.at(-1).body = body;
-          const denied = rank[body.user_clearance] < rank[scenario.classification];
+          const denied = rank[user.clearance] < rank[scenario.classification];
           const turn = {
             run_id: runId, sequence: 1, status: denied ? "failed" : "success",
-            data_classification: denied ? body.user_clearance : scenario.classification,
+            data_classification: denied ? user.clearance : scenario.classification,
             response_language: body.response_language, request: body.message,
             answer: denied ? null : "The product P4711 has a protected finding at station S04.",
             identifiers: denied ? [] : [{ type: "product", value: "P4711" }, { type: "station", value: "S04" }],
@@ -46,7 +51,7 @@ test.beforeAll(async () => {
           investigation = { investigation_id: id, created_at: "2026-10-13T12:00:00Z", run_count: 1, tool_call_count: turn.tool_calls.length, status: turn.status, turns: [turn] };
           return json(response, { run_id: runId, investigation_id: scenario.missingId ? undefined : id, investigation_sequence: 1, ...Object.fromEntries(["status", "data_classification", "answer", "identifiers", "documents", "tool_calls", "investigation_steps", "next_steps", "error"].map((key) => [key, turn[key]])) });
         }
-        const clearance = url.searchParams.get("user_clearance");
+        const clearance = user.clearance;
         if (!investigation || rank[clearance] < rank[investigation.turns[0].data_classification]) return json(response, { code: "investigation_not_found", message: "The requested resource does not exist." }, 404);
         if (url.pathname === `/api/v1/investigations/${id}`) return json(response, investigation);
         if (url.pathname === `/api/v1/investigations/${id}/pdf`) {
@@ -83,8 +88,8 @@ test.beforeEach(async ({ context, page }) => {
   requests = [];
   await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   await page.goto(origin);
-  await page.selectOption("#user-clearance", "CONFIDENTIAL");
-  await page.selectOption("#response-language", "EN");
+  await selectDemoIdentity(page, "CONFIDENTIAL");
+  await setResponseLanguage(page, "EN");
 });
 
 function definition(extra = [], pdf = false) {
@@ -115,14 +120,14 @@ for (const classification of ["CONFIDENTIAL", "RESTRICTED"]) {
   for (const clearance of ["PUBLIC", "INTERNAL"]) {
     test(`${classification} -> ${clearance} verifies protected pre-state, purged UI, saved-ID denial and new-context request`, async ({ page, context }) => {
       scenario.classification = classification;
-      await page.selectOption("#user-clearance", classification);
-      const plan = definition([{ kind: "select", clearance }, { kind: "typed", prompt: "Show the product history for P4711.", expected: "ATTENTION", target: "P4711" }]);
+      await selectDemoIdentity(page, classification);
+      const plan = definition([{ kind: "switch-user", username: `demo-${clearance.toLowerCase()}` }, { kind: "typed", prompt: "Show the product history for P4711.", expected: "ATTENTION", target: "P4711" }]);
       const result = startResult("fixture", plan, {});
       const guard = createApiStatusGuard(context);
       for (const [index, item] of plan.steps.entries()) await step(page, context, result, item, index, guard);
       await expect(page.locator("#conversation-history")).not.toContainText("protected finding");
       assert.ok(requests.some((request) => request.path === `/api/v1/investigations/${id}/pdf` && request.clearance === clearance));
-      assert.equal(requests.filter((request) => request.body).at(-1).body.user_clearance, clearance);
+      assert.equal(requests.filter((request) => request.body).at(-1).clearance, clearance);
       assert.equal(requests.filter((request) => request.body).at(-1).body.investigation_id, undefined);
     });
   }
@@ -145,7 +150,7 @@ test("missing recorded tool call fails even when the UI renders a successful ans
 });
 
 test("required security reference cannot be skipped when pre-transition evidence is missing", async ({ page, context }) => {
-  const plan = definition([{ kind: "select", clearance: "PUBLIC" }]);
+  const plan = definition([{ kind: "switch-user", username: "demo-public" }]);
   const result = startResult("fixture", plan, {});
   await assert.rejects(step(page, context, result, plan.steps[1], 1, createApiStatusGuard(context)), /Required investigation evidence missing/);
   assert.notEqual(evaluatedJourneyStatus(result), "PASS");
@@ -162,14 +167,15 @@ test("optional missing reference is NOT_RUN in a passing required-assertion repo
   assert.equal(assertionSummary(result.assertions).optional[0].executed, false);
 });
 
-test("upgrade reloads under the new selected context", async ({ page, context }) => {
+test("upgrade purges the UI and reauthorizes shared data under the new principal", async ({ page, context }) => {
   scenario.classification = "PUBLIC";
-  await page.selectOption("#user-clearance", "PUBLIC");
-  const plan = definition([{ kind: "select", clearance: "CONFIDENTIAL" }]);
+  await selectDemoIdentity(page, "PUBLIC");
+  const plan = definition([{ kind: "switch-user", username: "demo-confidential" },
+    { kind: "typed", prompt: "Show the product history for P4711.", expected: "SUCCESS", target: "P4711", tool: "get_product_history" }]);
   const result = startResult("fixture", plan, {});
   const guard = createApiStatusGuard(context);
   for (const [index, item] of plannedSteps(plan).entries()) await step(page, context, result, item, index, guard);
-  assert.ok(requests.some((request) => request.path === `/api/v1/investigations/${id}` && request.clearance === "CONFIDENTIAL"));
+  assert.ok(requests.some((request) => request.path === `/api/v1/investigations/${id}` && request.username === "demo-confidential"));
   await expect(page.locator("#conversation-history")).toContainText("P4711");
 });
 
@@ -215,7 +221,7 @@ test("an incorrect browser filename still fails the document download assertion"
 
 test("explicit protected fixture document download is denied under the lower context", async ({ page, context }) => {
   scenario.document = true;
-  const plan = definition([{ kind: "select", clearance: "PUBLIC" }]);
+  const plan = definition([{ kind: "switch-user", username: "demo-public" }]);
   const result = startResult("fixture", plan, {});
   const guard = createApiStatusGuard(context);
   for (const [index, item] of plan.steps.entries()) await step(page, context, result, item, index, guard);

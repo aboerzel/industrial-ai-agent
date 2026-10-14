@@ -1,3 +1,4 @@
+import { mountDemoAuth, getCurrentUser } from "./demo-auth.js";
 import {
   ApiClientError,
   createRun,
@@ -17,7 +18,7 @@ import { downloadTranscriptPdf } from "./transcript-pdf.js?v=20261013-1";
 const composerForm = document.querySelector("#composer-form");
 const composerMessage = document.querySelector("#composer-message");
 const composerButton = document.querySelector("#composer-button");
-const userClearance = document.querySelector("#user-clearance");
+const currentClearance = () => getCurrentUser()?.clearance ?? "PUBLIC";
 const responseLanguage = document.querySelector("#response-language");
 const newInvestigationButton = document.querySelector("#new-investigation-button");
 const history = document.querySelector("#conversation-history");
@@ -36,7 +37,7 @@ let pendingAgentTurn = null;
 let pendingTranscriptTurn = null;
 let latestSubmissionId = 0;
 let visibleTranscript = [];
-let selectedClearance = userClearance.value;
+
 
 if (modelConfigurationButton && modelConfigurationDialog) {
   mountModelConfiguration({ button: modelConfigurationButton, dialog: modelConfigurationDialog });
@@ -60,11 +61,6 @@ composerMessage.addEventListener("keydown", (event) => {
   composerForm.requestSubmit();
 });
 
-userClearance.addEventListener("change", () => {
-  if (userClearance.value === selectedClearance) return;
-  selectedClearance = userClearance.value;
-  invalidateSecurityContext("clearance");
-});
 responseLanguage.addEventListener("change", persistUiState);
 
 window.addEventListener("securitycontextchange", (event) => {
@@ -77,19 +73,17 @@ window.addEventListener("securitycontextchange", (event) => {
   if (event.detail?.reason === "navigation") {
     // Persist only a reference; restoration must retrieve it under current authority.
     persistActiveInvestigation(investigationId);
-  } else if (event.detail?.reason === "clearance" && investigationId) {
-    currentInvestigationId = investigationId;
-    const generation = getSecurityContextGeneration();
-    void reloadInvestigation().catch(() => {
-      if (isCurrentSecurityContext(generation)) renderEmptyInvestigation();
-    });
   }
 });
 window.addEventListener("pagehide", () => invalidateSecurityContext("navigation"));
 window.addEventListener("pageshow", (event) => {
-  if (event.persisted) void restoreActiveInvestigation();
+  if (event.persisted) void demoAuth.initialize().then(restoreActiveInvestigation);
 });
 
+const demoAuth = mountDemoAuth({
+  onChanged: () => syncControls(),
+  onError: (error) => showError(error.message),
+});
 newInvestigationButton.addEventListener("click", () => {
   if (isSubmitting) return;
   composerMessage.value = "";
@@ -101,7 +95,7 @@ exportPdfButton.addEventListener("click", async () => {
   const generation = getSecurityContextGeneration();
   if (currentInvestigationId) {
     try {
-      await downloadInvestigationPdf(currentInvestigationId, userClearance.value);
+      await downloadInvestigationPdf(currentInvestigationId);
     } catch (error) {
       if (!isCurrentSecurityContext(generation)) return;
       showError(publicError(error, "The PDF export could not be downloaded."));
@@ -111,7 +105,7 @@ exportPdfButton.addEventListener("click", async () => {
   }
 });
 
-void restoreActiveInvestigation();
+void demoAuth.initialize().then(restoreActiveInvestigation);
 
 async function restoreActiveInvestigation() {
   const generation = getSecurityContextGeneration();
@@ -122,9 +116,8 @@ async function restoreActiveInvestigation() {
   }
 
   currentInvestigationId = activeInvestigation.investigationId;
-  userClearance.value = activeInvestigation.userClearance;
-  selectedClearance = userClearance.value;
   responseLanguage.value = activeInvestigation.responseLanguage;
+  demoAuth.refreshLabels();
   if (!activeInvestigation.investigationId) {
     renderEmptyInvestigation();
     return;
@@ -145,14 +138,14 @@ async function submitRequest(message = composerMessage.value.trim()) {
     composerMessage.focus();
     return;
   }
-  if (isSubmitting) return;
+  if (isSubmitting || !getCurrentUser()) return;
 
   const isNewInvestigation = currentInvestigationId === null;
   const submission = {
     generation: getSecurityContextGeneration(),
     id: ++latestSubmissionId,
     investigationId: currentInvestigationId,
-    clearance: userClearance.value,
+    clearance: currentClearance(),
     language: responseLanguage.value,
   };
   renderPendingConversation(requestMessage, { replace: isNewInvestigation });
@@ -160,14 +153,13 @@ async function submitRequest(message = composerMessage.value.trim()) {
   try {
     const result = await createRun(
       requestMessage,
-      submission.clearance,
       submission.language,
       submission.investigationId,
     );
     if (submission.id !== latestSubmissionId) return;
     currentInvestigationId = result.investigation_id;
     composerMessage.value = "";
-    if (isTerminalRunStatus(result.status) && userClearance.value === submission.clearance) {
+    if (isTerminalRunStatus(result.status) && currentClearance() === submission.clearance) {
       renderTerminalRun(result, requestMessage, submission);
       void refreshTerminalInvestigation(result, submission);
     } else {
@@ -195,7 +187,7 @@ function renderTerminalRun(result, request, submission) {
   if (
     submission.id !== latestSubmissionId ||
     currentInvestigationId !== result.investigation_id ||
-    userClearance.value !== submission.clearance
+    currentClearance() !== submission.clearance
   ) return;
   const turn = {
     ...result,
@@ -220,17 +212,16 @@ function renderTerminalRun(result, request, submission) {
 }
 
 async function refreshTerminalInvestigation(result, submission) {
-  if (userClearance.value !== submission.clearance) return;
+  if (currentClearance() !== submission.clearance) return;
   try {
     const investigation = await getInvestigation(
       result.investigation_id,
-      submission.clearance,
     );
     const persistedRun = investigation.turns.find((turn) => turn.run_id === result.run_id);
     if (
       submission.id === latestSubmissionId &&
       currentInvestigationId === result.investigation_id &&
-      userClearance.value === submission.clearance &&
+      currentClearance() === submission.clearance &&
       persistedRun
     ) {
       renderInvestigation(investigation);
@@ -244,7 +235,7 @@ async function reloadInvestigation() {
   if (!currentInvestigationId) return;
   const generation = getSecurityContextGeneration();
   const investigationId = currentInvestigationId;
-  const investigation = await getInvestigation(investigationId, userClearance.value);
+  const investigation = await getInvestigation(investigationId);
   if (!isCurrentSecurityContext(generation) || investigationId !== currentInvestigationId) return;
   renderInvestigation(investigation);
 }
@@ -290,7 +281,7 @@ function persistActiveInvestigation(investigationId) {
       ACTIVE_INVESTIGATION_STORAGE_KEY,
       JSON.stringify({
         investigationId,
-        userClearance: userClearance.value,
+        username: getCurrentUser()?.username ?? null,
         responseLanguage: responseLanguage.value,
       }),
     );
@@ -315,9 +306,7 @@ function readActiveInvestigation() {
     if (
       !stored ||
       (stored.investigationId !== null && typeof stored.investigationId !== "string") ||
-      !["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"].includes(
-        stored.userClearance,
-      ) ||
+      (typeof stored.username !== "string" || stored.username !== getCurrentUser()?.username) ||
       !["DE", "EN"].includes(stored.responseLanguage ?? "EN")
     ) {
       return null;
@@ -636,12 +625,12 @@ function renderDocuments(documents, selectedLanguage) {
     const open = createDocumentAction(
       selectedLanguage === "DE" ? "Öffnen" : "Open",
       "open",
-      () => openDocument(reference.document_id, userClearance.value),
+      () => openDocument(reference.document_id),
     );
     const download = createDocumentAction(
       selectedLanguage === "DE" ? "Herunterladen" : "Download",
       "download",
-      () => downloadDocument(reference.document_id, userClearance.value),
+      () => downloadDocument(reference.document_id),
     );
     item.append(documentTitle, open, download);
     list.append(item);
@@ -819,7 +808,7 @@ function renderApproval(turn) {
 async function decide(runId, decision) {
   const generation = getSecurityContextGeneration();
   try {
-    await resumeRun(runId, decision, userClearance.value);
+    await resumeRun(runId, decision);
     if (!isCurrentSecurityContext(generation)) return;
     await reloadInvestigation();
   } catch (error) {
@@ -839,8 +828,8 @@ function setSubmitting() {
 }
 
 function syncControls() {
-  composerMessage.disabled = isSubmitting;
-  composerButton.disabled = isSubmitting;
+  composerMessage.disabled = isSubmitting || !getCurrentUser();
+  composerButton.disabled = isSubmitting || !getCurrentUser();
   composerButton.setAttribute("aria-label", "Send message");
   composerButton.title = "Send message";
   newInvestigationButton.disabled = isSubmitting;

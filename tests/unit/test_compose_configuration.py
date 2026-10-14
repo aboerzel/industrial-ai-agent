@@ -155,20 +155,7 @@ def test_frontend_is_a_loopback_only_static_service() -> None:
 
     assert frontend["image"] == "nginx:1.29-alpine"
     assert frontend["restart"] == "unless-stopped"
-    assert (
-        frontend["environment"]["MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN"]
-        == services["agent-api"]["environment"]["MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN"]
-    )
-    for variable in (
-        "MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN",
-        "MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN",
-        "MCP_INDUSTRIAL_AGENT_TOKEN",
-        "AGENT_API_MODEL_ADMIN_TOKEN",
-    ):
-        assert (
-            frontend["environment"][variable]
-            == services["agent-api"]["environment"][variable]
-        )
+    assert not frontend.get("environment")
     assert frontend["depends_on"]["agent-api"]["condition"] == "service_healthy"
     assert _published_ports(frontend) == (
         {
@@ -207,13 +194,6 @@ def test_frontend_is_a_loopback_only_static_service() -> None:
             "target": "/etc/nginx/templates/default.conf.template",
             "read_only": True,
             "bind": {},
-        },
-        {
-            "type": "bind",
-            "source": str(PROJECT_ROOT / "auth" / "frontend.htpasswd"),
-            "target": "/etc/nginx/auth/frontend.htpasswd",
-            "read_only": True,
-            "bind": {"create_host_path": False},
         },
     ]
     assert frontend["healthcheck"]["test"] == [

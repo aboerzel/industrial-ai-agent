@@ -1,3 +1,5 @@
+import { setResponseLanguage } from "../../frontend/scripts/demo-account-controls.mjs";
+import { selectDemoIdentity } from "../../frontend/scripts/run-e2e-journey.mjs";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -5,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertHttpStatus, createApiStatusGuard, getModelAdminJson, readExpectedJson } from "../../frontend/scripts/e2e-http.mjs";
 import { assertionPlan, assertionSummary, assertPersistedTurn, assertToolEvidence, recordAssertion, requiredAssertionsStatus } from "../../frontend/scripts/journey-assertions.mjs";
-import { activeInvestigationId, checkClearanceChange, checkDocument, checkPdf, checkReload, rememberInvestigation } from "../../frontend/scripts/browser-journey-checks.mjs";
+import { activeInvestigationId, browserIdentity, checkIdentitySwitch, checkDocument, checkPdf, checkReload, rememberInvestigation } from "../../frontend/scripts/browser-journey-checks.mjs";
 
 const requireFrontendPackage = createRequire(
   new URL("../../frontend/package.json", import.meta.url),
@@ -92,10 +94,10 @@ test("Journey E: clearance boundary remains usable", async ({ page }) => {
   const journey = beginJourney("Clearance boundary", ["typed", "select", "typed", "select", "typed", "reference"], true);
   await openChat(page, "CONFIDENTIAL");
   await typedStep(page, journey, "Untersuche die Produkthistorie von P4711.", "SUCCESS", "P4711");
-  await checkClearanceChange(page, journey, "INTERNAL", httpGuards.get(page.context()));
+  await checkIdentitySwitch(page, journey, "demo-internal", httpGuards.get(page.context()));
   recordStep(journey, "clearance downgrade", "SUCCESS", "SUCCESS", "INTERNAL");
   await typedStep(page, journey, "Zeige die Produkthistorie von P4711.", "ATTENTION", null);
-  await checkClearanceChange(page, journey, "CONFIDENTIAL", httpGuards.get(page.context()));
+  await checkIdentitySwitch(page, journey, "demo-confidential", httpGuards.get(page.context()));
   recordStep(journey, "clearance upgrade", "SUCCESS", "SUCCESS", "CONFIDENTIAL");
   await typedStep(page, journey, "Untersuche Station S04 genauer.", "SUCCESS", "S04");
   await referenceStep(page, journey, "S04", "Aktuellen Status prüfen", "SUCCESS", "S04");
@@ -104,9 +106,9 @@ test("Journey E: clearance boundary remains usable", async ({ page }) => {
 
 async function openChat(page, clearance) {
   assertHttpStatus(await page.goto("/"));
-  await page.selectOption("#user-clearance", clearance);
-  await page.selectOption("#response-language", LANGUAGE);
-  await expect(page.locator("#user-clearance")).toHaveValue(clearance);
+  await selectDemoIdentity(page, clearance);
+  await setResponseLanguage(page, LANGUAGE);
+  expect((await browserIdentity(page)).clearance).toBe(clearance);
   await expect(page.locator("#response-language")).toHaveValue(LANGUAGE);
 }
 
@@ -146,9 +148,9 @@ async function documentStep(page, journey, expectedSeverity) {
 async function recordAgentStep(page, journey, label, request, investigationResponse, expectedSeverity, expectedIdentifier, previousId, expectedTool = null) {
   assertHttpStatus(investigationResponse);
   const body = request.postDataJSON();
-  const clearance = await page.locator("#user-clearance").inputValue();
+  const clearance = (await browserIdentity(page)).clearance;
   const language = await page.locator("#response-language").inputValue();
-  expect(body.user_clearance).toBe(clearance);
+  expect(body.user_clearance).toBeUndefined();
   expect(body.response_language).toBe(language);
   expect(language).toBe(LANGUAGE);
   const investigation = await readExpectedJson(investigationResponse);

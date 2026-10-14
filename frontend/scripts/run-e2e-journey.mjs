@@ -1,3 +1,5 @@
+import { switchDemoUser, setResponseLanguage } from "./demo-account-controls.mjs";
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -11,11 +13,11 @@ import {
   assertToolEvidence, evaluatedJourneyStatus, plannedSteps, recordAssertion, requireEvidence,
 } from "./journey-assertions.mjs";
 import {
-  activeInvestigationId, checkClearanceChange, checkDocument, checkNewChat, checkPdf,
+  activeInvestigationId, browserIdentity, checkIdentitySwitch, checkDocument, checkNewChat, checkPdf,
   checkReload, readInvestigation, rememberInvestigation,
 } from "./browser-journey-checks.mjs";
 import {
-  assertHttpStatus, browserCredentials, createApiStatusGuard, executionStatus,
+  assertHttpStatus, checkDemoSession, createApiStatusGuard, executionStatus,
   exitCodeForStatuses, fetchExpected, modelAdminHeaders, readExpectedJson, requiredEnvironmentValue,
 } from "./e2e-http.mjs";
 import {
@@ -83,9 +85,9 @@ const JOURNEYS = {
     steps: [
       { kind: "typed", prompt: "Search technical documentation for QUALITY-09.", expected: "SUCCESS", target: "QUALITY-09", tool: "search_documentation" },
       { kind: "document", expected: "SUCCESS" },
-      { kind: "select", clearance: "PUBLIC" },
+      { kind: "switch-user", username: "demo-public" },
       { kind: "typed", prompt: "Investigate QUALITY-09 in more detail.", expected: "ATTENTION", target: "QUALITY-09" },
-      { kind: "select", clearance: "CONFIDENTIAL" },
+      { kind: "switch-user", username: "demo-confidential" },
       { kind: "typed", prompt: "Which station is affected by QUALITY-09?", expected: "SUCCESS", target: "S04" },
     ],
   },
@@ -96,9 +98,9 @@ const JOURNEYS = {
     clearance: "CONFIDENTIAL",
     steps: [
       { kind: "typed", prompt: "Untersuche die Produkthistorie von P4711.", expected: "SUCCESS", target: "P4711", tool: "get_product_history" },
-      { kind: "select", clearance: "INTERNAL" },
+      { kind: "switch-user", username: "demo-internal" },
       { kind: "typed", prompt: "Show the product history for P4711.", expected: "ATTENTION", target: "P4711" },
-      { kind: "select", clearance: "CONFIDENTIAL" },
+      { kind: "switch-user", username: "demo-confidential" },
       { kind: "typed", prompt: "Untersuche Station S04 genauer.", expected: "SUCCESS", target: "S04" },
       { kind: "new-chat" },
       { kind: "typed", prompt: "Welche Stationen kennst du?", expected: "SUCCESS" },
@@ -308,21 +310,17 @@ async function runPreflight() {
   };
   await check("authentication", async () => {
     await modelAdminHeaders();
-    await browserCredentials(FRONTEND_URL);
-    await browserCredentials(FRONTEND_URL, true);
+    await checkDemoSession(FRONTEND_URL, "demo-public");
+    await checkDemoSession(FRONTEND_URL, "demo-admin");
     await requiredEnvironmentValue("MCP_INDUSTRIAL_AGENT_TOKEN");
     return "Runner credentials configured; no values recorded.";
   });
   if (checks.every((check_) => check_.status === "PASS")) {
     await check("frontend", async () => {
-      const credentials = await browserCredentials(FRONTEND_URL);
-      const authorization = Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64");
-      return `${(await fetchExpected(FRONTEND_URL, { headers: { Authorization: `Basic ${authorization}` } })).status}`;
+      return `${(await fetchExpected(FRONTEND_URL)).status}`;
     });
     await check("model-admin-frontend", async () => {
-      const credentials = await browserCredentials(FRONTEND_URL, true);
-      const authorization = Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64");
-      return `${(await fetchExpected(FRONTEND_URL, { headers: { Authorization: `Basic ${authorization}` } })).status}`;
+      return `${(await fetchExpected(FRONTEND_URL)).status}`;
     });
     await check("agent-api", async () => {
       const response = await fetchExpected(`${API_URL}/api/v1/models`, { headers: await modelAdminHeaders() });
@@ -384,8 +382,8 @@ async function runJourney(id) {
   let httpGuard;
   let operation = "startup";
   try {
-    const httpCredentials = await browserCredentials(FRONTEND_URL);
-    await browserCredentials(FRONTEND_URL, true);
+    await checkDemoSession(FRONTEND_URL, "demo-public");
+    await checkDemoSession(FRONTEND_URL, "demo-admin");
     await assertLocalOnlyPreflight();
     configurationSnapshot = assignmentSnapshot(
       await fetchJson(`${API_URL}/api/v1/model-assignments`),
@@ -393,7 +391,7 @@ async function runJourney(id) {
     latestAssignmentSnapshot = configurationSnapshot;
     result.metadata = currentRunMetadata();
     browser = await chromium.launch({ headless: true });
-    context = await browser.newContext({ acceptDownloads: true, httpCredentials });
+    context = await browser.newContext({ acceptDownloads: true });
     configurationGuard = createReadOnlyConfigurationGuard(context);
     httpGuard = createApiStatusGuard(context);
     page = await context.newPage();
@@ -494,14 +492,26 @@ async function assertConfigurationSnapshot(snapshot, operation) {
 
 async function preparePage(page, definition) {
   assertHttpStatus(await page.goto(FRONTEND_URL, { waitUntil: "domcontentloaded" }));
-  await page.selectOption("#user-clearance", definition.clearance);
-  await page.selectOption("#response-language", definition.language);
+  await selectDemoIdentity(page, definition.clearance);
+  await setResponseLanguage(page, definition.language);
+}
+
+export async function selectDemoIdentity(page, clearance, username = null) {
+  const before = await browserIdentity(page);
+  const config = await readExpectedJson(await page.request.get(new URL("/api/v1/auth/config", page.url()).href));
+  const user = config.users.find((entry) => username ? entry.username === username : entry.clearance === clearance && entry.roles.length === 0);
+  requireEvidence(user, "Required demo identity missing.");
+  if (before.username !== user.username) {
+    await switchDemoUser(page, user.username);
+    await page.waitForFunction((name) => document.querySelector("#current-user")?.textContent.startsWith(name), user.username);
+  }
+  assert.equal((await browserIdentity(page)).username, user.username);
 }
 
 async function executeStep(page, context, result, step, clientErrors, failedFetches, httpGuard) {
-  if (step.kind === "select") {
-    await checkClearanceChange(page, result, step.clearance, httpGuard);
-    record(result, { label: `select clearance ${step.clearance}`, ...await pageContext(page), test_result: "PASS", note: "Context transition, purge and server visibility asserted." });
+  if (step.kind === "switch-user") {
+    await checkIdentitySwitch(page, result, step.username, httpGuard);
+    record(result, { label: `switch user ${step.username}`, ...await pageContext(page), test_result: "PASS", note: "Context transition, purge and server visibility asserted." });
     return;
   }
   if (step.kind === "new-chat") {
@@ -541,7 +551,7 @@ async function submitTyped(page, context, result, step, clientErrors, failedFetc
     throw harnessSignal("REQUEST_NOT_OBSERVED", "The UI entered submission state but no API request was observed.");
   }
   const requestContext = safeRunRequestContext(runRequest.request);
-  if (!requestContext || requestContext.clearance !== afterTrigger.clearance || requestContext.language !== afterTrigger.language) {
+  if (!requestContext || !requestContext.caller_clearance_absent || requestContext.language !== afterTrigger.language) {
     throw harnessSignal("REQUEST_CONTRACT_MISMATCH", "The observed run request did not preserve selected clearance or language.");
   }
   if (!terminal) {
@@ -581,7 +591,7 @@ async function clickReference(page, context, result, step, clientErrors, failedF
   if (!runRequest) throw harnessSignal("REQUEST_NOT_OBSERVED", "Reference action entered submission state but no run request was observed.");
   const requestContext = safeRunRequestContext(runRequest.request);
   const contextNow = await pageContext(page);
-  if (!requestContext || requestContext.clearance !== contextNow.clearance || requestContext.language !== contextNow.language) throw harnessSignal("REQUEST_CONTRACT_MISMATCH", "Reference run request did not preserve selected context.");
+  if (!requestContext || !requestContext.caller_clearance_absent || requestContext.language !== contextNow.language) throw harnessSignal("REQUEST_CONTRACT_MISMATCH", "Reference run request did not preserve selected context.");
   if (!terminal) {
     record(result, { label: `click ${step.type}: ${referenceText} / ${action}`, ...contextNow, expected_severity: step.expected, actual_severity: "FAILURE", test_result: "FAIL", note: "No terminal user-visible result after observed reference request.", request_context: requestContext, clicked_reference_type: step.type });
     return;
@@ -608,7 +618,7 @@ async function recordAgentResult(page, result, label, step, request, investigati
   const text = await agentTurn.innerText();
   const actual = await userSeverity(agentTurn, text);
   const faults = [...clientErrors, ...failedFetches, ...technicalFaults(text)];
-  const contextOk = body.user_clearance === context.clearance && body.response_language === context.language && turn.response_language === context.language && CLEARANCE_RANK[turn.data_classification] <= CLEARANCE_RANK[context.clearance];
+  const contextOk = body.user_clearance === undefined && body.response_language === context.language && turn.response_language === context.language && CLEARANCE_RANK[turn.data_classification] <= CLEARANCE_RANK[context.clearance];
   const target = clickedIdentifier ?? step.target;
   const semanticOk = !target || step.expected === "ATTENTION" || text.includes(target);
   const leakFree = step.expected !== "ATTENTION" || !target || !text.includes(target);
@@ -625,13 +635,14 @@ async function recordAgentResult(page, result, label, step, request, investigati
 }
 
 async function smokeControls(page, result, browser) {
-  const adminContext = await browser.newContext({ httpCredentials: await browserCredentials(FRONTEND_URL, true) });
+  const adminContext = await browser.newContext();
   const httpGuard = createApiStatusGuard(adminContext);
   const configurationGuard = createReadOnlyConfigurationGuard(adminContext);
   let dialogOpen = false;
   try {
     const adminPage = await adminContext.newPage();
     assertHttpStatus(await adminPage.goto(FRONTEND_URL));
+    await selectDemoIdentity(adminPage, null, "demo-admin");
     await adminPage.locator("#model-configuration-button").click();
     await adminPage.locator(".model-assignment-row").first().waitFor();
     dialogOpen = await adminPage.locator("#model-configuration-dialog").evaluate((dialog) => dialog.open);
@@ -701,7 +712,7 @@ async function submitState(page) {
     submit_enabled: await button.isEnabled(),
     form_exists: await form.count() > 0,
     loading: await page.locator("#run-status[data-status='running'], .agent-turn.is-pending").count() > 0,
-    clearance: await value(page, "#user-clearance"),
+    ...await browserIdentity(page),
     language: await value(page, "#response-language"),
   };
 }
@@ -725,7 +736,7 @@ function safeRunRequestContext(request) {
   try {
     const body = request.postDataJSON();
     if (!body || typeof body !== "object") return null;
-    return { clearance: body.user_clearance, language: body.response_language, has_investigation_id: typeof body.investigation_id === "string" };
+    return { caller_clearance_absent: body.user_clearance === undefined, language: body.response_language, has_investigation_id: typeof body.investigation_id === "string" };
   } catch { return null; }
 }
 function harnessSignal(category, message) { const error = new Error(message); error.name = category; return error; }
@@ -734,7 +745,7 @@ async function browserPageState(page, context, browser) {
   const safely = (operation) => { try { return operation(); } catch { return null; } };
   return { page_closed: safely(() => page?.isClosed()) ?? null, context_closed: safely(() => !context || context.pages().length === 0) ?? null, browser_connected: safely(() => browser?.isConnected()) ?? null };
 }
-async function pageContext(page) { return { clearance: await value(page, "#user-clearance"), language: await value(page, "#response-language") }; }
+async function pageContext(page) { return { ...await browserIdentity(page), language: await value(page, "#response-language") }; }
 async function userSeverity(agentTurn, text) {
   if (await agentTurn.locator(".turn-attention").count()) return "ATTENTION";
   return (await agentTurn.locator(".turn-error").count()) ? "FAILURE" : "SUCCESS";

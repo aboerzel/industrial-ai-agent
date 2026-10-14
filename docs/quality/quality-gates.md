@@ -7,10 +7,9 @@ risks without turning ordinary development into a real-model release exercise.
 
 Run from the repository root on PowerShell:
 
-Before the manual E2E command, configure the existing API/MCP tokens and local browser
-credentials as described in [Browser E2E Journeys](../learning/browser-e2e-journeys.md).
+Before the manual E2E command, configure the existing API/MCP tokens and explicit browser demo mode as described in [Browser E2E Journeys](../learning/browser-e2e-journeys.md).
 The API on port 8000 requires Bearer authentication; the browser gateway on port 8080
-requires HTTP Basic. Missing credentials, unexpected HTTP statuses, runner errors and
+uses server-managed demo sessions in explicit Demo Auth Mode. Missing credentials, unexpected HTTP statuses, runner errors and
 incomplete aggregates return non-zero exits. FAST uses fakes and requires no E2E secrets.
 
 ```powershell
@@ -88,3 +87,9 @@ Journey reports expose planned/executed/passed/failed/blocked assertion counts. 
 BLOCKED or NOT_RUN cannot yield PASS. Historical reports without the current assertion
 plan require fresh measurement. See the journey coverage table and remaining limits in
 [Browser E2E Journeys](../learning/browser-e2e-journeys.md).
+
+FAST also runs `scripts/check-demo-secrets.py`: an incremental high-signal and credential-
+literal check over tracked changes and nonignored new files. The predefined canonical
+browser passwords are narrowly recognized; infrastructure keys and realistic provider
+secret patterns remain rejected, including in test files. This local check supplements
+review and does not claim exhaustive third-party secret-scanner coverage.

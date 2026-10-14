@@ -1,3 +1,4 @@
+import { demoAuthFetch, demoUsers } from "./fixtures/demo-auth-fake.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -101,7 +102,7 @@ test("renders a single-composer investigation workspace", async (t) => {
     assert.equal(document.querySelector("#composer-message")?.disabled, false);
     assert.equal(document.querySelector("#composer-button")?.getAttribute("aria-label"), "Send message");
     assert.equal(document.querySelector("#export-pdf-button")?.disabled, true);
-    assert.equal(document.querySelector("#user-clearance")?.closest(".toolbar-controls") !== null, true);
+    assert.equal(document.querySelector("#account-button").closest(".site-header") !== null, true);
     assert.equal(document.querySelector("#run-status")?.hidden, true);
   });
 
@@ -115,7 +116,6 @@ test("renders a single-composer investigation workspace", async (t) => {
       return jsonResponse(INVESTIGATION);
     });
     try {
-      document.querySelector("#user-clearance").value = "RESTRICTED";
       document.querySelector("#composer-message").value = "Zeige mir das Ticket MT-6EA0DEF5515A.";
       submit(document, window);
       await settle();
@@ -124,20 +124,19 @@ test("renders a single-composer investigation workspace", async (t) => {
       assert.equal(document.querySelector("#composer-message")?.disabled, false);
       assert.equal(document.querySelector("#export-pdf-button")?.disabled, false);
       assert.equal(bodies[0].investigation_id, undefined);
-      assert.equal(bodies[0].user_clearance, "RESTRICTED");
+      assert.equal(bodies[0].user_clearance, undefined);
       assert.equal(bodies[0].response_language, "EN");
       assert.deepEqual(
         [...document.querySelectorAll(".conversation-message .turn-label")].map((node) => node.textContent),
         ["You", "Agent", "You", "Agent"],
       );
 
-      document.querySelector("#user-clearance").value = "INTERNAL";
       document.querySelector("#composer-message").value = "Prüfe den ersten empfohlenen Schritt genauer.";
       submit(document, window);
       await settle();
 
       assert.equal(bodies[1].investigation_id, INVESTIGATION_ID);
-      assert.equal(bodies[1].user_clearance, "INTERNAL");
+      assert.equal(bodies[1].user_clearance, undefined);
       assert.equal(document.querySelectorAll("textarea").length, 1);
       assert.equal(document.querySelector("#result-title")?.textContent, "Investigation");
       assert.equal(document.querySelector("#investigation-metadata"), null);
@@ -413,7 +412,6 @@ test("renders a single-composer investigation workspace", async (t) => {
     };
     document.addEventListener("click", captureDownload);
     try {
-      document.querySelector("#user-clearance").value = "PUBLIC";
       document.querySelector("#composer-message").value = "S07";
       submit(document, window);
       await settle();
@@ -446,7 +444,7 @@ test("renders a single-composer investigation workspace", async (t) => {
         JSON.parse(window.sessionStorage.getItem("industrial-ai-agent.active-investigation")),
         {
           investigationId: INVESTIGATION_ID,
-          userClearance: "RESTRICTED",
+          username: "demo-restricted",
           responseLanguage: "EN",
         },
       );
@@ -901,8 +899,8 @@ test("renders a single-composer investigation workspace", async (t) => {
       await settle();
 
       assert.deepEqual(documentRequests, [
-        "/api/v1/documents/DOC-001?user_clearance=CONFIDENTIAL",
-        "/api/v1/documents/DOC-001/download?user_clearance=CONFIDENTIAL",
+        "/api/v1/documents/DOC-001",
+        "/api/v1/documents/DOC-001/download",
       ]);
       assert.equal(document.querySelector("#composer-message")?.value, "Investigate P4711 at S04.");
       assert.equal(document.querySelector("#error-message")?.hidden, true);
@@ -928,9 +926,7 @@ test("clearance downgrade immediately removes protected conversation and export 
   try {
     await settle();
     assert.match(document.querySelector("#conversation-history").textContent, /SYNTHETIC CONFIDENTIAL CONTENT/);
-    const clearance = document.querySelector("#user-clearance");
-    clearance.value = "PUBLIC";
-    clearance.dispatchEvent(new window.Event("change"));
+    changeClearance(document, window, "PUBLIC");
     assert.doesNotMatch(document.body.textContent, /SYNTHETIC CONFIDENTIAL CONTENT/);
     assert.equal(document.querySelector("#export-pdf-button").disabled, true);
     await settle();
@@ -940,7 +936,7 @@ test("clearance downgrade immediately removes protected conversation and export 
   }
 });
 
-test("security transitions remove old data and reload only under the new clearance", async (t) => {
+test("identity transitions purge old data without transferring another principal's investigation", async (t) => {
   for (const [previous, next] of [["RESTRICTED", "PUBLIC"], ["RESTRICTED", "CONFIDENTIAL"], ["PUBLIC", "CONFIDENTIAL"]]) {
     await t.test(`${previous} -> ${next}`, async () => {
       const original = structuredClone(INVESTIGATION);
@@ -963,10 +959,11 @@ test("security transitions remove old data and reload only under the new clearan
         assert.doesNotMatch(document.body.textContent, /SYNTHETIC OLD CONTEXT/);
         assert.equal(document.querySelector("#composer-message").value, "");
         assert.equal(document.querySelector("#export-pdf-button").disabled, true);
-        assert.match(requests.at(-1), new RegExp(`user_clearance=${next}$`));
-        resolveReload(jsonResponse(fresh));
         await settle();
-        assert.match(document.body.textContent, /Fresh authorized response/);
+        assert.equal(requests.length, 1);
+        assert.equal(resolveReload, undefined);
+        assert.equal(JSON.parse(window.sessionStorage.getItem("industrial-ai-agent.active-investigation")).investigationId, null);
+        assert.match(document.querySelector("#account-clearance").textContent, new RegExp(next));
         assert.doesNotMatch(document.body.textContent, /SYNTHETIC OLD CONTEXT/);
       } finally {
         restoreFetch();
@@ -1002,14 +999,19 @@ test("late old-context JSON parsing cannot overwrite a new investigation view", 
   let resolveOldBody;
   const fresh = structuredClone(INVESTIGATION);
   fresh.turns[0].answer = "New PUBLIC response";
+  fresh.turns[0].data_classification = "PUBLIC";
   let calls = 0;
-  const { document, window, restoreFetch } = await loadApp(() => {
+  const { document, window, restoreFetch } = await loadApp((url) => {
     if (++calls === 1) return { ok: true, status: 200, json: () => new Promise((resolve) => { resolveOldBody = resolve; }) };
+    if (String(url).includes("/api/v1/runs")) return jsonResponse({ ...runResponse(), answer: "New PUBLIC response", data_classification: "PUBLIC" });
     return jsonResponse(fresh);
   }, { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
   try {
     await settle();
     changeClearance(document, window, "PUBLIC");
+    await settle();
+    document.querySelector("#composer-message").value = "New public query";
+    submit(document, window);
     await settle();
     const old = structuredClone(INVESTIGATION);
     old.turns[0].answer = "SYNTHETIC OLD JSON SECRET";
@@ -1046,9 +1048,8 @@ test("navigation between gateway identities purges old UI and reauthorizes resto
 });
 
 function changeClearance(document, window, clearance) {
-  const select = document.querySelector("#user-clearance");
-  select.value = clearance;
-  select.dispatchEvent(new window.Event("change"));
+  const username = demoUsers.find((user) => user.clearance === clearance && !user.roles.length).username;
+  document.querySelector(`[data-demo-username="${username}"]`).click();
 }
 
 test("authentication rejection purges previously visible data", async () => {
@@ -1100,7 +1101,7 @@ test("post-downgrade submissions use the narrowed clearance and no denied invest
       bodies.push(JSON.parse(options.body));
       return jsonResponse({ ...runResponse(), data_classification: "PUBLIC", answer: "Public result" });
     }
-    if (String(url).includes("user_clearance=PUBLIC")) return jsonResponse({ code: "investigation_not_found", message: "Unavailable" }, 404);
+    if (bodies.length) return jsonResponse({ code: "investigation_not_found", message: "Unavailable" }, 404);
     return jsonResponse(INVESTIGATION);
   }, { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
   try {
@@ -1110,7 +1111,7 @@ test("post-downgrade submissions use the narrowed clearance and no denied invest
     document.querySelector("#composer-message").value = "Public query";
     submit(document, window);
     await settle();
-    assert.equal(bodies[0].user_clearance, "PUBLIC");
+    assert.equal(bodies[0].user_clearance, undefined);
     assert.equal(bodies[0].investigation_id, undefined);
     assert.match(document.body.textContent, /Public result/);
   } finally {
@@ -1148,7 +1149,7 @@ test("keeps a full-width workspace and responsive toolbar contract in CSS", asyn
   assert.match(css, /@media \(max-width: 520px\)/);
   assert.match(css, /\.shell \{[\s\S]*?width: 100%;[\s\S]*?max-width: none;/);
   assert.doesNotMatch(css, /max-width: 1440px/);
-  assert.match(css, /\.toolbar-selectors/);
+  assert.match(css, /\.header-actions/);
   assert.match(css, /\.toolbar-actions/);
   assert.match(css, /data-status="completed_with_attention"/);
   assert.match(css, /data-status="failed"/);
@@ -1174,7 +1175,7 @@ test("uses one workspace heading and accessible compact actions in the shipped p
   assert.doesNotMatch(index, />Chat</);
   assert.doesNotMatch(index, /Active investigation/);
   assert.doesNotMatch(index, /investigation-metadata|investigation-runs|investigation-tools/);
-  assert.match(index, /class="toolbar-selectors"/);
+  assert.match(index, /class="header-actions"/);
   assert.doesNotMatch(index, /api-access-token|Access token/);
   assert.match(index, /class="toolbar-actions"/);
   assert.match(index, /id="composer-button" type="submit" aria-label="Send message" title="Send message"/);
@@ -1189,19 +1190,20 @@ test("uses one workspace heading and accessible compact actions in the shipped p
 });
 
 async function loadApp(fetchImplementation = null, activeInvestigation = null) {
-  const dom = new JSDOM(`<!doctype html><html><body>
-    <section class="result-panel"><h2 id="result-title"></h2><div class="toolbar-controls"><div class="toolbar-selectors"><label class="clearance-control"><select id="user-clearance"><option value="PUBLIC">PUBLIC</option><option value="INTERNAL">INTERNAL</option><option value="CONFIDENTIAL">CONFIDENTIAL</option><option value="RESTRICTED" selected>RESTRICTED</option></select></label><label class="clearance-control"><select id="response-language"><option value="DE">Deutsch</option><option value="EN" selected>English</option></select></label></div><div class="toolbar-actions"><span id="run-status" hidden></span><button id="export-pdf-button" type="button"></button><button id="new-investigation-button" type="button"></button></div></div><div id="conversation-history"></div><form id="composer-form"><textarea id="composer-message">Investigate P4711 at S04.</textarea><button id="composer-button" type="submit" aria-label="Send message" title="Send message"></button></form><p id="error-message" hidden></p></section>
-  </body></html>`, { url: "http://localhost:8080" });
+  const dom = new JSDOM(await readFile(new URL("../../frontend/index.html", import.meta.url), "utf8"), { url: "http://localhost:8080" });
+  dom.window.document.querySelector("#composer-message").value = "Investigate P4711 at S04.";
   const originalFetch = globalThis.fetch;
   Object.assign(globalThis, { document: dom.window.document, window: dom.window });
   if (activeInvestigation) {
     dom.window.sessionStorage.setItem(
       "industrial-ai-agent.active-investigation",
-      JSON.stringify(activeInvestigation),
+      JSON.stringify({ ...activeInvestigation, username: demoUsers.find((user) => user.clearance === activeInvestigation.userClearance && !user.roles.length)?.username }),
     );
   }
-  if (fetchImplementation) globalThis.fetch = fetchImplementation;
+  const identity = demoUsers.find((user) => user.clearance === (activeInvestigation?.userClearance ?? "RESTRICTED") && !user.roles.length);
+  globalThis.fetch = demoAuthFetch(fetchImplementation ?? (() => { throw new Error("Unexpected fixture request"); }), identity.username);
   await import(`../../frontend/js/app.js?workspace=${Date.now()}-${Math.random()}`);
+  await settle();
   return {
     document: dom.window.document,
     window: dom.window,

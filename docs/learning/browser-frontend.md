@@ -19,8 +19,8 @@ HTTP/JSON contract:
 
 ```text
 Browser frontend
-    -> Nginx same-origin /api/ gateway: verify demo username/password
-    -> FastAPI /api/v1: mapped API token -> principal ceiling and roles
+    -> Nginx same-origin /api/ gateway: proxy session cookie
+    -> FastAPI /api/v1: canonical session identity -> clearance and roles
     -> TroubleshootingRunService
     -> model routing and egress policy
     -> LangGraph
@@ -40,6 +40,7 @@ frontend/
     index.html
     css/app.css
     js/api.js
+    js/demo-auth.js
     js/app.js
     js/transcript-pdf.js
     js/markdown.js
@@ -48,11 +49,9 @@ frontend/
     package.json
 ```
 
-`js/api.js` is the only frontend module that knows the same-origin API route paths,
-`fetch`, JSON parsing, and HTTP error handling. It provides `createRun(message)` and
-`getRun(runId)`. `js/app.js` owns DOM state and rendering only. `nginx.conf` forwards
-`/api/` to FastAPI and supplies the server-owned local demo credential; that credential
-never enters the static assets or browser runtime.
+`js/api.js` owns investigation/document HTTP contracts and security-context generation.
+`js/demo-auth.js` owns demo session requests and safe identity metadata; `js/app.js` owns
+DOM rendering. Nginx proxies cookies and strips Authorization, never injecting secrets.
 `js/markdown.js` owns rendering of untrusted agent-answer Markdown only; it neither changes
 the API response nor any agent behavior.
 
@@ -75,78 +74,39 @@ persistence.
 
 ## Local Development
 
-Provision distinct browser passwords before starting Compose. Set `FRONTEND_AUTH_FILE`
-in `.env` (default `./auth/frontend.htpasswd`) and a unique
-`AGENT_API_MODEL_ADMIN_TOKEN`; keep the latter separate from every investigation/MCP
-token. The password file is Git-ignored under `auth/`, mounted read-only outside the
-web root, and never included in an image. Use the Apache `htpasswd` utility (install
-locally if absent); these commands prompt without putting passwords in shell history:
+Set `DEMO_AUTH_MODE=true` in `.env`, then start `docker compose up --build -d` and open
+`http://localhost:8080`. A fresh browser automatically starts as `demo-public`; existing
+sessions survive refresh. The header account button always shows the current username.
+Its menu shows clearance and roles, language selection, Switch user and Logout.
+Switching and the user selection after logout never require typing a password.
+Explicit credential testing remains available through the existing login API.
+The separate header Configuration button is visible but disabled without MODEL_ADMIN,
+with a permission explanation. The Investigation toolbar contains only Monitoring,
+PDF and New Chat. Changing language preserves the session, investigation and existing
+language preference; account labels follow the selected language. The menu closes on
+outside click or Escape and supports keyboard opening and normal Tab navigation.
+There is no Basic challenge or htpasswd provisioning. Disabled demo mode provides no
+browser login/switch mechanism; direct authenticated bearer APIs remain available.
 
-```text
-htpasswd -cB auth/frontend.htpasswd public
-htpasswd -B auth/frontend.htpasswd internal
-htpasswd -B auth/frontend.htpasswd confidential
-htpasswd -B auth/frontend.htpasswd restricted
-htpasswd -B auth/frontend.htpasswd model-admin
-```
-
-Create the `auth` directory first. Use `-c` only for the first user: it replaces the file.
-No default browser password is shipped. Missing credentials fail closed; Compose refuses
-to silently create a missing password file. Choose different strong passwords for each
-user, never API bearer tokens as passwords. Then start Compose:
-
-```powershell
-docker compose up --build -d
-```
-
-Open `http://localhost:8080` or `http://127.0.0.1:8080`. Browser API requests use this
-same origin and are forwarded by Nginx. Port 8000 remains available on loopback for API
-documentation and explicit authenticated development clients, but the shipped browser UI
-does not call it directly. Do not use a CORS wildcard; deployment-specific production
-origins and authentication require an explicit security design.
-
-The native browser login authenticates these fixed demo identities:
-
-| Browser username | API token variable (server only) | Maximum clearance | Roles |
-| --- | --- | --- | --- |
-| `public` | `MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN` | PUBLIC | `demo-user` |
-| `internal` | `MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN` | INTERNAL | `demo-user` |
-| `confidential` | `MCP_INDUSTRIAL_AGENT_TOKEN` | CONFIDENTIAL | `demo-user` |
-| `restricted` | `MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN` | RESTRICTED | `demo-user` |
-| `model-admin` | `AGENT_API_MODEL_ADMIN_TOKEN` | PUBLIC | `model-admin` |
-
-Use a separate browser profile/private session to change identity; the application has
-no session or logout and browsers may cache Basic credentials. Normal investigation
-users receive an authorization error when opening Model Configuration. Sign in explicitly
-as `model-admin` in a separate session for that dialog. This administrator can configure
-all model assignments but cannot read protected investigations. Direct API clients use
-the corresponding bearer token and receive the same authority.
-
-This is local demo authentication, not production identity: HTTP has no TLS, passwords
-are shared demo credentials, and there is no user lifecycle, federated identity, or
-application session management. Keep loopback binding; it does not authenticate users.
-Only gateway `/health` is anonymously reachable. Gateway access/error logging is disabled
-to avoid recording credentials, including malicious usernames; diagnostic visibility is
-therefore limited. Do not enable credential-bearing log formats or publish the password
-file/rendered configuration.
+See [Demo Users and session security](demo-authentication.md) for the complete credential
+table and intentional demo trust model. This is a loopback learning/demo system, not
+production authentication. Switching to admin is intentionally permitted in demo mode;
+admin still has PUBLIC clearance and cannot read restricted data through its role.
 
 ## Credential Ownership
 
-| Credential | Consumer / scope | Browser exposure |
+| Credential/configuration | Owner and purpose | Browser visibility |
 | --- | --- | --- |
-| Demo username/password in external htpasswd file | Nginx HTTP Basic verifies the browser identity | Browser manages Basic credentials; never an API token |
-| `MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN`, `MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN`, `MCP_INDUSTRIAL_AGENT_TOKEN`, `MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN` | Gateway maps verified username to server-held API bearer; API resolver and independent MCP resolver establish their own contexts | Never HTML, JavaScript, URLs, or browser storage |
-| `MCP_CODEX_DEVELOPMENT_TOKEN` | Read-only INTERNAL diagnostic MCP client | No browser mapping |
-| `AGENT_API_MODEL_ADMIN_TOKEN` | Separate PUBLIC `model-admin` API principal; gateway maps only verified `model-admin` login | Never returned to browser; not an MCP/workflow credential |
-| `E2E_FRONTEND_PASSWORD`, `E2E_MODEL_ADMIN_PASSWORD` | Local runner supplies corresponding Basic credentials; direct API/MCP probes use the existing bearer variables | Test-process secrets; excluded from normal reports/traces |
-| `GROQ_API_KEY`, `MISTRAL_API_KEY`, `NVIDIA_API_KEY` | Provider adapters read catalog-declared environment keys | Never browser/MCP identity credentials |
+| `DEMO_AUTH_MODE` | API enables the explicit local browser demo | Safe mode flag |
+| `config/demo-users.toml` | Canonical predefined demo identities; intentionally public demo credentials | Only safe username/clearance/role metadata from auth APIs |
+| Demo session cookie | API-owned bounded session registry | HttpOnly; no session ID in JSON/storage |
+| `AGENT_API_MODEL_ADMIN_TOKEN` | Direct bearer API administration | Never in browser assets or gateway configuration |
+| MCP bearer tokens, database/provider/telemetry credentials | Server-to-server infrastructure authentication | Never exposed |
 
-These are the existing variables in `.env.example`, not a new token exchange protocol.
-Nginx replaces the upstream Authorization header after Basic verification; it does not
-forward browser-selected bearer authority. Investigation users have fixed clearance
-ceilings and no `model-admin`. Shared demo tokens do not establish per-user ownership;
-the current run/investigation boundary is classification visibility, not tenant isolation.
-Production ownership or federated identity requires its own contract.
+DEMO-ONLY CREDENTIALS — NOT FOR PRODUCTION OR SERVICE AUTHENTICATION. The browser
+credential exception applies only to the predefined identities; all other credentials
+remain secret. Nginx strips incoming Authorization and proxies session cookies. Service
+bearer clients use the direct API; browser identity is resolved server-side per request.
 
 ## Run Lifecycle and Security
 
@@ -191,17 +151,14 @@ telemetry, model routing, or the agent loop.
 When a response is `waiting_for_approval`, the UI renders the action, summary,
 arguments, run ID, and status. It disables both decision buttons before calling the
 resume API through `frontend/js/api.js`, so a double click cannot issue a second
-browser action. Browser requests remain same-origin and contain no bearer token. The local
-Nginx frontend gateway validates the user's password before forwarding `/api/` with
-the mapped server-held API token. Anonymous clients are denied; arbitrary identity
-headers are ignored. The API derives maximum clearance and roles from that token,
-while the selector requests a lower or equal working clearance. Requests above the
-principal ceiling are denied, never promoted. Model administration requires its own login.
-The browser still cannot set classification, profile, provider, MCP server, or egress
-policy. On effective context changes, generation-bound requests are aborted, old responses
-are rejected, protected UI/export/model-dialog state is cleared, blob URLs are revoked,
-and investigations are fetched under the new authoritative context. Navigation and
-BFCache restoration use the same invalidation boundary. There is no in-page identity
-switch or active stream; identity changes require a separately authenticated gateway
-session. This client cleanup supplements backend authorization, never replaces it.
-Streaming and production-grade federated authentication remain future work.
+browser action. Browser requests remain same-origin and carry an HttpOnly demo session cookie, never a
+service bearer token. Nginx strips Authorization and proxies cookies; FastAPI resolves
+the canonical username, clearance and roles. The browser supplies no clearance input.
+Quick switch intentionally selects any configured demo identity only in Demo Auth Mode;
+MODEL_ADMIN remains orthogonal to data visibility. Identity switch/logout invalidates
+request generations, aborts old requests, clears conversation/export/dialog state and
+revokes Blob URLs before updating the session. A new principal starts a new investigation;
+refresh/BFCache restores a saved reference only after matching the server identity and
+reauthorizing it. Cross-tab session notifications contain no credentials and trigger the
+same purge. Client cleanup complements backend authorization. Streaming and production
+federated authentication remain outside this local demo.

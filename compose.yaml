@@ -128,6 +128,7 @@ services:
     restart: unless-stopped
     environment:
       AGENT_API_HOST: 0.0.0.0
+      DEMO_AUTH_MODE: ${DEMO_AUTH_MODE:-false}
       AGENT_API_MODEL_ADMIN_TOKEN: ${AGENT_API_MODEL_ADMIN_TOKEN:?Set AGENT_API_MODEL_ADMIN_TOKEN in .env}
       AGENT_RUNTIME_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-factory_app}:${POSTGRES_APP_PASSWORD:?Set POSTGRES_APP_PASSWORD in .env}@factory-db:5432/${POSTGRES_DB:-factory_demo}
       FACTORY_MCP_URL: http://factory-mcp:8001/mcp
@@ -172,12 +173,6 @@ services:
   frontend:
     image: nginx:1.29-alpine
     restart: unless-stopped
-    environment:
-      MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN: ${MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN:?Set MCP_INDUSTRIAL_AGENT_PUBLIC_TOKEN in .env}
-      MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN: ${MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN:?Set MCP_INDUSTRIAL_AGENT_INTERNAL_TOKEN in .env}
-      MCP_INDUSTRIAL_AGENT_TOKEN: ${MCP_INDUSTRIAL_AGENT_TOKEN:?Set MCP_INDUSTRIAL_AGENT_TOKEN in .env}
-      MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN: ${MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN:?Set MCP_INDUSTRIAL_AGENT_RESTRICTED_TOKEN in .env}
-      AGENT_API_MODEL_ADMIN_TOKEN: ${AGENT_API_MODEL_ADMIN_TOKEN:?Set AGENT_API_MODEL_ADMIN_TOKEN in .env}
     ports:
       - "127.0.0.1:8080:80"
     volumes:
@@ -185,12 +180,6 @@ services:
       - ./frontend/js:/usr/share/nginx/html/js:ro
       - ./frontend/css:/usr/share/nginx/html/css:ro
       - ./frontend/nginx.conf:/etc/nginx/templates/default.conf.template:ro
-      - type: bind
-        source: ${FRONTEND_AUTH_FILE:-./auth/frontend.htpasswd}
-        target: /etc/nginx/auth/frontend.htpasswd
-        read_only: true
-        bind:
-          create_host_path: false
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health"]
       interval: 10s

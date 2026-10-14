@@ -477,24 +477,20 @@ streaming endpoint. Its explicit
 `reject` decision contract for a persisted pending action.
 Swagger UI at `/docs` remains the generated API contract explorer.
 
-Nginx validates HTTP Basic credentials against an external password file outside the
-document root. Anonymous and invalid-password clients are denied before proxying;
-unmapped users receive no API token. The gateway sends only the mapped opaque bearer
-token that the FastAPI adapter maps to a
-server-owned principal, maximum clearance, and roles. The browser never receives that
-token. The clearance selector may narrow the authenticated maximum for a request but can
-never raise it. FastAPI constructs the run-store adapter with that request-specific
-`SecurityContext`; its transaction-local `app.clearance` makes PostgreSQL RLS the first
-and authoritative record-visibility boundary. Python visibility checks remain
-defense-in-depth only. The four investigation logins (`public`, `internal`,
-`confidential`, `restricted`) have fixed corresponding ceilings and no `model-admin`.
-Model-configuration endpoints require the separate `model-admin` identity and API-only
-token at PUBLIC clearance. The gateway never increases authority relative to direct
-API use of the corresponding token. Native browser Basic credential caching is the
-only browser identity mechanism; there is no application session/logout, federated
-identity, or TLS. The unauthenticated gateway `/health` is liveness-only. These API
-roles do not set run classification, MCP identity or permissions, or model-egress
-eligibility. Unknown free text without a documented demo identifier is conservatively
+Nginx serves static assets without a native Basic challenge and proxies browser session
+cookies, never service tokens. Explicit `DEMO_AUTH_MODE` enables the canonical demo
+identities in `config/demo-users.toml`. The API authenticates each opaque HttpOnly session
+and creates its normal server-derived `SecurityContext`. A fresh browser starts as
+`demo-public`; quick switch intentionally permits all predefined demo identities.
+Switch/logout revokes the old session and purges browser state before reauthorization.
+Roles remain orthogonal: `demo-admin` has MODEL_ADMIN at PUBLIC clearance;
+`demo-restricted` has RESTRICTED clearance without administration. Ordinary ownership,
+transaction-local PostgreSQL RLS, classification, MCP permissions, egress and HITL still
+apply. Browser requests reject caller-controlled clearance; direct bearer clients keep
+existing optional narrowing. Disabled demo mode has no browser convenience login.
+See [Demo authentication](../learning/demo-authentication.md) for the explicit trust model,
+public demo credentials, bounded process-local sessions and production limitations.
+Unknown free text without a documented demo identifier is conservatively
 resolved as `RESTRICTED_TROUBLESHOOTING`: unknown sensitivity never authorizes
 public-cloud model processing.
 
@@ -558,10 +554,9 @@ sequenceDiagram
     participant Telemetry as OpenTelemetry
 
     User->>UI: Troubleshooting request
-    UI->>Gateway: Basic credentials + request + requested clearance
-    Gateway->>Gateway: Verify password; reject anonymous/invalid credentials
-    Gateway->>API: Authenticated user's mapped bearer token + request
-    API->>API: Authenticate principal; reject clearance elevation
+    UI->>Gateway: Demo session cookie + request
+    Gateway->>API: Forward cookie; strip Authorization
+    API->>API: Resolve canonical session identity, clearance and roles
     API->>Run: Load authorized investigation context from request-scoped RLS store
     Run->>Policy: Resolve target profile and bounded tool/MCP scope
     Policy->>Policy: Maximum of all IDs, full content, trusted context and action requirements

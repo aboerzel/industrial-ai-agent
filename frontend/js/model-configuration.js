@@ -24,6 +24,7 @@ export function mountModelConfiguration({ button, dialog }) {
     if (dialog.open) dialog.close();
   });
   button.addEventListener("click", async () => {
+    if (button.disabled) return;
     dialog.showModal();
     await loadConfiguration(content, saveStatus);
   });

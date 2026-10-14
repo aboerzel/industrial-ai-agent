@@ -24,13 +24,22 @@ export async function modelAdminHeaders() {
   return { Authorization: `Bearer ${await requiredEnvironmentValue("AGENT_API_MODEL_ADMIN_TOKEN")}` };
 }
 
-export async function browserCredentials(frontendUrl, administrator = false) {
-  return {
-    username: administrator ? "model-admin" : await localEnvironmentValue("E2E_FRONTEND_USERNAME") || "restricted",
-    password: await requiredEnvironmentValue(administrator ? "E2E_MODEL_ADMIN_PASSWORD" : "E2E_FRONTEND_PASSWORD"),
-    origin: new URL(frontendUrl).origin,
-    send: "always",
-  };
+export async function checkDemoSession(frontendUrl, username) {
+  const session = await fetchExpected(new URL("/api/v1/auth/switch", frontendUrl), {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Demo-Session": "1" },
+    body: JSON.stringify({ username }),
+  });
+  const cookie = session.headers.get("set-cookie")?.split(";", 1)[0];
+  if (!cookie) throw new Error("Demo session cookie missing.");
+  try {
+    const user = await readExpectedJson(await fetchExpected(new URL("/api/v1/auth/me", frontendUrl), { headers: { Cookie: cookie } }));
+    if (user.username !== username) throw new Error("Demo identity mismatch.");
+    return user;
+  } finally {
+    await fetchExpected(new URL("/api/v1/auth/logout", frontendUrl), {
+      method: "POST", headers: { Cookie: cookie, "X-Demo-Session": "1" },
+    });
+  }
 }
 
 export function assertHttpStatus(response, allowedStatuses = [200]) {

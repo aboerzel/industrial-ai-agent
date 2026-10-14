@@ -30,6 +30,8 @@ try {
         & $Python -m ruff check src tests scripts
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $Python -m ruff format --check src tests scripts
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $Python scripts/check-demo-secrets.py
         exit $LASTEXITCODE
     }
 

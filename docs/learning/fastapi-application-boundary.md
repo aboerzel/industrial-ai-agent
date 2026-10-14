@@ -10,19 +10,16 @@ Swagger UI is at `/docs` and OpenAPI is at `/openapi.json`.
 
 The browser UI in `frontend/` is a separate static HTTP/JSON client. It neither imports
 backend code nor selects a provider, model, MCP identity, classification, or permission.
-Nginx authenticates a demo username/password using native browser HTTP Basic login
-before translating the user to a server-held opaque API token. Anonymous clients receive
-no token or authority. The API verifies that token to establish maximum clearance and
-roles; direct API clients use the same corresponding bearer token.
-`user_clearance` may narrow that maximum for one request but can never raise it. The API
-creates its PostgreSQL run-store adapter from that request-specific `SecurityContext`, so
-RLS—not a later Python filter—is the authoritative record-visibility boundary.
-The four investigation identities have no `model-admin`; Model Configuration requires
-the separate API-only `AGENT_API_MODEL_ADMIN_TOKEN` / `model-admin` browser login at
-PUBLIC clearance. This is a loopback-only shared-secret demo without TLS, application
-sessions/logout, or federated production identity. See the
-[browser setup guide](browser-frontend.md#local-development) for password provisioning.
-
+Nginx proxies HttpOnly demo session cookies without Basic authentication or token mapping.
+In explicit Demo Auth Mode, FastAPI resolves predefined browser identities from the canonical
+configuration and creates a normal SecurityContext. Browser requests reject `user_clearance`;
+direct bearer clients retain optional clearance narrowing. Fresh browser sessions start
+PUBLIC; quick switch intentionally permits all demo identities. MODEL_ADMIN is separate
+from data clearance: demo-admin is PUBLIC, demo-restricted has no admin role. Ownership,
+PostgreSQL RLS, MCP permissions, HITL and egress remain authoritative. This is a loopback
+HTTP demo with bounded process-local sessions, not production OIDC.
+See [Demo authentication](demo-authentication.md) for credentials, session lifecycle and
+mode-disabled behavior.
 ## Current API Surface
 
 The API intentionally exposes task and configuration boundaries, not underlying

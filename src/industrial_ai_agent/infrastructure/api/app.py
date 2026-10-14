@@ -62,6 +62,10 @@ from industrial_ai_agent.infrastructure.api.demo_security import (
     ApiAuthorizationError,
     SecurityContextResolver,
 )
+from industrial_ai_agent.infrastructure.api.demo_sessions import (
+    DemoSessions,
+    install_demo_sessions,
+)
 from industrial_ai_agent.infrastructure.api.failure_diagnostics import summarize_failure
 from industrial_ai_agent.infrastructure.api.investigation_pdf import (
     render_investigation_pdf,
@@ -154,6 +158,7 @@ def create_app(
     model_configuration_service: ModelConfigurationService | None = None,
     operational_readiness_check: Callable[[], Awaitable[None]] | None = None,
     execution_timeout_seconds: float = 90.0,
+    demo_sessions: DemoSessions | None = None,
 ) -> FastAPI:
     """Create the HTTP adapter with explicitly injected application dependencies."""
     app = FastAPI(
@@ -174,6 +179,7 @@ def create_app(
     app.state.telemetry = telemetry
     app.state.classification_policy = AgentRunClassificationPolicy()
     app.state.security_context_resolver = security_context_resolver
+    install_demo_sessions(app, demo_sessions)
     app.state.document_content_reader = document_content_reader
     app.state.model_configuration_service = model_configuration_service
     app.add_exception_handler(_ApiRunError, _api_run_error_handler)
@@ -369,6 +375,7 @@ def create_app(
         summary="Start one server-classified troubleshooting run",
     )
     async def create_run(payload: CreateRunRequest, request: Request) -> RunResponse:
+        _reject_browser_clearance(request, payload.model_fields_set)
         # API clients that do not send a language retain the established deterministic
         # fallback. Browser clients always send this field explicitly.
         response_language = payload.response_language or detect_response_language(
@@ -436,6 +443,13 @@ def create_app(
         payload: InternalDiagnosticRequest, request: Request
     ) -> RunResponse:
         security_context = _security_context(request, DemoUserClearance.INTERNAL)
+        # The structured diagnostic keeps its server-owned INTERNAL RLS scope.
+        security_context = SecurityContext(
+            subject_id=security_context.subject_id,
+            roles=security_context.roles,
+            clearance=DataClassification.INTERNAL,
+            authenticated=security_context.authenticated,
+        )
         target = InternalDiagnosticTarget(
             product_id=payload.product_id, station_id=payload.station_id
         )
@@ -580,6 +594,7 @@ def create_app(
     async def resume_run(
         run_id: UUID, payload: ResumeRunRequest, request: Request
     ) -> RunResponse:
+        _reject_browser_clearance(request, payload.model_fields_set)
         security_context = _security_context(request, payload.user_clearance)
         store = _run_store(request, security_context)
         existing = await store.get(run_id)
@@ -839,6 +854,16 @@ def _execution_timeout_seconds(request: Request) -> float:
 def _security_context(
     request: Request, requested_clearance: DemoUserClearance
 ) -> SecurityContext:
+    if getattr(request.state, "demo_cookie_present", False):
+        _reject_browser_clearance(request, set(request.query_params))
+        context = request.state.demo_security_context
+        if context is None:
+            raise HTTPException(401, "Demo session required.")
+        if context.clearance < DataClassification[requested_clearance.name]:
+            raise HTTPException(
+                403, "The requested operation requires higher clearance."
+            )
+        return context
     resolver: SecurityContextResolver = request.app.state.security_context_resolver
     try:
         return resolver.resolve(
@@ -855,6 +880,15 @@ def _security_context(
 
 
 def _require_model_admin(request: Request) -> SecurityContext:
+    if getattr(request.state, "demo_cookie_present", False):
+        context = request.state.demo_security_context
+        if context is None:
+            raise HTTPException(401, "Demo session required.")
+        if "model-admin" not in context.roles:
+            raise HTTPException(
+                403, "Model configuration requires an authorized administrator."
+            )
+        return context
     resolver: SecurityContextResolver = request.app.state.security_context_resolver
     try:
         return resolver.require_role(
@@ -868,6 +902,16 @@ def _require_model_admin(request: Request) -> SecurityContext:
                 "message": "Model configuration requires an authorized administrator.",
             },
         ) from None
+
+
+def _reject_browser_clearance(request: Request, fields: set[str]) -> None:
+    if (
+        getattr(request.state, "demo_cookie_present", False)
+        and "user_clearance" in fields
+    ):
+        raise HTTPException(
+            422, "Browser clearance is derived from the authenticated identity."
+        )
 
 
 async def _authorized_document_content(

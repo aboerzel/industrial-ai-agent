@@ -71,7 +71,7 @@ test("assertions are recorded only if planned and cannot be counted twice", () =
 
 const run = { run_id: "run-1", investigation_id: "investigation-1", investigation_sequence: 1, status: "success" };
 const turn = { run_id: "run-1", sequence: 1, status: "success", data_classification: "CONFIDENTIAL", response_language: "EN", answer: "S04 is faulted.", tool_calls: [{ tool: "get_machine_status", arguments: { station_id: "S04" } }], investigation_steps: [{ action: "get_machine_status", finding: "S04 faulted" }] };
-const observation = { run, investigation: { investigation_id: "investigation-1", turns: [turn] }, request: { user_clearance: "CONFIDENTIAL", response_language: "EN" }, clearance: "CONFIDENTIAL", language: "EN" };
+const observation = { run, investigation: { investigation_id: "investigation-1", turns: [turn] }, request: { response_language: "EN" }, clearance: "CONFIDENTIAL", language: "EN" };
 
 test("lifecycle requires actual IDs, matching persisted run, terminal result, context and continuity", () => {
   assert.equal(assertPersistedTurn(observation), turn);

@@ -42,23 +42,16 @@ def test_frontend_nginx_configuration_serves_es_module_mime_types() -> None:
     assert 'add_header Cache-Control "no-cache, must-revalidate";' in nginx
 
 
-def test_frontend_nginx_authenticates_before_mapping_explicit_demo_identity() -> None:
+def test_frontend_nginx_proxies_demo_sessions_without_service_credentials() -> None:
     nginx = (FRONTEND_ROOT / "nginx.conf").read_text(encoding="utf-8")
-
     assert "location ^~ /api/" in nginx
     assert "proxy_pass http://agent-api:8000;" in nginx
-    assert 'auth_basic "Industrial AI Agent demo";' in nginx
-    assert "auth_basic_user_file /etc/nginx/auth/frontend.htpasswd;" in nginx
-    assert "map $remote_user $demo_api_authorization {" in nginx
-    assert 'default "";' in nginx
-    assert "proxy_set_header Authorization $demo_api_authorization;" in nginx
-    assert 'proxy_set_header Authorization "Bearer' not in nginx
+    assert 'proxy_set_header Authorization "";' in nginx
+    assert "auth_basic" not in nginx
+    assert "remote_user" not in nginx
+    assert "TOKEN" not in nginx
     assert "access_log off;" in nginx
     assert "error_log /dev/null;" in nginx
-    for username in ("public", "internal", "confidential", "restricted", "model-admin"):
-        assert f"~^{username}$" in nginx
-    # Authentication is inherited by every resource; only liveness is exempt.
-    assert nginx.count("auth_basic off;") == 1
     assert "location = /health" in nginx
 
 
@@ -76,7 +69,7 @@ def test_frontend_workspace_uses_a_full_width_scrollable_conversation() -> None:
     assert ".conversation-history {" in css
     assert "overflow-y: auto;" in css
     assert ".toolbar-controls {" in css
-    assert ".toolbar-selectors" in css
+    assert ".header-actions" in css
     assert ".toolbar-actions" in css
     assert 'data-status="completed_with_attention"' in css
     assert 'data-status="failed"' in css
