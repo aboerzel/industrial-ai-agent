@@ -479,7 +479,7 @@ def create_app(
             )
         return _to_run_response(
             record,
-            documents=_authorized_documents_for_result(
+            documents=await _authorized_documents_for_result(
                 request,
                 record.result,
                 security_context,
@@ -547,7 +547,9 @@ def create_app(
         request: Request,
         user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
     ) -> Response:
-        document = _authorized_document_content(request, document_id, user_clearance)
+        document = await _authorized_document_content(
+            request, document_id, user_clearance
+        )
         return _document_response(document, disposition="inline")
 
     @runs.get(
@@ -560,7 +562,9 @@ def create_app(
         request: Request,
         user_clearance: DemoUserClearance = DemoUserClearance.PUBLIC,
     ) -> Response:
-        document = _authorized_document_content(request, document_id, user_clearance)
+        document = await _authorized_document_content(
+            request, document_id, user_clearance
+        )
         return _document_response(document, disposition="attachment")
 
     @runs.post(
@@ -866,7 +870,7 @@ def _require_model_admin(request: Request) -> SecurityContext:
         ) from None
 
 
-def _authorized_document_content(
+async def _authorized_document_content(
     request: Request,
     document_id: str,
     user_clearance: DemoUserClearance,
@@ -875,7 +879,11 @@ def _authorized_document_content(
         request.app.state.document_content_reader
     )
     document = (
-        reader.get_document(document_id, _security_context(request, user_clearance))
+        await asyncio.to_thread(
+            reader.get_document,
+            document_id,
+            _security_context(request, user_clearance),
+        )
         if reader is not None
         else None
     )
@@ -888,7 +896,7 @@ def _authorized_document_content(
     return document
 
 
-def _authorized_documents_for_result(
+async def _authorized_documents_for_result(
     request: Request,
     result: AgentRunResult | None,
     security_context: SecurityContext,
@@ -901,11 +909,14 @@ def _authorized_documents_for_result(
     )
     if reader is None:
         return ()
-    return tuple(
-        reference
-        for reference in result.documents
-        if reader.get_document(reference.document_id, security_context) is not None
-    )
+    documents: list[DocumentReference] = []
+    for reference in result.documents:
+        document = await asyncio.to_thread(
+            reader.get_document, reference.document_id, security_context
+        )
+        if document is not None:
+            documents.append(reference)
+    return tuple(documents)
 
 
 def _with_authorized_documents(
@@ -998,7 +1009,7 @@ async def _start_run(
                     store,
                     run_id,
                     execution,
-                    documents=_authorized_documents_for_result(
+                    documents=await _authorized_documents_for_result(
                         request, execution.result, document_security_context
                     ),
                 )
@@ -1065,7 +1076,9 @@ async def _start_run(
         )
     filtered_result = _with_authorized_documents(
         result,
-        _authorized_documents_for_result(request, result, document_security_context),
+        await _authorized_documents_for_result(
+            request, result, document_security_context
+        ),
     )
     return _to_run_response(await store.complete(run_id, filtered_result))
 
@@ -1214,22 +1227,23 @@ async def _authorized_investigation(
     )
     if not visible:
         return None
-    turns = tuple(
-        _to_investigation_turn(
-            record,
-            documents=_authorized_documents_for_result(
-                request, record.result, security_context
-            ),
+    turns = []
+    for record in visible:
+        turns.append(
+            _to_investigation_turn(
+                record,
+                documents=await _authorized_documents_for_result(
+                    request, record.result, security_context
+                ),
+            )
         )
-        for record in visible
-    )
     return InvestigationResponse(
         investigation_id=investigation_id,
         created_at=_as_iso(visible[0].created_at),
         run_count=len(turns),
         tool_call_count=sum(len(turn.tool_calls) for turn in turns),
         status=_investigation_status(visible),
-        turns=turns,
+        turns=tuple(turns),
     )
 
 

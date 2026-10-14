@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import datetime, timedelta
@@ -133,7 +134,7 @@ class RcaEvidenceCollector:
         }
         trace: RcaTraceObservation | None = None
         try:
-            trace = self._trace.get_run_trace(run_id)
+            trace = await asyncio.to_thread(self._trace.get_run_trace, run_id)
             if trace.spans:
                 source_status[RcaEvidenceSource.TEMPO] = _source_availability(
                     RcaEvidenceSource.TEMPO,
@@ -167,7 +168,7 @@ class RcaEvidenceCollector:
             )
         else:
             try:
-                logs = self._logs.get_trace_logs(trace)
+                logs = await asyncio.to_thread(self._logs.get_trace_logs, trace)
                 source_status[RcaEvidenceSource.LOKI] = _source_availability(
                     RcaEvidenceSource.LOKI,
                     (
@@ -182,7 +183,9 @@ class RcaEvidenceCollector:
                     RcaEvidenceSource.LOKI, error
                 )
             try:
-                metrics = self._metrics.get_trace_metrics(trace)
+                metrics = await asyncio.to_thread(
+                    self._metrics.get_trace_metrics, trace
+                )
                 source_status[RcaEvidenceSource.PROMETHEUS] = _source_availability(
                     RcaEvidenceSource.PROMETHEUS,
                     (
@@ -204,7 +207,8 @@ class RcaEvidenceCollector:
                 )
             else:
                 try:
-                    llm_observation = self._llm.get_trace_llm_evidence(
+                    llm_observation = await asyncio.to_thread(
+                        self._llm.get_trace_llm_evidence,
                         trace.trace_id,
                         from_time=_langfuse_from_time(runtime, trace),
                         to_time=_langfuse_to_time(runtime, trace),
