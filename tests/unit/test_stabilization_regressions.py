@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 from threading import Event
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -10,13 +11,17 @@ import pytest
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
 from openai import APIStatusError, OpenAI
+from pydantic import ValidationError
 from test_fastapi_api import FakeRunService, _success_result, create_app
 from test_langgraph_mcp_hitl import (
     FakeLLMClient,
     HardwareRecoveryMcpToolProvider,
     _agent,
 )
-from test_openai_compatible_llm_client import create_configuration
+from test_openai_compatible_llm_client import (
+    create_authenticated_configuration,
+    create_configuration,
+)
 from test_rca_mcp_server import RUN_ID, _FakeAnalysisService
 from test_runtime_mcp_server import _FakeRuntimeStore, _inspection, _server
 
@@ -29,6 +34,15 @@ from industrial_ai_agent.agent.llm import (
     LLMToolCall,
     MessageRole,
     ModelId,
+)
+from industrial_ai_agent.agent.model_egress import (
+    EgressCheckedLLMClient,
+    ExecutionZone,
+    ModelExecutionAuthorizer,
+)
+from industrial_ai_agent.agent.model_selection import (
+    AGENT_CONSUMER,
+    CapabilityCheckedLLMClient,
 )
 from industrial_ai_agent.agent.run_classification_policy import AgentRunProfile
 from industrial_ai_agent.application.rca_reasoning import (
@@ -44,6 +58,7 @@ from industrial_ai_agent.infrastructure.factory_mcp_server import (
 from industrial_ai_agent.infrastructure.in_memory_maintenance_ticket_repository import (
     InMemoryMaintenanceTicketRepository,
 )
+from industrial_ai_agent.infrastructure.llm import openai_compatible as provider_adapter
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
 )
@@ -89,36 +104,269 @@ def test_local_model_redirect_cannot_forward_request_body():
         adapter.close()
 
 
-@pytest.mark.parametrize(
-    "endpoint",
-    [
+_C03_ENDPOINT_CASES = [
+    pytest.param(
         "https://remote.invalid/v1",
+        "https://localhost/v1",
+        PermissionError,
+        id="remote-host",
+    ),
+    pytest.param(
         "http://127.0.0.1.evil.invalid/v1",
+        "http://127.0.0.1/v1",
+        PermissionError,
+        id="deceptive-loopback-host",
+    ),
+    pytest.param(
         "http://user:password@localhost:11434/v1",
-    ],
-)
-def test_effective_local_destination_is_checked_before_sdk_creation(endpoint):
+        "http://localhost:11434/v1",
+        ValueError,
+        id="url-userinfo",
+    ),
+]
+
+
+def _endpoint_override_configuration():
+    # Validate the complete catalog; only the supported environment override changes.
     configuration = create_configuration()
-    configuration = configuration.model_copy(
-        update={
-            "models": (
-                configuration.models[0].model_copy(
-                    update={"base_url_env": "TEST_MODEL_URL"}
-                ),
-            )
-        }
+    payload = configuration.model_dump(mode="json", by_alias=True)
+    payload["models"][0]["base_url_env"] = "TEST_MODEL_URL"
+    return type(configuration).model_validate(payload)
+
+
+class _EndpointRecordingSdk:
+    def __init__(self):
+        self.factories = []
+        self.calls = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.complete))
+
+    def factory(self, **kwargs):
+        self.factories.append(kwargs)
+        return self
+
+    def complete(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="SYNTHETIC", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ]
+        )
+
+    def close(self):
+        for factory in self.factories:
+            factory["http_client"].close()
+
+
+@pytest.mark.parametrize("endpoint,allowed_endpoint,error_type", _C03_ENDPOINT_CASES)
+def test_effective_local_destination_is_checked_before_sdk_creation(
+    endpoint, allowed_endpoint, error_type, monkeypatch
+):
+    configuration = _endpoint_override_configuration()
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="SYNTHETIC"),)
     )
+    environment = {"TEST_MODEL_URL": endpoint}
+    sdk = _EndpointRecordingSdk()
+    guard_calls = []
+    guard_denials = []
+    egress_calls = []
+    original_guard = provider_adapter._validate_destination
 
-    def forbidden(**kwargs):
-        pytest.fail("Invalid destination reached the SDK")
+    def guard(base_url, zone):
+        guard_calls.append((base_url, zone))
+        try:
+            return original_guard(base_url, zone)
+        except (ValueError, PermissionError) as error:
+            guard_denials.append(type(error))
+            raise
 
+    class Authorizer(ModelExecutionAuthorizer):
+        def require_allowed(self, classification, zone, maximum):
+            egress_calls.append((classification, zone, maximum))
+            return super().require_allowed(classification, zone, maximum)
+
+    monkeypatch.setattr(provider_adapter, "_validate_destination", guard)
+    adapter = OpenAICompatibleLLMClient(
+        configuration, environment=environment, client_factory=sdk.factory
+    )
+    client = CapabilityCheckedLLMClient(
+        EgressCheckedLLMClient(
+            adapter,
+            configuration,
+            DataClassification.RESTRICTED,
+            authorizer=Authorizer(),
+        ),
+        configuration,
+        consumer_id=AGENT_CONSUMER,
+        data_classification=DataClassification.RESTRICTED,
+    )
+    try:
+        with pytest.raises(error_type) as denied:
+            client.chat(ModelId("local_quality"), request)
+        assert type(denied.value) is error_type
+        assert guard_calls == [(endpoint, ExecutionZone.LOCAL)]
+        assert guard_denials == [error_type]
+        assert egress_calls == [
+            (
+                DataClassification.RESTRICTED,
+                ExecutionZone.LOCAL,
+                DataClassification.RESTRICTED,
+            )
+        ]
+        assert sdk.factories == []
+        assert sdk.calls == []
+
+        # Same validated request, model, task and classification; change only the URL.
+        environment["TEST_MODEL_URL"] = allowed_endpoint
+        assert client.chat(ModelId("local_quality"), request).text == "SYNTHETIC"
+        assert guard_calls == [
+            (endpoint, ExecutionZone.LOCAL),
+            (allowed_endpoint, ExecutionZone.LOCAL),
+        ]
+        assert guard_denials == [error_type]
+        assert (
+            egress_calls
+            == [
+                (
+                    DataClassification.RESTRICTED,
+                    ExecutionZone.LOCAL,
+                    DataClassification.RESTRICTED,
+                )
+            ]
+            * 2
+        )
+        assert len(sdk.factories) == len(sdk.calls) == 1
+        assert sdk.calls[0]["messages"] == [{"role": "user", "content": "SYNTHETIC"}]
+    finally:
+        adapter.close()
+
+
+@pytest.mark.parametrize("endpoint,allowed_endpoint,error_type", _C03_ENDPOINT_CASES)
+def test_invalid_endpoint_fixture_stops_at_schema_before_the_guard(
+    endpoint, allowed_endpoint, error_type, monkeypatch
+):
+    sdk = _EndpointRecordingSdk()
+    reached = []
+    monkeypatch.setattr(
+        provider_adapter, "_validate_destination", lambda *args: reached.append(True)
+    )
+    adapter = OpenAICompatibleLLMClient(
+        _endpoint_override_configuration(),
+        environment={"TEST_MODEL_URL": endpoint},
+        client_factory=sdk.factory,
+    )
+    try:
+        with pytest.raises(ValidationError) as invalid:
+            adapter.chat(ModelId("local_quality"), LLMRequest(messages=()))
+        assert [(error["loc"], error["type"]) for error in invalid.value.errors()] == [
+            (("messages",), "too_short")
+        ]
+        assert reached == []
+        assert sdk.factories == sdk.calls == []
+    finally:
+        adapter.close()
+
+
+@pytest.mark.parametrize("endpoint,allowed_endpoint,error_type", _C03_ENDPOINT_CASES)
+def test_endpoint_regression_detects_guard_bypass(
+    endpoint, allowed_endpoint, error_type, monkeypatch
+):
+    monkeypatch.setattr(provider_adapter, "_validate_destination", lambda *_: None)
+    with pytest.raises(pytest.fail.Exception):
+        test_effective_local_destination_is_checked_before_sdk_creation(
+            endpoint, allowed_endpoint, error_type, monkeypatch
+        )
+
+
+@pytest.mark.parametrize("endpoint,allowed_endpoint,error_type", _C03_ENDPOINT_CASES)
+def test_endpoint_regression_detects_a_matching_error_from_an_earlier_layer(
+    endpoint, allowed_endpoint, error_type, monkeypatch
+):
+    def unrelated_denial(*args):
+        raise error_type("Synthetic earlier validator rejection")
+
+    monkeypatch.setattr(
+        provider_adapter.OpenAICompatibleLLMClient, "chat", unrelated_denial
+    )
+    with pytest.raises(AssertionError):
+        test_effective_local_destination_is_checked_before_sdk_creation(
+            endpoint, allowed_endpoint, error_type, monkeypatch
+        )
+
+
+def test_known_c04_public_cloud_http_reaches_credential_bearing_transport(monkeypatch):
+    """Observe C04 with valid inputs before declaring the known expected failure."""
+    configuration = create_authenticated_configuration()
+    payload = configuration.model_dump(mode="json", by_alias=True)
+    payload["models"][0]["base_url_env"] = "TEST_MODEL_URL"
+    configuration = type(configuration).model_validate(payload)
+    guard_calls = []
+    seen = []
+    original_guard = provider_adapter._validate_destination
+
+    def guard(endpoint, zone):
+        guard_calls.append(zone)
+        return original_guard(endpoint, zone)
+
+    def transport(request):
+        seen.append((request.url.scheme, bool(request.headers.get("authorization"))))
+        return httpx.Response(
+            200,
+            json={
+                "id": "synthetic",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "synthetic",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "SYNTHETIC"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    def factory(**kwargs):
+        kwargs["http_client"].close()
+        kwargs["http_client"] = httpx.Client(
+            transport=httpx.MockTransport(transport),
+            trust_env=False,
+            follow_redirects=False,
+        )
+        return OpenAI(**kwargs)
+
+    monkeypatch.setattr(provider_adapter, "_validate_destination", guard)
     adapter = OpenAICompatibleLLMClient(
         configuration,
-        environment={"TEST_MODEL_URL": endpoint},
-        client_factory=forbidden,
+        environment={
+            "TEST_MODEL_URL": "http://provider.invalid/v1",
+            "CLOUD_LLM_API_KEY": "synthetic-test-only-key",
+        },
+        client_factory=factory,
     )
-    with pytest.raises((PermissionError, ValueError)):
-        adapter.chat(ModelId("local_quality"), LLMRequest(messages=()))
+    client = CapabilityCheckedLLMClient(
+        EgressCheckedLLMClient(adapter, configuration, DataClassification.PUBLIC),
+        configuration,
+        consumer_id=AGENT_CONSUMER,
+        data_classification=DataClassification.PUBLIC,
+    )
+    request = LLMRequest(
+        messages=(LLMMessage(role=MessageRole.USER, content="SYNTHETIC"),)
+    )
+    try:
+        assert client.chat(ModelId("local_quality"), request).text == "SYNTHETIC"
+        assert guard_calls == [ExecutionZone.PUBLIC_CLOUD]
+        assert seen == [("http", True)]
+        # Only the fully observed C04 condition becomes XFAIL; setup/guard errors fail.
+        pytest.xfail(
+            "Known C04: PUBLIC_CLOUD permits credential-bearing HTTP; synthetic MockTransport only"
+        )
+    finally:
+        adapter.close()
 
 
 @pytest.mark.parametrize(
