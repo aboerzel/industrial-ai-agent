@@ -161,7 +161,7 @@ class PendingMaintenanceAction(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     action: Literal["create_maintenance_ticket"]
-    request_id: str = Field(min_length=1, max_length=128)
+    approval_execution_id: str = Field(min_length=36, max_length=36)
     tool_call_id: str = Field(min_length=1, max_length=128)
     station_id: str = Field(min_length=3, max_length=16)
     summary: str = Field(min_length=1, max_length=500)
@@ -173,7 +173,7 @@ class PendingReferenceCalibrationAction(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     action: Literal["execute_reference_calibration"]
-    request_id: str = Field(min_length=1, max_length=128)
+    approval_execution_id: str = Field(min_length=36, max_length=36)
     tool_call_id: str = Field(min_length=1, max_length=128)
     station_id: str = Field(min_length=3, max_length=16)
     device_id: str = Field(min_length=3, max_length=64)
@@ -229,6 +229,7 @@ class ApprovalInterruptPayload(BaseModel):
     kind: Literal["action_approval"]
     action: Literal["create_maintenance_ticket", "execute_reference_calibration"]
     action_id: str | None = Field(default=None, min_length=1, max_length=128)
+    approval_execution_id: str = Field(min_length=36, max_length=36)
     details: ApprovalInterruptDetails
 
 
@@ -1059,7 +1060,7 @@ class LangGraphTroubleshootingAgent:
             "effective_classification": effective_classification,
             "pending_action": PendingReferenceCalibrationAction(
                 action=EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
-                request_id=action_id,
+                approval_execution_id=str(uuid4()),
                 tool_call_id=action_id,
                 station_id=preparation.station_id,
                 device_id=preparation.device_id,
@@ -1121,7 +1122,7 @@ class LangGraphTroubleshootingAgent:
             return {
                 "pending_action": PendingReferenceCalibrationAction(
                     action=EXECUTE_REFERENCE_CALIBRATION_TOOL_NAME,
-                    request_id=tool_call_id,
+                    approval_execution_id=str(uuid4()),
                     tool_call_id=tool_call_id,
                     station_id=arguments.station_id,
                     device_id=device_id,
@@ -1137,7 +1138,7 @@ class LangGraphTroubleshootingAgent:
         return {
             "pending_action": PendingMaintenanceAction(
                 action=CREATE_MAINTENANCE_TICKET_TOOL_NAME,
-                request_id=tool_call_id,
+                approval_execution_id=str(uuid4()),
                 tool_call_id=tool_call_id,
                 station_id=arguments.station_id,
                 summary=arguments.summary,
@@ -1165,7 +1166,8 @@ class LangGraphTroubleshootingAgent:
                 ApprovalInterruptPayload(
                     kind="action_approval",
                     action=pending_action["action"],
-                    action_id=pending_action["request_id"],
+                    action_id=pending_action["tool_call_id"],
+                    approval_execution_id=pending_action["approval_execution_id"],
                     details=details,
                 ).model_dump(exclude_none=True)
             )
@@ -1203,7 +1205,7 @@ class LangGraphTroubleshootingAgent:
                     "station_id": pending_action["station_id"],
                     "device_id": pending_action["device_id"],
                     "run_id": run_id,
-                    "action_id": pending_action["request_id"],
+                    "action_id": pending_action["approval_execution_id"],
                 }
             )
             executed_arguments = {
@@ -1218,7 +1220,7 @@ class LangGraphTroubleshootingAgent:
                 {
                     "station_id": pending_action["station_id"],
                     "summary": pending_action["summary"],
-                    "request_id": pending_action["request_id"],
+                    "request_id": pending_action["approval_execution_id"],
                     "run_id": run_id,
                 }
             )

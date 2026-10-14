@@ -292,7 +292,8 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
     assert waiting["approval_request"]["classification"] == "CONFIDENTIAL"
     assert waiting["approval_request"]["model_id"] == "local_quality"
     run_id = UUID(waiting["run_id"])
-    request_id = factory.ticket_request_ids[0]
+    request_id = _approval_execution_id(run_id)
+    assert request_id != factory.ticket_request_ids[0]
     assert _ticket_count(sha256(f"{run_id}:{request_id}".encode()).hexdigest()) == 0
 
     second_client, second_sessions = _application(factory)
@@ -353,7 +354,7 @@ def test_fastapi_hitl_reject_survives_runtime_recreation_without_ticket() -> Non
 
     assert started.status_code == 200
     run_id = UUID(started.json()["run_id"])
-    request_id = factory.ticket_request_ids[0]
+    request_id = _approval_execution_id(run_id)
 
     second_client, second_sessions = _application(factory)
     try:
@@ -397,7 +398,7 @@ def test_fastapi_hitl_concurrent_approvals_claim_one_postgres_resume() -> None:
 
     assert started.status_code == 200
     run_id = UUID(started.json()["run_id"])
-    request_id = factory.ticket_request_ids[0]
+    request_id = _approval_execution_id(run_id)
 
     def approve_once() -> int:
         client, sessions = _application(factory)
@@ -438,6 +439,24 @@ def test_fastapi_resume_contract_rejects_unknown_invalid_and_client_context() ->
     assert unknown.status_code == 404
     assert invalid.status_code == 422
     assert manipulated.status_code == 422
+
+
+def _approval_execution_id(run_id: UUID) -> str:
+    assert DATABASE_URL is not None
+    sessions = PostgreSqlSessionFactory(DATABASE_URL)
+    context = SecurityContext(
+        "persistent-hitl-generation-check",
+        ("test",),
+        DataClassification.CONFIDENTIAL,
+        True,
+    )
+    try:
+        stored = asyncio.run(PostgreSqlAgentRunStore(sessions, context).get(run_id))
+        value = stored.approval_request["approval_execution_id"]
+        assert str(UUID(value)) == value
+        return value
+    finally:
+        sessions.dispose()
 
 
 def _ticket_count(request_id_fragment: str) -> int:

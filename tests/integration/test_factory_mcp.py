@@ -203,7 +203,7 @@ def test_factory_mcp_reads_the_ticket_created_by_the_same_capability() -> None:
 
     async def create_then_read() -> tuple[dict[str, object], dict[str, object]]:
         await store.create(run_id)
-        await store.wait_for_approval(
+        pending = await store.wait_for_approval(
             run_id,
             {
                 "action": "create_maintenance_ticket",
@@ -221,7 +221,7 @@ def test_factory_mcp_reads_the_ticket_created_by_the_same_capability() -> None:
             {
                 "station_id": "S04",
                 "summary": "Inspect QUALITY-09",
-                "request_id": "ticket-read-test",
+                "request_id": pending.approval_request["approval_execution_id"],
                 "run_id": str(run_id),
             },
         )

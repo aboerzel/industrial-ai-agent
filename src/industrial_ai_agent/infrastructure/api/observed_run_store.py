@@ -85,7 +85,11 @@ class ObservedAgentRunStore:
         )
 
     async def wait_for_approval(
-        self, run_id: UUID, approval_request: dict[str, object]
+        self,
+        run_id: UUID,
+        approval_request: dict[str, object],
+        *,
+        approval_execution_id: UUID | None = None,
     ) -> StoredAgentRun:
         return await self._observe(
             "wait_for_approval",
@@ -93,6 +97,7 @@ class ObservedAgentRunStore:
             self._delegate.wait_for_approval,
             run_id,
             approval_request,
+            approval_execution_id=approval_execution_id,
         )
 
     async def claim_resume(
@@ -121,6 +126,17 @@ class ObservedAgentRunStore:
             "claim_protected_action_approval",
             claim.run_id,
             self._delegate.claim_protected_action_approval,
+            claim,
+            security_context=security_context,
+        )
+
+    async def is_consumed_protected_action_approval(
+        self, claim: ProtectedActionApprovalClaim, *, security_context: SecurityContext
+    ) -> bool:
+        return await self._observe(
+            "is_consumed_protected_action_approval",
+            claim.run_id,
+            self._delegate.is_consumed_protected_action_approval,
             claim,
             security_context=security_context,
         )

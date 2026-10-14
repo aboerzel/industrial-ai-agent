@@ -46,6 +46,11 @@ class InMemoryMaintenanceTicketRepository:
             None,
         )
 
+    def get_maintenance_ticket_by_request_id(
+        self, request_id: MaintenanceTicketRequestId
+    ) -> MaintenanceTicket | None:
+        return self._tickets_by_request_id.get(request_id)
+
     @property
     def tickets(self) -> tuple[MaintenanceTicket, ...]:
         return tuple(self._tickets_by_request_id.values())

@@ -9,6 +9,10 @@ from industrial_ai_agent.domain.product_history import StationId
 
 
 class MaintenanceTicketRepository(Protocol):
+    def get_maintenance_ticket_by_request_id(
+        self, request_id: MaintenanceTicketRequestId
+    ) -> MaintenanceTicket | None: ...
+
     def get_maintenance_ticket(
         self, ticket_id: MaintenanceTicketId
     ) -> MaintenanceTicket | None: ...

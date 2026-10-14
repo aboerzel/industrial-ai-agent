@@ -67,6 +67,7 @@ class PendingApproval(BaseModel):
     arguments: dict[str, str]
     summary: str = Field(min_length=1, max_length=500)
     action_id: str | None = Field(default=None, min_length=1, max_length=128)
+    approval_execution_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +321,11 @@ def _execution_from_state(
                 arguments=arguments,
                 summary=summary,
                 action_id=action_id if isinstance(action_id, str) else None,
+                approval_execution_id=(
+                    str(UUID(payload["approval_execution_id"]))
+                    if isinstance(payload.get("approval_execution_id"), str)
+                    else None
+                ),
             )
         )
     if run_status is None:

@@ -285,7 +285,10 @@ def test_run_store_approval_adapter_requires_approved_exact_pending_action_once(
     store = InMemoryAgentRunStore()
     run_id = uuid4()
     asyncio.run(store.create(run_id))
-    asyncio.run(store.wait_for_approval(run_id, _approval_payload("stored-action")))
+    pending = asyncio.run(
+        store.wait_for_approval(run_id, _approval_payload("stored-action"))
+    )
+    execution_id = pending.approval_request["approval_execution_id"]
     assert (
         asyncio.run(
             store.claim_resume(
@@ -301,7 +304,7 @@ def test_run_store_approval_adapter_requires_approved_exact_pending_action_once(
     assert not asyncio.run(
         approval_port.claim_approved_action(
             ReferenceCalibrationApprovalClaim(
-                uuid4(), "stored-action", STATION_ID, DEVICE_ID
+                uuid4(), execution_id, STATION_ID, DEVICE_ID
             ),
             DEMO_ENGINEER_SECURITY_CONTEXT,
         )
@@ -309,7 +312,7 @@ def test_run_store_approval_adapter_requires_approved_exact_pending_action_once(
     assert not asyncio.run(
         approval_port.claim_approved_action(
             ReferenceCalibrationApprovalClaim(
-                run_id, "stored-action", STATION_ID, DeviceId("POSITION-ENC-03")
+                run_id, execution_id, STATION_ID, DeviceId("POSITION-ENC-03")
             ),
             DEMO_ENGINEER_SECURITY_CONTEXT,
         )
@@ -317,7 +320,7 @@ def test_run_store_approval_adapter_requires_approved_exact_pending_action_once(
     assert asyncio.run(
         approval_port.claim_approved_action(
             ReferenceCalibrationApprovalClaim(
-                run_id, "stored-action", STATION_ID, DEVICE_ID
+                run_id, execution_id, STATION_ID, DEVICE_ID
             ),
             DEMO_ENGINEER_SECURITY_CONTEXT,
         )
@@ -325,7 +328,7 @@ def test_run_store_approval_adapter_requires_approved_exact_pending_action_once(
     assert not asyncio.run(
         approval_port.claim_approved_action(
             ReferenceCalibrationApprovalClaim(
-                run_id, "stored-action", STATION_ID, DEVICE_ID
+                run_id, execution_id, STATION_ID, DEVICE_ID
             ),
             DEMO_ENGINEER_SECURITY_CONTEXT,
         )
@@ -336,7 +339,9 @@ def test_run_store_rejected_or_mismatched_approval_cannot_be_claimed() -> None:
     store = InMemoryAgentRunStore()
     run_id = uuid4()
     asyncio.run(store.create(run_id))
-    asyncio.run(store.wait_for_approval(run_id, _approval_payload("stored-action")))
+    pending = asyncio.run(
+        store.wait_for_approval(run_id, _approval_payload("stored-action"))
+    )
     assert (
         asyncio.run(
             store.claim_resume(
@@ -352,7 +357,10 @@ def test_run_store_rejected_or_mismatched_approval_cannot_be_claimed() -> None:
     assert not asyncio.run(
         approval_port.claim_approved_action(
             ReferenceCalibrationApprovalClaim(
-                run_id, "other-action", STATION_ID, DEVICE_ID
+                run_id,
+                pending.approval_request["approval_execution_id"],
+                STATION_ID,
+                DEVICE_ID,
             ),
             DEMO_ENGINEER_SECURITY_CONTEXT,
         )

@@ -1370,6 +1370,12 @@ async def _persist_execution(
     }
     if approval.action_id is not None:
         approval_request["action_id"] = approval.action_id
+    if approval.approval_execution_id is not None:
+        return await store.wait_for_approval(
+            run_id,
+            approval_request,
+            approval_execution_id=UUID(approval.approval_execution_id),
+        )
     return await store.wait_for_approval(run_id, approval_request)
 
 
@@ -1379,7 +1385,9 @@ def _to_approval_request(
     if payload is None:
         return None
     public_payload = {
-        key: value for key, value in payload.items() if key != "action_id"
+        key: value
+        for key, value in payload.items()
+        if key not in {"action_id", "approval_execution_id"}
     }
     return ApprovalRequestResponse.model_validate(sanitize_public_value(public_payload))
 

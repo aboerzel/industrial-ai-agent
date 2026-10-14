@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select, text, update
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
@@ -23,7 +24,12 @@ from industrial_ai_agent.infrastructure.api.run_store import (
     RecentRuntimeRunsQuery,
     RuntimeRunInspection,
     StoredAgentRun,
+    _consume_approval_generation,
+    _decide_approval_generation,
+    _has_current_generation,
+    _matches_approval_generation,
     _matches_protected_action_approval,
+    _new_approval_generation,
     _to_public_status,
     recovery_failure_code,
 )
@@ -258,20 +264,39 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             return tuple(_stored(record) for record in session.scalars(statement))
 
     async def wait_for_approval(
-        self, run_id: UUID, approval_request: dict[str, object]
+        self,
+        run_id: UUID,
+        approval_request: dict[str, object],
+        *,
+        approval_execution_id: UUID | None = None,
     ) -> StoredAgentRun:
         return await asyncio.to_thread(
-            self._wait_for_approval, run_id, approval_request
+            self._wait_for_approval, run_id, approval_request, approval_execution_id
         )
 
     def _wait_for_approval(
-        self, run_id: UUID, approval_request: dict[str, object]
+        self,
+        run_id: UUID,
+        approval_request: dict[str, object],
+        approval_execution_id: UUID | None,
     ) -> StoredAgentRun:
         with self._session_factory.session(self._security_context) as session:
-            record = _require_record(session, run_id)
+            record = session.scalar(
+                select(AgentRunRecord)
+                .where(AgentRunRecord.run_id == run_id)
+                .with_for_update()
+            )
+            if record is None:
+                raise ValueError(f"Unknown run: {run_id}")
+            payload, history, created = _new_approval_generation(
+                _stored(record), approval_request, approval_execution_id
+            )
+            if not created:
+                return _stored(record)
             record.status = RunStatus.WAITING_FOR_APPROVAL.value
-            record.approval_payload = approval_request
-            record.approval_action = _approval_action(approval_request)
+            record.approval_payload = payload
+            record.approval_generations = history
+            record.approval_action = _approval_action(payload)
             record.approval_decision = None
             record.interrupted_at = datetime.now(UTC)
             record.approval_requested_at = record.interrupted_at
@@ -297,22 +322,24 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         approval_clearance: DataClassification,
     ) -> StoredAgentRun | None:
         with self._session_factory.session(self._security_context) as session:
-            changed = session.execute(
-                update(AgentRunRecord)
-                .where(
-                    AgentRunRecord.run_id == run_id,
-                    AgentRunRecord.status == RunStatus.WAITING_FOR_APPROVAL.value,
-                )
-                .values(
-                    status=RunStatus.RUNNING.value,
-                    approval_decision=decision,
-                    approval_decided_at=datetime.now(UTC),
-                    approval_decided_clearance=approval_clearance.name,
-                )
-            ).rowcount
-            if changed != 1:
+            record = session.scalar(
+                select(AgentRunRecord)
+                .where(AgentRunRecord.run_id == run_id)
+                .with_for_update()
+            )
+            if record is None or record.status != RunStatus.WAITING_FOR_APPROVAL.value:
                 return None
-            return _stored(_require_record(session, run_id))
+            stored = _stored(record)
+            if not _has_current_generation(stored):
+                return None
+            record.approval_generations = _decide_approval_generation(
+                stored, decision, approval_clearance
+            )
+            record.status = RunStatus.RUNNING.value
+            record.approval_decision = decision
+            record.approval_decided_at = datetime.now(UTC)
+            record.approval_decided_clearance = approval_clearance.name
+            return _stored(record)
 
     async def claim_protected_action_approval(
         self,
@@ -340,7 +367,28 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             ):
                 return False
             record.approval_payload = None
+            record.approval_generations = _consume_approval_generation(
+                _stored(record), claim
+            )
             return True
+
+    async def is_consumed_protected_action_approval(
+        self, claim: ProtectedActionApprovalClaim, *, security_context: SecurityContext
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._is_consumed_protected_action_approval, claim, security_context
+        )
+
+    def _is_consumed_protected_action_approval(
+        self, claim: ProtectedActionApprovalClaim, security_context: SecurityContext
+    ) -> bool:
+        with self._session_factory.session(self._security_context) as session:
+            record = session.scalar(
+                select(AgentRunRecord).where(AgentRunRecord.run_id == claim.run_id)
+            )
+            return record is not None and _matches_approval_generation(
+                _stored(record), claim, security_context, consumed=True
+            )
 
     async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None:
         return await asyncio.to_thread(self._inspect, run_id)
@@ -429,6 +477,7 @@ def _stored(record: AgentRunRecord) -> StoredAgentRun:
             else None
         ),
         approval_request=record.approval_payload,
+        approval_generations=deepcopy(record.approval_generations or {}),
         approval_action=record.approval_action,
         approval_decision=record.approval_decision,
         approval_requested_at=record.approval_requested_at,

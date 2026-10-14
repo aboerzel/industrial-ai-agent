@@ -16,6 +16,8 @@ type ProtectedActionName = Literal[
 
 @dataclass(frozen=True, slots=True)
 class MaintenanceTicketApprovalClaim:
+    """action_id is the server-owned execution UUID, never model correlation data."""
+
     run_id: UUID
     action_id: str
     station_id: StationId
@@ -24,6 +26,8 @@ class MaintenanceTicketApprovalClaim:
 
 @dataclass(frozen=True, slots=True)
 class ReferenceCalibrationApprovalClaim:
+    """action_id is the server-owned execution UUID, never model correlation data."""
+
     run_id: UUID
     action_id: str
     station_id: StationId
@@ -40,6 +44,11 @@ class TrustedActionApprovalClaimPort(Protocol):
         self, claim: ProtectedActionApprovalClaim, security_context: SecurityContext
     ) -> bool:
         """Consume exactly one accessible, approved, action-bound persisted claim."""
+
+    async def is_consumed_approved_action(
+        self, claim: ProtectedActionApprovalClaim, security_context: SecurityContext
+    ) -> bool:
+        """Authorize existing-result lookup only; never grant another execution."""
 
 
 def is_action_profile_authorized(

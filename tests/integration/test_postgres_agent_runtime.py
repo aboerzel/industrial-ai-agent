@@ -378,7 +378,7 @@ def test_confidential_recovery_approval_persists_reloads_and_claims_once() -> No
             store.claim_protected_action_approval(
                 ReferenceCalibrationApprovalClaim(
                     run_id,
-                    "reference-calibration-action-1",
+                    pending.approval_request["approval_execution_id"],
                     StationId("S04"),
                     DeviceId("POSITION-ENC-02"),
                 ),
@@ -389,7 +389,7 @@ def test_confidential_recovery_approval_persists_reloads_and_claims_once() -> No
             store.claim_protected_action_approval(
                 ReferenceCalibrationApprovalClaim(
                     run_id,
-                    "reference-calibration-action-1",
+                    pending.approval_request["approval_execution_id"],
                     StationId("S04"),
                     DeviceId("POSITION-ENC-02"),
                 ),
@@ -403,7 +403,10 @@ def test_confidential_recovery_approval_persists_reloads_and_claims_once() -> No
     assert bound.model_profile == "nvidia_quality"
     assert pending is not None
     assert pending.approval_action == "execute_reference_calibration"
-    assert pending.approval_request == _reference_calibration_approval_request()
+    assert pending.approval_request == {
+        **_reference_calibration_approval_request(),
+        "approval_execution_id": pending.approval_request["approval_execution_id"],
+    }
     assert claimed is not None
     assert claimed.run_profile is AgentRunProfile.CONFIDENTIAL_RECOVERY
     assert restored is not None

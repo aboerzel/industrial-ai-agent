@@ -173,27 +173,30 @@ def _payload(kind):
     }
 
 
-async def _approve(store, kind, *, decision="approve"):
-    await store.wait_for_approval(RUN_ID, _payload(kind))
+async def _approve(store, kind, *, decision="approve", approval_execution_id=None):
+    pending = await store.wait_for_approval(
+        RUN_ID, _payload(kind), approval_execution_id=approval_execution_id
+    )
     await store.claim_resume(
         RUN_ID, decision=decision, approval_clearance=DataClassification.CONFIDENTIAL
     )
+    return pending.approval_request["approval_execution_id"]
 
 
-def _arguments(kind):
+def _arguments(kind, execution_id=ACTION_ID):
     return (
         {
             "run_id": str(RUN_ID),
             "station_id": "S04",
             "summary": SUMMARY,
-            "request_id": ACTION_ID,
+            "request_id": execution_id,
         }
         if kind == "factory"
         else {
             "run_id": str(RUN_ID),
             "station_id": "S04",
             "device_id": "POSITION-ENC-02",
-            "action_id": ACTION_ID,
+            "action_id": execution_id,
         }
     )
 
@@ -230,8 +233,9 @@ def test_direct_protected_mcp_denies_without_correct_authoritative_approval(kind
     )
 
     async def verify():
+        execution_id = ACTION_ID
         if case != "no_approval":
-            await _approve(
+            execution_id = await _approve(
                 store,
                 "hardware"
                 if kind == "factory" and case == "wrong_action"
@@ -250,7 +254,7 @@ def test_direct_protected_mcp_denies_without_correct_authoritative_approval(kind
                 "hidden_run": {"data_classification": DataClassification.RESTRICTED},
             }[case]
             store._records[RUN_ID] = replace(record, **changes)
-        arguments = _arguments(kind)
+        arguments = _arguments(kind, execution_id)
         if case == "wrong_target":
             if kind == "factory":
                 arguments["summary"] = "Unapproved different action"
@@ -270,14 +274,18 @@ def test_direct_protected_mcp_denies_without_correct_authoritative_approval(kind
 
 
 @pytest.mark.parametrize("kind", ["factory", "hardware"])
-def test_direct_valid_approval_succeeds_once_then_replay_is_denied(kind):
+def test_direct_valid_approval_executes_once_and_replay_cannot_execute_again(kind):
     server, store, repo, device, context, seen = _setup(kind)
 
     async def verify():
-        await _approve(store, kind)
-        await _execute(server, kind, context)
-        with pytest.raises((PermissionError, LookupError)):
-            await _execute(server, kind, context)
+        execution_id = await _approve(store, kind)
+        arguments = _arguments(kind, execution_id)
+        first = await _execute(server, kind, context, arguments)
+        if kind == "factory":
+            assert await _execute(server, kind, context, arguments) == first
+        else:
+            with pytest.raises((PermissionError, LookupError)):
+                await _execute(server, kind, context, arguments)
 
     asyncio.run(verify())
     assert len(repo.tickets) == (1 if kind == "factory" else 0)
@@ -300,18 +308,18 @@ def test_concurrent_approved_invocations_allow_only_one_execution(kind):
     server, store, repo, device, context, _ = _setup(kind)
 
     async def verify():
-        await _approve(store, kind)
+        execution_id = await _approve(store, kind)
+        arguments = _arguments(kind, execution_id)
         results = await asyncio.gather(
-            _execute(server, kind, context),
-            _execute(server, kind, context),
+            _execute(server, kind, context, arguments),
+            _execute(server, kind, context, arguments),
             return_exceptions=True,
         )
-        assert (
-            sum(
-                isinstance(result, (PermissionError, LookupError)) for result in results
-            )
-            == 1
-        )
+        assert sum(
+            isinstance(result, (PermissionError, LookupError)) for result in results
+        ) == (0 if kind == "factory" else 1)
+        if kind == "factory":
+            assert results[0] == results[1]
 
     asyncio.run(verify())
     assert len(repo.tickets) + device.execute_calls == 1
@@ -386,6 +394,7 @@ def test_normal_hitl_and_direct_mcp_use_the_same_persisted_execution_guard():
                 "action_id": payload["action_id"],
                 "arguments": payload["details"],
             },
+            approval_execution_id=UUID(payload["approval_execution_id"]),
         )
         with pytest.raises(PermissionError):
             await _execute(server, "factory", context)

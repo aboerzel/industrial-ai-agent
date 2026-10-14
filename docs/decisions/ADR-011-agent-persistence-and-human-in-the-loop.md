@@ -109,12 +109,41 @@ command. Therefore, code before `interrupt()` must be pure or idempotent. The ap
 node only validates and constructs data before interrupting. The write action executes
 only in a separate node after an approved resume.
 
-The action uses the proposed tool-call ID as an idempotency key. PostgreSQL enforces it
-with a unique constraint as an additional duplicate-write defense. The public run store
-atomically claims a waiting run before it resumes the graph. Protected execution also
-atomically consumes the persisted action approval once; a repeated or concurrent claim
-is denied, including after an execution failure. Approval consumption precedes the
-side effect, so a crash may require a fresh approval rather than an automatic retry.
+Each independently proposed action receives a server-generated UUID before the approval
+interrupt. It remains stable in the pending-action checkpoint across resume/retry. The
+model's tool-call/action ID is correlation data, not sufficient execution identity. The
+application persists the UUID and immutable run/action/target/profile/classification
+binding in `agent_runtime.agent_runs.approval_generations`, under the existing run RLS.
+Store-only proposals mint their own UUID; a payload cannot choose its generation. The
+graph supplies its checkpointed UUID through an explicit server-only store parameter.
+Re-persisting that same proposal preserves its decision and consumption state; rebinding
+the UUID to different arguments is denied.
+
+```mermaid
+flowchart LR
+    R[Run] --> P[Server-generated proposal UUID]
+    P --> A[Persisted approval generation]
+    A --> C[Atomic single-use execution claim]
+    C --> K[SHA-256 of run ID and generation UUID]
+    K --> T[Unique maintenance-ticket request ID]
+```
+
+The public run store atomically claims a waiting run before resuming the graph. Protected
+execution checks the exact generation and consumes it once under the database row lock
+(or the development store lock). A different approval generation remains distinct even
+with identical model IDs, targets, or summaries. PostgreSQL retains the existing unique
+ticket request-ID constraint as the second duplicate-write defense. At most one approval
+is pending per run; a previously claimed operation may finish while a later generation
+is approved.
+
+A ticket retry cannot consume or execute the generation again. It may return the
+already-created ticket only after the same persisted consumed-generation binding and
+current clearance have been checked, followed by an RLS-backed request-ID lookup. If no
+ticket exists, it fails closed rather than retrying a side effect. Calibration replay
+remains denied. Approval consumption still precedes side-effect creation in separate
+transactions; this is not a transactional outbox or a claim of crash-proof execution.
+Legacy approvals lacking authoritative generation history fail closed. Migration 0025
+adds empty history without inferring or authorizing legacy generations.
 
 ### MCP Execution Authorization
 
@@ -125,7 +154,9 @@ The claim checks the current principal's run/resource clearance, the persisted a
 profile and classification, an approved running run, decision timestamp and approver
 clearance, the exact action ID, and its bound arguments. Ticket approval binds station
 and summary; calibration approval binds station, device, and operation. Missing,
-unrelated, rejected, consumed, or inaccessible approvals produce bounded neutral denial.
+unrelated, rejected, or inaccessible approvals produce bounded neutral denial. A consumed
+generation cannot authorize another side effect; only the bound existing-ticket retry
+described above may resolve idempotently.
 Run and action IDs are lookup references, never proof of approval. The graph injects
 them from trusted run and checkpoint state after an approved resume; the model never
 owns them. Existing PostgreSQL RLS and row locking enforce the resource and single-use
@@ -182,7 +213,7 @@ while a separate SQLAlchemy adapter persists application-owned lifecycle records
 
 The persisted pending action is a strict Pydantic contract. For
 `create_maintenance_ticket`, the model never owns `run_id`, `request_id`, or an idempotency key;
-the post-approval execution node derives it only from the actual tool-call ID. The
+the post-approval execution node uses the checkpointed server-generated approval UUID. The
 database repository's unique request ID remains the second idempotency defense for a
 duplicate or concurrent resume. A reject clears the pending action and never executes it.
 

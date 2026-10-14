@@ -529,6 +529,7 @@ def test_mcp_hitl_interrupt_approves_once_and_survives_agent_recreation() -> Non
         "kind": "action_approval",
         "action": CREATE_MAINTENANCE_TICKET_TOOL_NAME,
         "action_id": "ticket-call-1",
+        "approval_execution_id": started["pending_action"]["approval_execution_id"],
         "details": {"station_id": "S04", "summary": "Investigate QUALITY-09"},
     }
     assert provider.calls == []
@@ -549,7 +550,8 @@ def test_mcp_hitl_interrupt_approves_once_and_survives_agent_recreation() -> Non
     assert repeated["run_status"] is AgentRunStatus.SUCCESS
     assert completed["executed_tool_count"] == 1
     assert len(provider.calls) == 1
-    assert provider.calls[0]["request_id"] == "ticket-call-1"
+    assert provider.calls[0]["request_id"] == payload["approval_execution_id"]
+    assert payload["approval_execution_id"] != payload["action_id"]
 
 
 def test_mcp_hitl_reject_never_executes_write() -> None:
@@ -636,7 +638,7 @@ def test_hardware_recovery_hitl_binds_approved_execution_to_run_and_keeps_budget
             "station_id": "S04",
             "device_id": "POSITION-ENC-02",
             "run_id": run_id,
-            "action_id": payload["action_id"],
+            "action_id": payload["approval_execution_id"],
         }
     ]
 

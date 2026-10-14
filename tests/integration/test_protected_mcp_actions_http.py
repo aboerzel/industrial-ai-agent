@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Iterator
+from uuid import uuid4
 
 import pytest
 from test_secure_mcp_http_access import _free_port, _wait_for_listening_port
@@ -23,7 +24,7 @@ sys.path.insert(0, 'tests/unit')
 from test_protected_mcp_actions import _setup, _approve, RUN_ID
 from industrial_ai_agent.domain.security import DataClassification
 server, store, repo, device, context, seen = _setup(os.environ['TEST_KIND'])
-asyncio.run(_approve(store, os.environ['TEST_KIND']))
+asyncio.run(_approve(store, os.environ['TEST_KIND'], approval_execution_id=__import__('uuid').UUID(os.environ['TEST_APPROVAL_GENERATION'])))
 record = asyncio.run(store.get(RUN_ID))
 hidden_id = __import__('uuid').UUID('123e4567-e89b-12d3-a456-426614174001')
 store._records[hidden_id] = replace(record, run_id=hidden_id, data_classification=DataClassification.RESTRICTED)
@@ -32,18 +33,24 @@ server.run(transport='streamable-http', host='127.0.0.1', port=int(os.environ['T
 
 
 @pytest.fixture(scope="module", params=["factory", "hardware"])
-def protected_server(request) -> Iterator[tuple[str, str]]:
+def protected_server(request) -> Iterator[tuple[str, str, str]]:
     port = _free_port()
+    execution_id = str(uuid4())
     process = subprocess.Popen(
         [sys.executable, "-c", _SOURCE],
-        env={**os.environ, "TEST_MCP_PORT": str(port), "TEST_KIND": request.param},
+        env={
+            **os.environ,
+            "TEST_MCP_PORT": str(port),
+            "TEST_KIND": request.param,
+            "TEST_APPROVAL_GENERATION": execution_id,
+        },
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         text=True,
     )
     try:
         _wait_for_listening_port(process, port)
-        yield f"http://127.0.0.1:{port}/mcp", request.param
+        yield f"http://127.0.0.1:{port}/mcp", request.param, execution_id
     finally:
         process.terminate()
         try:
@@ -56,7 +63,7 @@ def protected_server(request) -> Iterator[tuple[str, str]]:
 def test_direct_http_requires_exact_approval_and_hides_other_action_state(
     protected_server,
 ):
-    url, kind = protected_server
+    url, kind, execution_id = protected_server
     tool = (
         "create_maintenance_ticket"
         if kind == "factory"
@@ -66,7 +73,7 @@ def test_direct_http_requires_exact_approval_and_hides_other_action_state(
     arguments = {
         "run_id": "123e4567-e89b-12d3-a456-426614174000",
         "station_id": "S04",
-        action_key: "ticket-call-1",
+        action_key: execution_id,
         **(
             {"summary": "Investigate QUALITY-09"}
             if kind == "factory"
@@ -80,7 +87,7 @@ def test_direct_http_requires_exact_approval_and_hides_other_action_state(
         ) as session:
             await session.initialize()
             wrong = await session.call_tool(
-                tool, {**arguments, action_key: "unrelated-approval"}
+                tool, {**arguments, action_key: str(uuid4())}
             )
             hidden = await session.call_tool(
                 tool, {**arguments, "run_id": "123e4567-e89b-12d3-a456-426614174001"}
@@ -101,7 +108,11 @@ def test_direct_http_requires_exact_approval_and_hides_other_action_state(
             allowed = await session.call_tool(tool, arguments)
             assert not allowed.is_error
             replay = await session.call_tool(tool, arguments)
-            assert replay.is_error
-            assert replay.model_dump() == wrong.model_dump()
+            if kind == "factory":
+                assert not replay.is_error
+                assert replay.model_dump() == allowed.model_dump()
+            else:
+                assert replay.is_error
+                assert replay.model_dump() == wrong.model_dump()
 
     asyncio.run(verify())

@@ -311,6 +311,26 @@ class PostgreSqlMaintenanceTicketRepository:
         self._session_factory = session_factory
         self._security_context = security_context
 
+    def get_maintenance_ticket_by_request_id(
+        self, request_id: MaintenanceTicketRequestId
+    ) -> MaintenanceTicket | None:
+        with self._session_factory.session(self._security_context) as session:
+            record = session.scalar(
+                select(MaintenanceTicketRecord)
+                .options(joinedload(MaintenanceTicketRecord.station))
+                .where(MaintenanceTicketRecord.request_id == request_id.value)
+            )
+            if record is None:
+                return None
+            return MaintenanceTicket(
+                ticket_id=record.ticket_code,
+                request_id=request_id,
+                station_id=StationId(record.station.code),
+                summary=record.summary or "Maintenance ticket",
+                status=record.status,
+                classification=DataClassification(record.classification),
+            )
+
     def get_maintenance_ticket(
         self, ticket_id: MaintenanceTicketId
     ) -> MaintenanceTicket | None:

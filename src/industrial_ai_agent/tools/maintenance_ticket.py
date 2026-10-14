@@ -1,3 +1,4 @@
+import asyncio
 from hashlib import sha256
 from uuid import UUID
 
@@ -89,18 +90,26 @@ class MaintenanceTicketCapability:
             raise PermissionError("Protected action is not authorized")
         station = StationId(station_id)
         request = MaintenanceTicketRequestId(request_id)
-        if not await self._approval_claims.claim_approved_action(
-            MaintenanceTicketApprovalClaim(run_id, request.value, station, summary),
-            security_context,
-        ):
-            raise PermissionError("Protected action is not authorized")
-        ticket = self._repository.create_maintenance_ticket(
-            MaintenanceTicketRequestId(
-                sha256(f"{run_id}:{request.value}".encode()).hexdigest()
-            ),
-            station,
-            summary,
+        claim = MaintenanceTicketApprovalClaim(run_id, request.value, station, summary)
+        # request_id is now the authoritative approval generation, not the model ID.
+        idempotency_id = MaintenanceTicketRequestId(
+            sha256(f"{run_id}:{request.value}".encode()).hexdigest()
         )
+        if await self._approval_claims.claim_approved_action(claim, security_context):
+            ticket = self._repository.create_maintenance_ticket(
+                idempotency_id, station, summary
+            )
+        elif await self._approval_claims.is_consumed_approved_action(
+            claim, security_context
+        ):
+            # A consumed claim can authorize a read of its existing result only.
+            ticket = await asyncio.to_thread(
+                self._repository.get_maintenance_ticket_by_request_id, idempotency_id
+            )
+        else:
+            raise PermissionError("Protected action is not authorized")
+        if ticket is None or ticket.station_id != station or ticket.summary != summary:
+            raise PermissionError("Protected action is not authorized")
         return MaintenanceTicketResult(
             ticket_id=ticket.ticket_id,
             station_id=ticket.station_id.value,

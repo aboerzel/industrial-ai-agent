@@ -22,3 +22,12 @@ class AgentRunStoreActionApprovalPort(TrustedActionApprovalClaimPort):
         return await self._store_for_context(
             security_context
         ).claim_protected_action_approval(claim, security_context=security_context)
+
+    async def is_consumed_approved_action(
+        self, claim: ProtectedActionApprovalClaim, security_context: SecurityContext
+    ) -> bool:
+        return await self._store_for_context(
+            security_context
+        ).is_consumed_protected_action_approval(
+            claim, security_context=security_context
+        )

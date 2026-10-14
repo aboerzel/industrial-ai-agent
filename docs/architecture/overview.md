@@ -936,11 +936,13 @@ flowchart LR
     Model --> Route{"conditional route"}
     Route -->|"final / invalid / limit"| End["END"]
     Route -->|"read request"| Tool["MCP read-tool node"]
-    Route -->|"write proposal"| Approval["HITL interrupt"]
+    Route -->|"write proposal"| Generation["Server-owned approval UUID<br/>checkpointed before interrupt"]
+    Generation --> Approval["HITL interrupt"]
     Approval -->|"approved"| Action["MCP action node"]
-    Action --> Guard["Executing capability<br/>RLS + single-use action approval"]
+    Action --> Guard["Executing capability<br/>RLS + exact generation + single-use claim"]
     Direct["Direct authenticated MCP caller"] --> Guard
     Guard -->|"authorized"| Execute["Protected side effect"]
+    Guard -->|"consumed ticket generation"| Receipt["Bound existing-ticket lookup<br/>no execution"]
     Tool -->|"structured observation"| Model
     Tool --> Provider["MCP Tool Provider"]
     Provider --> Factory["factory_mcp"]
@@ -951,7 +953,7 @@ flowchart LR
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class CR,Resolver,Provider,Factory,Knowledge core
     class Adapter,Model,Route,Tool,Approval,Action,End framework
-    class Capability,Security,Guard security
+    class Capability,Security,Guard,Generation,Receipt security
 ```
 
 `TroubleshootingGraphState` holds LangChain messages, the executed-tool count,
@@ -967,8 +969,12 @@ For the resumable write path, the graph is compiled with LangGraph's official
 with `configurable.thread_id`. The approval node emits a JSON-serializable
 `action_approval` interrupt and resumes through `Command(resume="approve" | "reject")`
 using the same thread ID. `create_maintenance_ticket` is prepared before the interrupt,
-executes through Factory MCP only after approval, and uses its tool-call ID as a
-server-derived idempotency key. Nodes before an
+executes through Factory MCP only after approval, and uses the hash of its run ID and
+checkpointed server-owned approval-generation UUID as its idempotency key. Model action
+IDs remain correlation data. The run store retains immutable generation bindings in
+`approval_generations` under existing RLS and row locks. A repeated consumed ticket
+generation may only retrieve its bound existing ticket; it cannot execute again. Missing
+legacy generation history fails closed. Nodes before an
 interrupt remain side-effect-free because LangGraph restarts the node from its beginning
 on resume. The executing capability consumes the authoritative approval from the
 persisted run before the side effect, checking current clearance, action profile,

@@ -1,10 +1,11 @@
 """Application-facing lifecycle port for durable agent runs."""
 
 import asyncio
-from dataclasses import dataclass, replace
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from industrial_ai_agent.agent.agent_run import AgentRunResult
 from industrial_ai_agent.agent.failure_origin import (
@@ -47,6 +48,7 @@ class StoredAgentRun:
     approval_decided_clearance: DataClassification | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    approval_generations: dict[str, dict[str, object]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +127,11 @@ class AgentRunStore(Protocol):
     ) -> tuple[StoredAgentRun, ...]: ...
 
     async def wait_for_approval(
-        self, run_id: UUID, approval_request: dict[str, object]
+        self,
+        run_id: UUID,
+        approval_request: dict[str, object],
+        *,
+        approval_execution_id: UUID | None = None,
     ) -> StoredAgentRun: ...
 
     async def claim_resume(
@@ -141,6 +147,10 @@ class AgentRunStore(Protocol):
         claim: ProtectedActionApprovalClaim,
         *,
         security_context: SecurityContext,
+    ) -> bool: ...
+
+    async def is_consumed_protected_action_approval(
+        self, claim: ProtectedActionApprovalClaim, *, security_context: SecurityContext
     ) -> bool: ...
 
     async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None: ...
@@ -194,7 +204,7 @@ class InMemoryAgentRunStore:
                 updated_at=datetime.now(UTC),
             )
             self._records[run_id] = record
-        return record
+        return _approval_snapshot(record)
 
     async def complete(self, run_id: UUID, result: AgentRunResult) -> StoredAgentRun:
         existing = await self._require(run_id)
@@ -257,7 +267,8 @@ class InMemoryAgentRunStore:
 
     async def get(self, run_id: UUID) -> StoredAgentRun | None:
         async with self._lock:
-            return self._records.get(run_id)
+            record = self._records.get(run_id)
+            return _approval_snapshot(record) if record is not None else None
 
     async def list_investigation(
         self, investigation_id: UUID
@@ -266,7 +277,7 @@ class InMemoryAgentRunStore:
             return tuple(
                 sorted(
                     (
-                        record
+                        _approval_snapshot(record)
                         for record in self._records.values()
                         if record.investigation_id == investigation_id
                     ),
@@ -275,20 +286,35 @@ class InMemoryAgentRunStore:
             )
 
     async def wait_for_approval(
-        self, run_id: UUID, approval_request: dict[str, object]
+        self,
+        run_id: UUID,
+        approval_request: dict[str, object],
+        *,
+        approval_execution_id: UUID | None = None,
     ) -> StoredAgentRun:
-        existing = await self._require(run_id)
-        record = replace(
-            existing,
-            status=RunStatus.WAITING_FOR_APPROVAL,
-            approval_request=approval_request,
-            approval_action=_approval_action(approval_request),
-            approval_decision=None,
-            approval_requested_at=datetime.now(UTC),
-            approval_decided_at=None,
-            updated_at=datetime.now(UTC),
-        )
-        return await self._replace_existing(record)
+        async with self._lock:
+            existing = self._records.get(run_id)
+            if existing is None:
+                raise ValueError(f"Unknown run: {run_id}")
+            payload, history, created = _new_approval_generation(
+                existing, approval_request, approval_execution_id
+            )
+            if not created:
+                return _approval_snapshot(existing)
+            record = replace(
+                existing,
+                status=RunStatus.WAITING_FOR_APPROVAL,
+                approval_request=payload,
+                approval_generations=history,
+                approval_action=_approval_action(payload),
+                approval_decision=None,
+                approval_requested_at=datetime.now(UTC),
+                approval_decided_at=None,
+                approval_decided_clearance=None,
+                updated_at=datetime.now(UTC),
+            )
+            self._records[run_id] = record
+            return _approval_snapshot(record)
 
     async def claim_resume(
         self,
@@ -302,6 +328,7 @@ class InMemoryAgentRunStore:
             if (
                 existing is None
                 or existing.status is not RunStatus.WAITING_FOR_APPROVAL
+                or not _has_current_generation(existing)
             ):
                 return None
             record = replace(
@@ -310,10 +337,13 @@ class InMemoryAgentRunStore:
                 approval_decision=decision,
                 approval_decided_at=datetime.now(UTC),
                 approval_decided_clearance=approval_clearance,
+                approval_generations=_decide_approval_generation(
+                    existing, decision, approval_clearance
+                ),
                 updated_at=datetime.now(UTC),
             )
             self._records[run_id] = record
-            return record
+            return _approval_snapshot(record)
 
     async def claim_protected_action_approval(
         self,
@@ -330,9 +360,19 @@ class InMemoryAgentRunStore:
             self._records[claim.run_id] = replace(
                 existing,
                 approval_request=None,
+                approval_generations=_consume_approval_generation(existing, claim),
                 updated_at=datetime.now(UTC),
             )
             return True
+
+    async def is_consumed_protected_action_approval(
+        self, claim: ProtectedActionApprovalClaim, *, security_context: SecurityContext
+    ) -> bool:
+        async with self._lock:
+            record = self._records.get(claim.run_id)
+            return record is not None and _matches_approval_generation(
+                record, claim, security_context, consumed=True
+            )
 
     async def inspect(self, run_id: UUID) -> RuntimeRunInspection | None:
         record = await self.get(run_id)
@@ -398,8 +438,22 @@ class InMemoryAgentRunStore:
         async with self._lock:
             if record.run_id not in self._records:
                 raise ValueError(f"Unknown run: {record.run_id}")
+            # Lifecycle updates must not overwrite a concurrently consumed generation.
+            record = replace(
+                record,
+                approval_generations=self._records[record.run_id].approval_generations,
+            )
             self._records[record.run_id] = record
-        return record
+        return _approval_snapshot(record)
+
+
+def _approval_snapshot(record: StoredAgentRun) -> StoredAgentRun:
+    """Returned DTOs cannot mutate store-owned approval authority."""
+    return replace(
+        record,
+        approval_request=deepcopy(record.approval_request),
+        approval_generations=deepcopy(record.approval_generations),
+    )
 
 
 def _to_public_status(result: AgentRunResult) -> RunStatus:
@@ -468,7 +522,36 @@ def _matches_protected_action_approval(
     approval_request = record.approval_request
     if not isinstance(approval_request, dict):
         return False
-    details = approval_request.get("arguments")
+    if not _matches_approval_generation(
+        record, claim, security_context, consumed=False
+    ):
+        return False
+    return (
+        record.status is RunStatus.RUNNING
+        and _has_current_generation(record)
+        and record.approval_decision == "approve"
+        and record.approval_decided_at is not None
+        and isinstance(record.approval_decided_clearance, DataClassification)
+        and record.approval_decided_clearance >= record.data_classification
+        and record.approval_action == approval_request.get("action")
+        and _generation_id(approval_request) == claim.action_id
+    )
+
+
+def _matches_approval_generation(
+    record: StoredAgentRun,
+    claim: ProtectedActionApprovalClaim,
+    security_context: SecurityContext,
+    *,
+    consumed: bool,
+) -> bool:
+    generation = record.approval_generations.get(claim.action_id)
+    if (
+        not isinstance(generation, dict)
+        or _generation_id(generation) != claim.action_id
+    ):
+        return False
+    details = generation.get("arguments")
     if not isinstance(details, dict):
         return False
     if isinstance(claim, MaintenanceTicketApprovalClaim):
@@ -484,21 +567,113 @@ def _matches_protected_action_approval(
         return False
     return (
         record.run_id == claim.run_id
-        and record.status is RunStatus.RUNNING
-        and record.approval_decision == "approve"
-        and record.approval_decided_at is not None
-        and isinstance(record.approval_decided_clearance, DataClassification)
-        and record.approval_decided_clearance >= record.data_classification
+        and generation.get("run_id") == str(record.run_id)
+        and generation.get("run_profile") == record.run_profile.value
+        and generation.get("classification") == record.data_classification.name
+        and generation.get("decision") == "approve"
+        and isinstance(generation.get("decided_at"), str)
+        and generation.get("consumed") is consumed
+        and _generation_approver_clearance(generation) >= record.data_classification
         and is_run_visible(record.data_classification, security_context)
         and is_action_profile_authorized(
             action, record.data_classification, record.run_profile
         )
-        and record.approval_action == action
-        and approval_request.get("action") == action
-        and approval_request.get("action_id") == claim.action_id
+        and generation.get("action") == action
         and details.get("station_id") == claim.station_id.value
         and target_matches
     )
+
+
+def _generation_approver_clearance(generation: dict[str, object]) -> int:
+    value = generation.get("approver_clearance")
+    if not isinstance(value, str) or value not in DataClassification.__members__:
+        return -1
+    return int(DataClassification[value])
+
+
+def _generation_id(payload: dict[str, object] | None) -> str | None:
+    value = payload.get("approval_execution_id") if isinstance(payload, dict) else None
+    if not isinstance(value, str):
+        return None
+    try:
+        return value if str(UUID(value)) == value else None
+    except ValueError:
+        return None
+
+
+def _has_current_generation(record: StoredAgentRun) -> bool:
+    identity = _generation_id(record.approval_request)
+    generation = record.approval_generations.get(identity)
+    payload = record.approval_request
+    return (
+        identity is not None
+        and isinstance(generation, dict)
+        and isinstance(payload, dict)
+        and all(
+            generation.get(key) == payload.get(key)
+            for key in ("action", "action_id", "arguments")
+        )
+        and generation.get("run_id") == str(record.run_id)
+        and generation.get("run_profile") == record.run_profile.value
+        and generation.get("classification") == record.data_classification.name
+    )
+
+
+def _new_approval_generation(
+    record: StoredAgentRun, request: dict[str, object], execution_id: UUID | None
+) -> tuple[dict[str, object], dict[str, dict[str, object]], bool]:
+    if execution_id is not None and not isinstance(execution_id, UUID):
+        raise PermissionError("Invalid approval execution identity")
+    identity = str(execution_id or uuid4())
+    payload = deepcopy(request)
+    # A model/user payload cannot choose its own generation; only the server keyword can.
+    payload["approval_execution_id"] = identity
+    binding = {
+        "approval_execution_id": identity,
+        "run_id": str(record.run_id),
+        "run_profile": record.run_profile.value,
+        "classification": record.data_classification.name,
+        "action": payload.get("action"),
+        "action_id": payload.get("action_id"),
+        "arguments": deepcopy(payload.get("arguments")),
+    }
+    history = deepcopy(record.approval_generations)
+    existing = history.get(identity)
+    if existing is not None:
+        if any(existing.get(key) != value for key, value in binding.items()):
+            raise PermissionError("Approval execution identity cannot be rebound")
+        return payload, history, False
+    history[identity] = {
+        **binding,
+        "decision": None,
+        "decided_at": None,
+        "approver_clearance": None,
+        "consumed": False,
+    }
+    return payload, history, True
+
+
+def _decide_approval_generation(
+    record: StoredAgentRun, decision: str, clearance: DataClassification
+) -> dict[str, dict[str, object]]:
+    history = deepcopy(record.approval_generations)
+    generation = history[_generation_id(record.approval_request)]
+    generation.update(
+        decision=decision,
+        decided_at=datetime.now(UTC).isoformat(),
+        approver_clearance=clearance.name,
+    )
+    return history
+
+
+def _consume_approval_generation(
+    record: StoredAgentRun, claim: ProtectedActionApprovalClaim
+) -> dict[str, dict[str, object]]:
+    history = deepcopy(record.approval_generations)
+    history[claim.action_id].update(
+        consumed=True, consumed_at=datetime.now(UTC).isoformat()
+    )
+    return history
 
 
 def _approval_action(approval_request: dict[str, object]) -> str | None:
