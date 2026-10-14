@@ -807,7 +807,7 @@ flowchart LR
     V --> G["EgressCheckedLLMClient"]
     P["LLMClient port"]
     G -.->|"implements"| P
-    C["OpenAICompatibleLLMClient"] -.->|"implements"| P
+    C["OpenAICompatibleLLMClient<br/>Endpoint guard before credentials/SDK"] -.->|"implements"| P
     CL["Explicit DataClassification"] --> G
     S --> G
     TOML["config/model_catalog.toml<br/>model metadata + provider settings"] --> M
@@ -817,7 +817,7 @@ flowchart LR
     ENV["Environment variables<br/>API keys for authenticated profiles only"] -.-> C
     G -->|"allowed only"| C
     G -->|"denied"| F["ModelEgressDeniedError<br/>no adapter call"]
-    C -->|"provider-specific request"| E["Configured OpenAI-compatible endpoint"]
+    C -->|"PUBLIC_CLOUD: HTTPS<br/>LOCAL: approved HTTP/HTTPS only"| E["Configured OpenAI-compatible endpoint"]
 
     subgraph Core["Application Core"]
         A
@@ -856,6 +856,13 @@ capabilities; ADR-009 then authorizes the execution zone. The current policy sti
 all classifications locally, allows `PUBLIC`, `INTERNAL`, and `CONFIDENTIAL` in
 `PUBLIC_CLOUD`, and keeps `RESTRICTED` local. Missing assignments and unknown models,
 classifications, zones, or capabilities fail closed without an adapter call.
+
+The adapter validates the effective parsed endpoint before credential lookup or SDK
+construction, including for direct calls and environment overrides. `PUBLIC_CLOUD`
+requires HTTPS; `LOCAL` retains approved local HTTP/HTTPS destinations. Environment
+proxies and redirects are disabled, so an HTTPS request cannot follow an HTTP downgrade.
+This transport guard is independent of classification/zone authorization and the
+separate embedding destination policy.
 
 The catalog records individual capabilities and may record an
 `incompatible_capability_combinations` constraint when a provider cannot use two

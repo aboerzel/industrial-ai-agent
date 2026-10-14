@@ -112,6 +112,22 @@ vision, embedding, or specialized models. Tool/MCP data can raise effective
 classification monotonically but cannot lower it. Model selection never changes database
 RLS, document, retrieval, MCP, tool, hardware, or persisted-investigation access.
 
+### Model provider transport boundary
+
+After resolving the effective catalog endpoint, including an environment override,
+`OpenAICompatibleLLMClient` validates its parsed destination before resolving an API
+credential or constructing the provider SDK. `PUBLIC_CLOUD` requires HTTPS, even for
+unauthenticated models and direct adapter calls. HTTP public destinations fail closed
+without credential lookup, SDK construction, or transport access. Catalog validation
+alone is not the enforcement boundary.
+
+`LOCAL` retains the existing approved local HTTP/HTTPS destinations: loopback addresses,
+exact `localhost`, and the deployment-controlled `host.docker.internal` alias. Unsupported
+schemes and endpoints with userinfo, queries, or fragments remain rejected. Model HTTP
+clients disable environment proxies and redirect following, including HTTPS-to-HTTP
+downgrades. This transport constraint does not change classification authorization,
+model routing, or the separate embedding destination policy.
+
 ### Embedding provider boundary
 
 The existing embedding role remains a separate `EmbeddingClient`, without catalog

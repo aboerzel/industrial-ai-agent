@@ -297,13 +297,14 @@ def test_endpoint_regression_detects_a_matching_error_from_an_earlier_layer(
         )
 
 
-def test_known_c04_public_cloud_http_reaches_credential_bearing_transport(monkeypatch):
-    """Observe C04 with valid inputs before declaring the known expected failure."""
+def test_c04_public_cloud_http_denied_before_credential_bearing_transport(monkeypatch):
+    """Reach the real endpoint guard, then check denial and a TLS positive control."""
     configuration = create_authenticated_configuration()
     payload = configuration.model_dump(mode="json", by_alias=True)
     payload["models"][0]["base_url_env"] = "TEST_MODEL_URL"
     configuration = type(configuration).model_validate(payload)
     guard_calls = []
+    factory_calls = []
     seen = []
     original_guard = provider_adapter._validate_destination
 
@@ -331,6 +332,7 @@ def test_known_c04_public_cloud_http_reaches_credential_bearing_transport(monkey
         )
 
     def factory(**kwargs):
+        factory_calls.append(kwargs["base_url"])
         kwargs["http_client"].close()
         kwargs["http_client"] = httpx.Client(
             transport=httpx.MockTransport(transport),
@@ -340,13 +342,12 @@ def test_known_c04_public_cloud_http_reaches_credential_bearing_transport(monkey
         return OpenAI(**kwargs)
 
     monkeypatch.setattr(provider_adapter, "_validate_destination", guard)
+    environment = {
+        "TEST_MODEL_URL": "http://provider.invalid/v1",
+        "CLOUD_LLM_API_KEY": "synthetic-test-only-key",
+    }
     adapter = OpenAICompatibleLLMClient(
-        configuration,
-        environment={
-            "TEST_MODEL_URL": "http://provider.invalid/v1",
-            "CLOUD_LLM_API_KEY": "synthetic-test-only-key",
-        },
-        client_factory=factory,
+        configuration, environment=environment, client_factory=factory
     )
     client = CapabilityCheckedLLMClient(
         EgressCheckedLLMClient(adapter, configuration, DataClassification.PUBLIC),
@@ -358,13 +359,18 @@ def test_known_c04_public_cloud_http_reaches_credential_bearing_transport(monkey
         messages=(LLMMessage(role=MessageRole.USER, content="SYNTHETIC"),)
     )
     try:
-        assert client.chat(ModelId("local_quality"), request).text == "SYNTHETIC"
+        with pytest.raises(PermissionError) as denied:
+            client.chat(ModelId("local_quality"), request)
+        assert type(denied.value) is PermissionError
         assert guard_calls == [ExecutionZone.PUBLIC_CLOUD]
-        assert seen == [("http", True)]
-        # Only the fully observed C04 condition becomes XFAIL; setup/guard errors fail.
-        pytest.xfail(
-            "Known C04: PUBLIC_CLOUD permits credential-bearing HTTP; synthetic MockTransport only"
-        )
+        assert factory_calls == seen == []
+
+        # Same request/model/classification; only the endpoint scheme changes.
+        environment["TEST_MODEL_URL"] = "https://provider.invalid/v1"
+        assert client.chat(ModelId("local_quality"), request).text == "SYNTHETIC"
+        assert guard_calls == [ExecutionZone.PUBLIC_CLOUD] * 2
+        assert factory_calls == ["https://provider.invalid/v1"]
+        assert seen == [("https", True)]
     finally:
         adapter.close()
 

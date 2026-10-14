@@ -226,6 +226,8 @@ def _validate_destination(base_url: str, zone: ExecutionZone) -> None:
         raise ValueError("Invalid model endpoint")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("Invalid model endpoint")
+    if zone is ExecutionZone.PUBLIC_CLOUD and parsed.scheme != "https":
+        raise PermissionError("Public cloud model endpoint must use HTTPS")
     if zone is ExecutionZone.LOCAL:
         host = parsed.hostname.casefold()
         try:
