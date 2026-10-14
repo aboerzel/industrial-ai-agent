@@ -784,7 +784,11 @@ ADR-016  Observability, tracing, metrics, and telemetry security
 ADR-017  Automated root-cause analysis evidence and reasoning boundaries
 ADR-018  Physical device integration and Closed-Loop Recovery
 ADR-019  Model Catalog, assignments, and execution policy
+ADR-020  Deterministic Investigation Evidence Requirements
 ```
+
+See [ADR-020](docs/decisions/ADR-020-deterministic-investigation-evidence-requirements.md)
+for the current deterministic investigation evidence requirements.
 
 Future ADRs should be introduced only when the corresponding architectural decision
 becomes necessary and sufficiently concrete.
