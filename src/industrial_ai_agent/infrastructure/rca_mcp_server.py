@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from functools import partial
 from math import isfinite
 from pathlib import Path
@@ -302,6 +302,7 @@ def create_rca_mcp_server(
     access_control: McpHttpAccessControl | None = None,
     telemetry: Telemetry | None = None,
     reasoning_max_concurrency: int = 4,
+    close_provider: Callable[[], None] | None = None,
 ) -> MCPServer:
     """Expose one bounded projection over the existing deterministic RCA service."""
     workers = _ReasoningWorkers(reasoning_max_concurrency)
@@ -315,6 +316,8 @@ def create_rca_mcp_server(
             yield {}
         finally:
             await workers.close()
+            if close_provider is not None:
+                await anyio.to_thread.run_sync(close_provider)
 
     server = MCPServer(
         name=RCA_MCP_SERVER_NAME,
@@ -428,7 +431,25 @@ def create_secure_rca_mcp_server(*, telemetry: Telemetry | None = None) -> MCPSe
         llm=_create_langfuse_evidence_adapter(),
     )
     analysis_service = RcaAnalysisService(collector, DefaultDeterministicRcaAnalyzer())
-    reasoner = _create_rca_reasoner(telemetry, session_factory)
+    provider_resources = ExitStack()
+    try:
+        reasoner = _create_rca_reasoner(
+            telemetry, session_factory, owned_resources=provider_resources
+        )
+        return _create_secure_rca_server(
+            analysis_service, reasoner, telemetry, provider_resources.close
+        )
+    except BaseException:
+        provider_resources.close()
+        raise
+
+
+def _create_secure_rca_server(
+    analysis_service: RcaAnalysisService,
+    reasoner: RcaReasoner | None,
+    telemetry: Telemetry | None,
+    close_provider: Callable[[], None],
+) -> MCPServer:
     server: MCPServer
 
     async def listed_tools() -> list[Any]:
@@ -443,6 +464,7 @@ def create_secure_rca_mcp_server(*, telemetry: Telemetry | None = None) -> MCPSe
         reasoner=reasoner,
         access_control=access_control,
         telemetry=telemetry,
+        close_provider=close_provider,
     )
     return server
 
@@ -485,6 +507,8 @@ def _create_langfuse_evidence_adapter() -> LangfuseRcaEvidenceAdapter | None:
 def _create_rca_reasoner(
     telemetry: Telemetry | None,
     session_factory: PostgreSqlSessionFactory,
+    *,
+    owned_resources: ExitStack,
 ) -> RcaReasoner | None:
     """Compose the optional reasoner through the established routing/egress boundary."""
     try:
@@ -497,6 +521,7 @@ def _create_rca_reasoner(
             transport=DeadlineHTTPTransport(), trust_env=False, follow_redirects=False
         ),
     )
+    owned_resources.callback(adapter.close)
     authorizer = ModelExecutionAuthorizer()
     resolver = ModelResolutionService(
         catalog=configuration,

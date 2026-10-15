@@ -2,9 +2,11 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from ipaddress import ip_address
+from threading import Condition, Lock
 from typing import Any, Self
 from urllib.parse import urlsplit
 
@@ -83,6 +85,11 @@ class OpenAICompatibleLLMClient:
         self._client_factory = client_factory
         self._http_client_factory = http_client_factory
         self._clients: dict[str, Any] = {}
+        self._http_clients: dict[str, httpx.Client] = {}
+        self._lifecycle = Condition(Lock())
+        self._active_requests = 0
+        self._closing = False
+        self._closed = False
 
     def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
         profile_config = self._configuration.get_model_config(model_id.value)
@@ -92,7 +99,12 @@ class OpenAICompatibleLLMClient:
             profile_config.execution_zone,
             profile_config.max_data_classification,
         )
-        client = self._get_client(model_id)
+        with self._client_for_request(model_id) as client:
+            return self._chat(client, profile_config, request)
+
+    def _chat(
+        self, client: Any, profile_config: ModelConfig, request: LLMRequest
+    ) -> LLMResponse:
         parameters: dict[str, Any] = {
             "model": _resolve_configured_value(
                 profile_config.provider_model,
@@ -181,9 +193,28 @@ class OpenAICompatibleLLMClient:
         )
 
     def close(self) -> None:
-        for client in self._clients.values():
-            client.close()
-        self._clients.clear()
+        with self._lifecycle:
+            if self._closed:
+                return
+            if self._closing:
+                self._lifecycle.wait_for(lambda: self._closed)
+                return
+            self._closing = True
+            try:
+                self._lifecycle.wait_for(lambda: self._active_requests == 0)
+                with ExitStack() as cleanup:
+                    seen = set()
+                    for key, client in self._clients.items():
+                        cleanup.callback(_close_http_client, self._http_clients[key])
+                        if id(client) not in seen:
+                            seen.add(id(client))
+                            cleanup.callback(client.close)
+            finally:
+                self._clients.clear()
+                self._http_clients.clear()
+                self._closed = True
+                self._closing = False
+                self._lifecycle.notify_all()
 
     def __enter__(self) -> Self:
         return self
@@ -192,6 +223,24 @@ class OpenAICompatibleLLMClient:
         self.close()
 
     def _get_client(self, model_id: ModelId) -> Any:
+        with self._lifecycle:
+            return self._get_client_locked(model_id)
+
+    @contextmanager
+    def _client_for_request(self, model_id: ModelId) -> Iterator[Any]:
+        with self._lifecycle:
+            client = self._get_client_locked(model_id)
+            self._active_requests += 1
+        try:
+            yield client
+        finally:
+            with self._lifecycle:
+                self._active_requests -= 1
+                self._lifecycle.notify_all()
+
+    def _get_client_locked(self, model_id: ModelId) -> Any:
+        if self._closing or self._closed:
+            raise RuntimeError("Provider client adapter is closed")
         if model_id.value not in self._clients:
             profile_config = self._configuration.get_model_config(model_id.value)
             base_url = _resolve_configured_value(
@@ -200,20 +249,28 @@ class OpenAICompatibleLLMClient:
                 self._environment,
             )
             _validate_destination(base_url, profile_config.execution_zone)
-            self._clients[model_id.value] = self._client_factory(
-                api_key=self._resolve_api_key(profile_config),
-                base_url=base_url,
-                http_client=(
-                    self._http_client_factory()
-                    if self._http_client_factory is not None
-                    else httpx.Client(trust_env=False, follow_redirects=False)
-                ),
-                # Let the application classify a provider limit immediately. The
-                # OpenAI SDK otherwise retries 429 responses with backoff inside
-                # the bounded Agent execution deadline.
-                max_retries=_SDK_MAX_RETRIES,
-                timeout=_SDK_TIMEOUT_SECONDS,
+            api_key = self._resolve_api_key(profile_config)
+            http_client = (
+                self._http_client_factory()
+                if self._http_client_factory is not None
+                else httpx.Client(trust_env=False, follow_redirects=False)
             )
+            try:
+                client = self._client_factory(
+                    api_key=api_key,
+                    base_url=base_url,
+                    http_client=http_client,
+                    # Let the application classify a provider limit immediately. The
+                    # OpenAI SDK otherwise retries 429 responses with backoff inside
+                    # the bounded Agent execution deadline.
+                    max_retries=_SDK_MAX_RETRIES,
+                    timeout=_SDK_TIMEOUT_SECONDS,
+                )
+            except BaseException:
+                _close_http_client(http_client)
+                raise
+            self._clients[model_id.value] = client
+            self._http_clients[model_id.value] = http_client
         return self._clients[model_id.value]
 
     def _resolve_api_key(self, profile_config: ModelConfig) -> str:
@@ -227,6 +284,11 @@ class OpenAICompatibleLLMClient:
         if not api_key:
             raise ValueError(f"Missing API key environment variable: {api_key_env}")
         return api_key
+
+
+def _close_http_client(client: httpx.Client) -> None:
+    if not client.is_closed:
+        client.close()
 
 
 def _validate_destination(base_url: str, zone: ExecutionZone) -> None:

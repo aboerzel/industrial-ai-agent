@@ -322,4 +322,30 @@ sequenceDiagram
     HTTP-->>Worker: Response or transport timeout; close transport
     Worker-->>Jobs: Actual completion; reclaim capacity
     Jobs-->>Request: Publish only while caller still awaits
+    Note over Jobs,Worker: Shutdown stops admission and drains owned jobs
+    Jobs->>Worker: After drain, close shared provider adapter
 ```
+
+### Shared Provider Client Ownership
+
+The RCA composition owns the shared provider adapter and explicitly closes it after
+the existing C02 worker drain. Externally injected reasoners/clients remain owned by
+their caller unless a close callback is explicitly supplied. Worker admission, capacity,
+deadlines and cancellation semantics are unchanged.
+
+The adapter lazily creates one managed SDK client per stable catalog model ID, not per
+endpoint. A thread condition serializes cache lookup, construction and publication;
+different models sharing an endpoint retain distinct configuration and credentials.
+The condition is released before provider calls, so warm operations can overlap.
+Active chat calls retain a lifecycle lease. Shutdown rejects new work and waits for
+initialization and active calls before closing clients, preventing publication or use
+after shutdown. Close is idempotent and terminal; a new adapter is required for another
+lifetime. Optional unused models remain lazy and require no startup credentials.
+
+SDK and HTTPX factories transfer ownership of fresh resources to the adapter. The real
+SDK closes its injected HTTPX client; the adapter also tracks that transport explicitly
+and closes it if the SDK did not. Failed SDK construction closes the already-created
+HTTPX client without publishing a partial cache entry; a later ordinary call may try
+construction again. Cleanup attempts every owned resource even if one close fails.
+No ownership depends on finalizers. R01 authorization remains before client acquisition,
+and existing destination/TLS checks remain before credentials and construction.
