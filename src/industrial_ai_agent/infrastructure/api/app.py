@@ -259,7 +259,7 @@ def create_app(
         response_model=tuple[ModelAssignmentResponse, ...],
         summary="List persistent model assignments",
     )
-    async def list_model_assignments(
+    def list_model_assignments(
         request: Request,
     ) -> tuple[ModelAssignmentResponse, ...]:
         _require_model_admin(request)
@@ -302,7 +302,7 @@ def create_app(
         },
         summary="Persist one model assignment by stable model ID",
     )
-    async def assign_model(
+    def assign_model(
         payload: AssignModelRequest, request: Request
     ) -> ModelAssignmentResponse:
         _require_model_admin(request)

@@ -9,6 +9,7 @@ from time import perf_counter
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
+import anyio
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.context import Context
@@ -137,7 +138,8 @@ def create_observability_mcp_server(
         run_id: RunIdentifier, ctx: Context | None = None
     ) -> dict[str, Any]:
         await authorize_run(run_id, ctx, "get_run_trace")
-        return _invoke_tool(
+        return await anyio.to_thread.run_sync(
+            _invoke_tool,
             telemetry,
             "get_run_trace",
             lambda: evidence_service.get_run_trace(run_id).model_dump(mode="json"),
@@ -155,7 +157,8 @@ def create_observability_mcp_server(
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         await authorize_run(trace_id, ctx, "get_trace_logs")
-        return _invoke_tool(
+        return await anyio.to_thread.run_sync(
+            _invoke_tool,
             telemetry,
             "get_trace_logs",
             lambda: {
@@ -178,7 +181,8 @@ def create_observability_mcp_server(
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         await authorize_run(run_or_trace_id, ctx, "get_run_metrics")
-        return _invoke_tool(
+        return await anyio.to_thread.run_sync(
+            _invoke_tool,
             telemetry,
             "get_run_metrics",
             lambda: evidence_service.get_run_metrics(run_or_trace_id).model_dump(
@@ -220,7 +224,8 @@ def create_observability_mcp_server(
         run_id: RunIdentifier, ctx: Context | None = None
     ) -> dict[str, Any]:
         await authorize_run(run_id, ctx, "investigate_run")
-        return _invoke_tool(
+        return await anyio.to_thread.run_sync(
+            _invoke_tool,
             telemetry,
             "investigate_run",
             lambda: evidence_service.investigate_run(run_id),

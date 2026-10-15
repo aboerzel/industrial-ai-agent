@@ -149,7 +149,10 @@ This UI-only presentation step does not change classifications, clearance, API c
 telemetry, model routing, or the agent loop.
 
 When a response is `waiting_for_approval`, the UI renders the action, summary,
-arguments, run ID, and status. It disables both decision buttons before calling the
+bounded arguments, run ID, and status. Action, station, ticket description, and hardware
+device/operation fields come from the authoritative approval DTO and are rendered as
+text independently of the model's display summary. Hidden arguments are not exposed.
+It disables both decision buttons before calling the
 resume API through `frontend/js/api.js`, so a double click cannot issue a second
 browser action. Browser requests remain same-origin and carry an HttpOnly demo session cookie, never a
 service bearer token. Nginx strips Authorization and proxies cookies; FastAPI resolves

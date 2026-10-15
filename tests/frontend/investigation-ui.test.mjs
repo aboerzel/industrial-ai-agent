@@ -1229,6 +1229,49 @@ for (const decision of ["approve", "reject"]) {
   }
 }
 
+test("approval controls expose authoritative action and target independently of summary prose", async (t) => {
+  for (const action of ["create_maintenance_ticket", "execute_reference_calibration"]) {
+    await t.test(action, async () => {
+      const generation = "16b7f5db-7f3f-4d1a-aa1e-80678afbd057";
+      const approval = {
+        approval_execution_id: generation, action,
+        summary: "Routine review of the requested station.",
+        arguments: { station_id: "S02", summary: "<img src=x onerror=alert(1)>", device_id: "S02-ENCODER", operation_type: "reference_calibration" },
+        classification: "CONFIDENTIAL", model_id: "local_quality",
+        status: "waiting_for_approval", created_at: "2026-10-15T10:00:00Z",
+      };
+      const investigation = structuredClone(INVESTIGATION);
+      investigation.turns = [{ ...turn(FIRST_RUN_ID, "Investigate S04.", null, []), status: "waiting_for_approval", approval_request: approval }];
+      investigation.run_count = 1;
+      investigation.status = "waiting_for_approval";
+      const decisions = [];
+      const { document, restoreFetch } = await loadApp((url, options = {}) => {
+        if (String(url).endsWith("/resume")) {
+          decisions.push(JSON.parse(options.body));
+          return jsonResponse(runResponse());
+        }
+        return jsonResponse(investigation);
+      }, { investigationId: INVESTIGATION_ID, userClearance: "CONFIDENTIAL", responseLanguage: "EN" });
+      try {
+        const card = document.querySelector(".approval-card");
+        assert.equal(card.querySelector('[data-approval-field="station_id"]').textContent, "S02");
+        assert.match(card.querySelector('[data-approval-field="action"]').textContent, action === "create_maintenance_ticket" ? /maintenance ticket/i : /reference calibration/i);
+        assert.equal(card.querySelector('[data-approval-field="run_id"]').textContent, FIRST_RUN_ID);
+        if (action === "create_maintenance_ticket") {
+          assert.equal(card.querySelector('[data-approval-field="summary"]').textContent, approval.arguments.summary);
+          assert.equal(card.querySelectorAll("img").length, 0);
+        } else {
+          assert.equal(card.querySelector('[data-approval-field="device_id"]').textContent, "S02-ENCODER");
+          assert.equal(card.querySelector('[data-approval-field="operation_type"]').textContent, "reference_calibration");
+        }
+        card.querySelector("button").click();
+        await settle();
+        assert.deepEqual(decisions, [{ decision: "approve", approval_execution_id: generation }]);
+      } finally { restoreFetch(); }
+    });
+  }
+});
+
 async function loadApp(fetchImplementation = null, activeInvestigation = null) {
   const dom = new JSDOM(await readFile(new URL("../../frontend/index.html", import.meta.url), "utf8"), { url: "http://localhost:8080" });
   dom.window.document.querySelector("#composer-message").value = "Investigate P4711 at S04.";

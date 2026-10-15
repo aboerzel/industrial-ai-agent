@@ -119,6 +119,15 @@ decides eligible profiles and enforces the final data-to-model check. `RESTRICTE
 can only use approved local profiles; a configured public profile can be eligible only
 up to its approved maximum classification.
 
+Product visibility does not authorize its referenced stations. Product list, overview
+and history project an event only when both the event and its station are visible in
+the caller's RLS transaction. Hidden relationships emit no station or fault references
+and no hidden counts. The product remains available independently; if no eligible events
+remain, history/passed stations are empty and all latest-event fields are null. Otherwise
+history preserves chronological order and latest fields describe the last eligible event.
+Projection classification is the maximum of the product, eligible events and visible
+stations, never a label or identifier recovered through privileged reads.
+
 ## Model Selection
 
 `MANUAL` model configuration resolves one persisted stable `model_id`. `AUTO` configuration
@@ -312,7 +321,7 @@ flowchart LR
     Codex --> Observability["observability_mcp\ndistributed telemetry"]
     Runtime --> Runs["agent_runtime.agent_runs\nPostgreSQL RLS"]
     Observability -->|run visibility before telemetry| Runs
-    Observability --> Backends["Tempo / Loki / Prometheus"]
+    Observability -->|bounded AnyIO worker| Backends["Tempo / Loki / Prometheus"]
 ```
 
 Codex or another consumer may correlate returned evidence by `run_id`; neither MCP
@@ -324,6 +333,12 @@ visibility rule and the caller's RLS context before backend retrieval. Direct tr
 IDs require a trusted internal run binding and otherwise fail closed; the deployed
 composition currently has no such mapping. Run-ID `investigate_run` remains available
 for authorized correlated evidence. Service-health aggregates need no run access.
+
+After authorization, synchronous observability backend calls run in the bounded
+AnyIO worker pool. Model-assignment API reads and writes use FastAPI's synchronous
+endpoint dispatch into that same managed pool. Workers own each complete synchronous
+operation, including its database session; slow I/O does not block the event loop.
+Cancellation does not abandon an already dispatched worker or automatically retry a write.
 
 `rca_mcp` is a separate read-only consumer-facing RCA composition, not a new agent
 path. It directly wires `RcaAnalysisService` to the request-scoped RLS runtime adapter
@@ -651,7 +666,7 @@ flowchart LR
     DSC -->|"query + limit"| KR
     PHM -.->|"implements"| PHR
     MSM -.->|"implements"| MSR
-    RLS --> PHM
+    RLS -->|visible events + stations only| PHM
     RLS --> MSM
     KMCP --> SC["Authenticated server-side SecurityContext"]
     SC --> Catalog["PostgreSQL document catalog query"]

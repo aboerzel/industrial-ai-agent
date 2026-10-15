@@ -93,21 +93,10 @@ class PostgreSqlProductHistoryRepository:
             )
             if product is None:
                 return None
-            events = tuple(
-                session.scalars(
-                    select(ProductEventRecord)
-                    .options(joinedload(ProductEventRecord.station))
-                    .where(ProductEventRecord.product_id == product.id)
-                    .order_by(ProductEventRecord.event_at)
-                )
-            )
-        classification = max(
-            DataClassification(product.classification),
-            *(DataClassification(event.classification) for event in events),
-        )
+            events = _visible_product_events(session, product)
         return ProductHistory(
             product_id=ProductId(product.product_code),
-            classification=classification,
+            classification=_product_classification(product, events),
             steps=tuple(
                 ProductionStep(
                     station_id=StationId(event.station.code),
@@ -116,6 +105,7 @@ class PostgreSqlProductHistoryRepository:
                     error_code=event.error_code,
                 )
                 for event in events
+                if event.station is not None
             ),
         )
 
@@ -215,11 +205,13 @@ class PostgreSqlFactoryDiscoveryRepository:
             )
             if product is None:
                 return None
-            events = self._product_events(session, product)
+            events = _visible_product_events(session, product)
             return ProductOverview(
                 product=self._product_discovery(session, product, events),
                 passed_station_ids=tuple(
-                    StationId(event.station.code) for event in events
+                    StationId(event.station.code)
+                    for event in events
+                    if event.station is not None
                 ),
             )
 
@@ -250,33 +242,50 @@ class PostgreSqlFactoryDiscoveryRepository:
         events: tuple[ProductEventRecord, ...] | None = None,
     ) -> ProductDiscovery:
         visible_events = (
-            events if events is not None else self._product_events(session, product)
+            events if events is not None else _visible_product_events(session, product)
         )
         latest = visible_events[-1] if visible_events else None
-        classifications = [DataClassification(product.classification)]
-        classifications.extend(
-            DataClassification(event.classification) for event in visible_events
-        )
         return ProductDiscovery(
             product_id=ProductId(product.product_code),
-            latest_station_id=StationId(latest.station.code) if latest else None,
+            latest_station_id=(
+                StationId(latest.station.code)
+                if latest is not None and latest.station is not None
+                else None
+            ),
             latest_status=ProductionStepStatus(latest.status) if latest else None,
             latest_error_code=latest.error_code if latest else None,
-            classification=max(classifications),
+            classification=_product_classification(product, visible_events),
         )
 
-    @staticmethod
-    def _product_events(
-        session: Session, product: ProductRecord
-    ) -> tuple[ProductEventRecord, ...]:
-        return tuple(
-            session.scalars(
-                select(ProductEventRecord)
-                .options(joinedload(ProductEventRecord.station))
-                .where(ProductEventRecord.product_id == product.id)
-                .order_by(ProductEventRecord.event_at)
-            )
+
+def _visible_product_events(
+    session: Session, product: ProductRecord
+) -> tuple[ProductEventRecord, ...]:
+    """Project only events whose independently RLS-filtered station is visible."""
+    return tuple(
+        event
+        for event in session.scalars(
+            select(ProductEventRecord)
+            .options(joinedload(ProductEventRecord.station))
+            .where(ProductEventRecord.product_id == product.id)
+            .order_by(ProductEventRecord.event_at)
         )
+        if event.station is not None
+    )
+
+
+def _product_classification(
+    product: ProductRecord, events: tuple[ProductEventRecord, ...]
+) -> DataClassification:
+    return max(
+        [DataClassification(product.classification)]
+        + [DataClassification(event.classification) for event in events]
+        + [
+            DataClassification(event.station.classification)
+            for event in events
+            if event.station is not None
+        ]
+    )
 
 
 def _distinct_product_ids(

@@ -8,7 +8,7 @@ This is not a chatbot demo. The model is a replaceable component inside determin
 
 ![Industrial AI Agent browser demo showing a classified troubleshooting investigation](docs/assets/Troubleshooting-1.png)
 
-*The local browser demo uses a server-authenticated maximum clearance and a selectable lower working clearance, and shows the resulting classified run, structured investigation, evidence-based findings, clearly non-confirmed likely-cause hypothesis, and recommended investigation actions.*
+*Historical screenshot: the former working-clearance selector has been removed. The current browser demo uses server-managed Demo Auth sessions with server-derived clearance and roles. Investigations show classified runs, evidence-based findings, unconfirmed likely-cause hypotheses, and recommended investigation actions.*
 
 ## Why Industrial AI Needs More Than an LLM
 
@@ -24,7 +24,7 @@ For the full industrial-value and scope statement, see [Capabilities and Industr
 
 ## Highlights
 
-- **Quality and reliability engineering:** Twelve registered browser journeys cover declared multi-step, reference, clearance, investigation and export assertions in German and English. PASS requires every required assertion to execute and pass; optional and manual-only claims remain separate. Synthetic browser fixtures validate these assertion paths without models. The Real-Model suite is deliberately manual and uses Local Qwen only; its current coverage and known document-download limitation are described in [Browser E2E Journeys](docs/learning/browser-e2e-journeys.md).
+- **Quality and reliability engineering:** Twelve registered browser journeys cover declared multi-step, reference, clearance, investigation and export assertions in German and English. PASS requires every required assertion to execute and pass; optional and manual-only claims remain separate. Synthetic browser fixtures validate these assertion paths without models. The Real-Model suite is deliberately manual and uses Local Qwen only; its current coverage and document-download assertions are described in [Browser E2E Journeys](docs/learning/browser-e2e-journeys.md).
 - **End-to-end security and data classification:** Every piece of information keeps its protection level across the system, from the request through tools and the model to the stored investigation and PDF report. Follow-up questions and clicks cannot bypass those boundaries, and higher-protected data does not become visible simply because a conversation continues.
 - **Controlled model selection and execution:** Model choice is transparent and predictable. A central catalog and persistent assignments select models that fit the task, the data, and the required capabilities; security checks always take precedence. The system never switches silently to another provider.
 - **Authenticated MCP capabilities:** The agent does not receive unrestricted backend access. It works through authenticated MCP services with clearly bounded operations for Factory, Knowledge, and Hardware, while Runtime, Observability, and RCA support diagnostics and development. A service is only considered ready when MCP and its required tools actually work, not merely because a port is open.

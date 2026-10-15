@@ -38,3 +38,27 @@ def test_realistic_provider_secret_pattern_is_detected_even_in_test_files():
     assert CHECKER["suspicious"](
         "tests/unit/synthetic.py", 'key="' + "sk-" + "A" * 32 + '"'
     )
+
+
+def test_scanner_decodes_git_diff_as_utf8_without_hiding_credential_matches(
+    monkeypatch,
+):
+    from subprocess import CompletedProcess
+
+    scan = CHECKER["scan_changes"]
+    encodings = []
+
+    def git_output(command, **kwargs):
+        encodings.append(kwargs.get("encoding"))
+        output = (
+            '+++ b/docs/synthetic.md\n+“Unicode”\n+password="demo-public"\n'
+            if command[1] == "diff"
+            else ""
+        ).encode("utf-8")
+        return CompletedProcess(
+            command, 0, stdout=output.decode(kwargs.get("encoding") or "cp1252")
+        )
+
+    monkeypatch.setattr(scan.__globals__["subprocess"], "run", git_output)
+    assert scan() == ["docs/synthetic.md"]
+    assert encodings == ["utf-8", "utf-8"]

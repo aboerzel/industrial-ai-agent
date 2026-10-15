@@ -13,6 +13,7 @@ from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
 from industrial_ai_agent.agent.troubleshooting_run_service import (
     PendingApproval,
     RunExecution,
+    _execution_from_state,
 )
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.demo_security import (
@@ -47,6 +48,19 @@ class SyntheticResume:
 
     async def start(self, message, *, run_id, **kwargs):
         self.resumes[run_id] = 0
+        if message == "Investigate P4711.":
+            return SimpleNamespace(name="local_quality"), _execution_from_state(
+                {},
+                {
+                    "action": "create_maintenance_ticket",
+                    "action_id": "synthetic-neutral-summary",
+                    "approval_execution_id": str(uuid4()),
+                    "details": {
+                        "station_id": "S02",
+                        "summary": "Review routine alignment.",
+                    },
+                },
+            )
         return SimpleNamespace(name="local_quality"), approval("S04")
 
     async def resume(self, *, run_id, **kwargs):

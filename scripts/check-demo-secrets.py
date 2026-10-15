@@ -73,6 +73,7 @@ def scan_changes() -> list[str]:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     ).stdout
     path = ""
@@ -90,6 +91,7 @@ def scan_changes() -> list[str]:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     ).stdout.splitlines()
     for path in new_files:

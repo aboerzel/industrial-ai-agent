@@ -64,6 +64,25 @@ async function staleClick(page, a, b, decision, language = "EN") {
   expect(current.approval_request.approval_execution_id).toBe(b.approval_request.approval_execution_id);
 }
 
+test("approval displays the actual action and target even when the summary omits them", async ({ page }) => {
+  await page.goto(origin);
+  await expect(page.locator("#current-user")).toHaveText("demo-public");
+  await switchDemoUser(page, "demo-confidential");
+  await page.locator("#composer-message").fill("Investigate P4711.");
+  const created = page.waitForResponse(r => r.url().endsWith("/api/v1/runs") && r.request().method() === "POST");
+  await page.locator("#composer-form").evaluate(form => form.requestSubmit());
+  const pending = await (await created).json();
+  const card = page.locator(".approval-card");
+  await expect(card.locator('[data-approval-field="action"]')).toContainText("maintenance ticket");
+  await expect(card.locator('[data-approval-field="station_id"]')).toHaveText("S02");
+  await expect(card.locator('[data-approval-field="summary"]')).toHaveText("Review routine alignment.");
+  const decided = page.waitForResponse(r => r.url().endsWith("/resume"));
+  await page.getByRole("button", { name: "Reject", exact: true }).click();
+  const response = await decided;
+  expect(response.status()).toBe(200);
+  expect(response.request().postDataJSON()).toEqual({ decision: "reject", approval_execution_id: pending.approval_request.approval_execution_id });
+});
+
 for (const decision of ["approve", "reject"]) {
   test(`multi-tab stale ${decision} refreshes the proposal and requires a new decision`, async ({ page, context }) => {
     const a = await start(page);

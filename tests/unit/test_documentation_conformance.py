@@ -14,6 +14,14 @@ from industrial_ai_agent.agent.model_selection import (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_readme_marks_the_removed_clearance_selector_as_historical() -> None:
+    documentation = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    caption = documentation.split("*Historical screenshot:", 1)[1].split("*", 1)[0]
+    assert "selector has been removed" in caption
+    assert "server-managed Demo Auth sessions" in caption
+    assert "known document-download limitation" not in documentation
+
+
 def test_current_architecture_fact_table_matches_core_selection_and_budget() -> None:
     documentation = (PROJECT_ROOT / "docs/architecture/overview.md").read_text(
         encoding="utf-8"

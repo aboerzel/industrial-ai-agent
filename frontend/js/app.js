@@ -792,6 +792,29 @@ function renderApproval(turn) {
   title.textContent = "Approval required";
   const summary = document.createElement("p");
   summary.textContent = approval.summary;
+  const details = document.createElement("dl");
+  details.className = "approval-details";
+  const german = responseLanguage.value === "DE";
+  const field = (key, label, value) => {
+    if (typeof value !== "string" || !value) return;
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.dataset.approvalField = key;
+    description.textContent = value;
+    details.append(term, description);
+  };
+  const actionLabels = {
+    create_maintenance_ticket: german ? "Wartungsticket erstellen" : "Create maintenance ticket",
+    execute_reference_calibration: german ? "Referenzkalibrierung ausführen" : "Execute reference calibration",
+  };
+  field("action", german ? "Aktion" : "Action", actionLabels[approval.action] ?? approval.action);
+  field("station_id", "Station", approval.arguments.station_id);
+  field("summary", german ? "Ticketbeschreibung" : "Ticket description", approval.arguments.summary);
+  field("device_id", german ? "Gerät" : "Device", approval.arguments.device_id);
+  field("operation_type", german ? "Vorgang" : "Operation", approval.arguments.operation_type);
+  field("run_id", "Run", turn.run_id);
+  field("status", "Status", turn.status);
   const approve = document.createElement("button");
   approve.type = "button";
   approve.textContent = "Approve";
@@ -801,7 +824,7 @@ function renderApproval(turn) {
   reject.className = "reject-button";
   reject.textContent = "Reject";
   reject.addEventListener("click", () => decide(turn.run_id, "reject", approval.approval_execution_id, section));
-  section.append(title, summary, approve, reject);
+  section.append(title, summary, details, approve, reject);
   return section;
 }
 

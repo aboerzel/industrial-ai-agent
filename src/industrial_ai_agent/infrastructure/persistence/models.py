@@ -75,7 +75,10 @@ class ProductEventRecord(Base):
     error_code: Mapped[str | None] = mapped_column(String)
     classification: Mapped[int] = mapped_column(SmallInteger)
     product: Mapped[ProductRecord] = relationship(back_populates="events")
-    station: Mapped[StationRecord] = relationship(back_populates="product_events")
+    # RLS can hide the related row despite the non-null physical foreign key.
+    station: Mapped[StationRecord | None] = relationship(
+        back_populates="product_events"
+    )
 
 
 class MachineStateRecord(Base):
