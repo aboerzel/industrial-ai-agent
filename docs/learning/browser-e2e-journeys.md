@@ -54,7 +54,12 @@ The fixture configuration is separate from the live E2E configuration, needs no 
 and denies browser requests outside its ephemeral loopback server. The Demo Auth fixture
 uses the real FastAPI session/authorization code with synthetic run services and in-memory
 data; other fixtures supply synthetic HTTP responses. They verify UI/assertion paths and
-that session implementation, not live Compose/Nginx, PostgreSQL RLS, MCP or model choices.
+that session implementation, not live Compose/Nginx or model choices. The separate
+FC03 fixture also exercises real PostgreSQL RLS, Factory MCP handlers, the agent and
+durable run-result reads with a fake model. Set `FACTORY_DATABASE_URL` to a migrated,
+seeded disposable loopback database named `verification_*`, using its nonprivileged
+application role, to run those cases; they explicitly skip when it is absent. Never
+point the fixture at persistent demo data.
 
 `frontend/package.json` registers `test:e2e:fixtures` through
 `frontend/playwright.fixtures.config.mjs`, which discovers `tests/e2e/fixtures/*.spec.mjs`.
@@ -71,6 +76,7 @@ npm run test:e2e:fixtures -- --list
 | R03 multi-tab stale approve/reject, fresh-decision refresh, old BFCache controls and preserved requests after identity switch | `r03-approval.spec.mjs` |
 | Journey assertion controls, context transitions, document bytes/filename, PDF and denied documents | `journey-evidence.spec.mjs` |
 | Active document MIME sanitization before Blob publication | `document-mime.spec.mjs` |
+| FC03 exact product inventory for all five identities in DE/EN, narrative fallback and bounded references; disposable PostgreSQL required | `fc03-discovery.spec.mjs` |
 
 The configured users are `demo-public`, `demo-internal`, `demo-confidential`,
 `demo-restricted` and `demo-admin`; see the [demo visibility matrix](../demo/demo-user-visibility.md).

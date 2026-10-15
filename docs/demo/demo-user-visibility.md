@@ -27,6 +27,15 @@ Start a **new chat** for each check. Switch users in the header account menu; no
 3. In a new chat ask **“S07”**: visible for demo-restricted; neutral unavailable for public, internal, confidential and admin.
 4. Configuration is enabled for demo-admin and disabled for demo-restricted. Admin does not increase data clearance.
 
+Explicit product discovery presents the complete currently authorized product set,
+in Factory product-ID order, from the typed `list_products` observation. Each product
+keeps its available latest status; an unavailable optional status remains unknown.
+This inventory is rendered deterministically in the answer, even when the model
+mentions fewer products or its narrative is replaced by the safe fallback. Trusted
+reference presentation remains separately bounded to 12 identifiers; that budget is
+not an inventory limit. The existing 8,000-character answer bound remains in force:
+larger inventories explicitly say that the displayed result is partial.
+
 ## Seed inventory
 
 | Classification | Stations | Products | Example document |

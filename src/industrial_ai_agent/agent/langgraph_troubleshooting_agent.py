@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import TypedDict
 
 from industrial_ai_agent.agent.agent_run import (
+    MAX_FINAL_ANSWER_LENGTH,
     MAX_TOOL_CALLS,
     AgentRunResult,
     AgentRunStatus,
@@ -83,8 +84,10 @@ from industrial_ai_agent.domain.machine_status import MachineState
 from industrial_ai_agent.domain.maintenance_ticket import (
     MAINTENANCE_TICKET_ID_PATTERN,
 )
+from industrial_ai_agent.domain.product_history import ProductionStepStatus
 from industrial_ai_agent.domain.security import effective_data_classification
 from industrial_ai_agent.tools.documentation_search import DocumentationSearchResult
+from industrial_ai_agent.tools.factory_discovery import ProductListResult
 from industrial_ai_agent.tools.machine_status import MachineStatusResult
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketProposalArguments,
@@ -775,6 +778,7 @@ class LangGraphTroubleshootingAgent:
                 ResponseLanguage(state["response_language"]),
                 self._response_language_detector,
             )
+            final_output = _with_product_inventory(final_output, state)
             final_output.require_no_action_sections()
             final_output.require_no_investigation_summary_sections()
             investigation_steps = _resolve_investigation_steps(
@@ -3048,6 +3052,82 @@ def _with_safe_narrative(
         answer=answer,
         investigation_steps=output.investigation_steps,
         next_steps=() if has_language_mismatch else output.next_steps,
+    )
+
+
+def _with_product_inventory(
+    output: FinalAgentOutput, state: CheckpointedTroubleshootingGraphState
+) -> FinalAgentOutput:
+    """Present explicit inventory from typed tool data, independently of references.
+
+    The reference budget is a presentation bound, not the product inventory. Use
+    only the current guarded observation, never model prose or earlier requests.
+    The existing answer-size bound still applies; larger inventories are explicitly
+    partial rather than silently represented as complete.
+    """
+    request = next(
+        (
+            str(message.content)
+            for message in reversed(state["messages"])
+            if isinstance(message, HumanMessage)
+        ),
+        "",
+    )
+    if resolve_demo_discovery_tool(request) != "list_products":
+        return output
+    observation = next(
+        (
+            item["observation"]
+            for item in reversed(_authorized_tool_observations(state))
+            if item["action"] == "list_products"
+        ),
+        None,
+    )
+    if not isinstance(observation, str):
+        return output
+    try:
+        inventory = ProductListResult.model_validate_json(observation)
+    except ValidationError as error:
+        raise FinalAgentOutputContractError(
+            "Invalid authorized product inventory"
+        ) from error
+    german = ResponseLanguage(state["response_language"]) is ResponseLanguage.DE
+    heading = "Autorisierte Produkte:" if german else "Authorized products:"
+    partial = (
+        "Ausgabe begrenzt; nicht alle autorisierten Produkte sind dargestellt."
+        if german
+        else "Output limited; not all authorized products are shown."
+    )
+    lines = [heading, ""]
+    seen: set[str] = set()
+    length = len(heading) + 2
+    for product in inventory.products:
+        if product.product_id in seen:
+            continue
+        if _PRODUCT_IDENTIFIER_PATTERN.fullmatch(product.product_id) is None:
+            raise FinalAgentOutputContractError("Invalid authorized product identifier")
+        seen.add(product.product_id)
+        # Status comes from the same safe projection; hidden optional relations
+        # remain unknown and never cause the visible product itself to disappear.
+        status = (
+            ProductionStepStatus(product.latest_status).value
+            if product.latest_status is not None
+            else "unbekannt"
+            if german
+            else "unknown"
+        )
+        line = f"- {product.product_id}: {status}"
+        if length + len(line) + len(partial) + 2 > MAX_FINAL_ANSWER_LENGTH:
+            lines.append(partial)
+            break
+        lines.append(line)
+        length += len(line) + 1
+    if not inventory.products:
+        lines.append(
+            "Keine autorisierten Produkte." if german else "No authorized products."
+        )
+    return FinalAgentOutput.model_validate(
+        {**output.model_dump(), "answer": "\n".join(lines)}
     )
 
 

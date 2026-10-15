@@ -20,6 +20,7 @@ MAX_NEXT_STEP_LENGTH = 500
 MAX_INVESTIGATION_STEP_FINDING_LENGTH = 1_000
 MAX_IDENTIFIER_REFERENCES = 12
 MAX_DOCUMENT_REFERENCES = 5
+MAX_FINAL_ANSWER_LENGTH = 8_000
 _FORBIDDEN_ACTION_SECTION_TITLES = frozenset(
     {
         "recommended actions",
@@ -132,7 +133,9 @@ class FinalAgentOutput(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    answer: Annotated[str, StringConstraints(min_length=1, max_length=8_000)]
+    answer: Annotated[
+        str, StringConstraints(min_length=1, max_length=MAX_FINAL_ANSWER_LENGTH)
+    ]
     investigation_steps: tuple["InvestigationStep", ...] = Field(
         default=(), max_length=MAX_TOOL_CALLS
     )
