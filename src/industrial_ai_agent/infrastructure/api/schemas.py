@@ -235,6 +235,7 @@ class DocumentReferenceResponse(BaseModel):
 class ApprovalRequestResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    approval_execution_id: UUID
     action: PublicToolName
     summary: Annotated[str, StringConstraints(min_length=1, max_length=500)]
     arguments: dict[str, JsonValue]
@@ -253,6 +254,7 @@ class ResumeRunRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     decision: ResumeDecision
+    approval_execution_id: UUID
     user_clearance: DemoUserClearance = Field(
         default=DemoUserClearance.PUBLIC,
         description=(

@@ -1189,6 +1189,46 @@ test("uses one workspace heading and accessible compact actions in the shipped p
   assert.match(index, /class="model-configuration-title-group"/);
 });
 
+for (const decision of ["approve", "reject"]) {
+  for (const language of ["EN", "DE"]) {
+    test(`stale ${decision} retains the displayed token and reloads without retry (${language})`, async () => {
+      const a = "68a6b31c-244b-4422-8f24-a3f1d89f9a5c";
+      const b = "a9c3b4fb-9a97-45de-a09a-a4e8d91bf7d2";
+      const approval = (token, station) => ({
+        approval_execution_id: token, action: "create_maintenance_ticket", summary: `Synthetic ${station}`,
+        arguments: { station_id: station }, classification: "RESTRICTED", model_id: "local_quality",
+        status: "waiting_for_approval", created_at: "2026-10-15T10:00:00Z",
+      });
+      const investigation = token => ({
+        investigation_id: INVESTIGATION_ID, created_at: "2026-10-15T10:00:00Z",
+        run_count: 1, tool_call_count: 0, status: "waiting_for_approval",
+        turns: [{ ...turn(FIRST_RUN_ID, "Synthetic request", null, [], [], 1, language),
+          status: "waiting_for_approval", approval_request: approval(token, token === a ? "S04" : "S02") }],
+      });
+      let reads = 0;
+      const decisions = [];
+      const { document, restoreFetch } = await loadApp((url, options) => {
+        if (url.endsWith("/resume")) {
+          decisions.push(JSON.parse(options.body));
+          return jsonResponse({ code: "run_not_waiting_for_approval", message: "Neutral conflict" }, 409);
+        }
+        if (url.endsWith(INVESTIGATION_ID)) return jsonResponse(investigation(reads++ === 0 ? a : b));
+        throw new Error(`Unexpected fixture request: ${url}`);
+      }, { investigationId: INVESTIGATION_ID, userClearance: "RESTRICTED", responseLanguage: language });
+      try {
+        assert.match(document.querySelector(".approval-card").textContent, /S04/);
+        document.querySelectorAll(".approval-card button")[decision === "approve" ? 0 : 1].click();
+        await settle();
+        assert.deepEqual(decisions, [{ decision, approval_execution_id: a }]);
+        assert.match(document.querySelector(".approval-card").textContent, /S02/);
+        assert.equal(document.querySelector("#error-message").textContent, language === "DE"
+          ? "Die Freigabeanforderung hat sich geändert. Bitte prüfen Sie die aktuelle Aktion erneut."
+          : "The approval request changed. Please review the current action.");
+      } finally { restoreFetch(); }
+    });
+  }
+}
+
 async function loadApp(fetchImplementation = null, activeInvestigation = null) {
   const dom = new JSDOM(await readFile(new URL("../../frontend/index.html", import.meta.url), "utf8"), { url: "http://localhost:8080" });
   dom.window.document.querySelector("#composer-message").value = "Investigate P4711 at S04.";

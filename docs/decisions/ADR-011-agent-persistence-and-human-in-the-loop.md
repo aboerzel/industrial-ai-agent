@@ -122,11 +122,33 @@ the UUID to different arguments is denied.
 ```mermaid
 flowchart LR
     R[Run] --> P[Server-generated proposal UUID]
-    P --> A[Persisted approval generation]
-    A --> C[Atomic single-use execution claim]
+    P --> H[Human sees generation G]
+    H --> U[UI retains G with displayed proposal]
+    U --> D[Approve or reject request includes G]
+    D --> V[Atomic resume guard compares current generation with G]
+    V --> A[Decision persisted for generation G]
+    A --> C[Atomic single-use execution claim for G]
     C --> K[SHA-256 of run ID and generation UUID]
     K --> T[Unique maintenance-ticket request ID]
 ```
+
+The bounded public approval DTO exposes the existing `approval_execution_id` UUID as an
+opaque concurrency token. Both approve and reject requests must include the exact UUID
+shown with that proposal; missing or malformed tokens fail closed. The browser retains
+the token with the displayed approval and never fetches a newer token to apply an old
+decision. The token is not authorization: authentication, classification visibility,
+clearance, capability permissions and execution authorization remain independent.
+
+The public run store atomically compares that expected `approval_execution_id` with the
+current pending generation while claiming the waiting run, under the same database row
+lock or in-memory lock as the decision update. A mismatch or already-decided generation
+returns a neutral HTTP 409 conflict without changing any decision or executing the graph.
+An inaccessible run retains its existing neutral denial before the generation conflict.
+The UI invalidates stale approval controls, reloads authoritative state and requires a
+new explicit decision; it never retries or transfers the old intent to the new action.
+The same UUID therefore binds human-visible proposal, decision request, persisted
+decision, execution claim and ticket idempotency. Model `action_id` remains correlation
+only; `approval_execution_id` is the authoritative approval-generation identity.
 
 The public run store atomically claims a waiting run before resuming the graph. Protected
 execution checks the exact generation and consumes it once under the database row lock

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -369,6 +369,9 @@ def test_confidential_recovery_approval_persists_reloads_and_claims_once() -> No
         claimed = asyncio.run(
             store.claim_resume(
                 run_id,
+                approval_execution_id=UUID(
+                    pending.approval_request["approval_execution_id"]
+                ),
                 decision="approve",
                 approval_clearance=DataClassification.CONFIDENTIAL,
             )

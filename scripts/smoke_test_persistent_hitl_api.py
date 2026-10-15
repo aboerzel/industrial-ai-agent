@@ -70,6 +70,7 @@ def main() -> None:
             waiting = started.json()
         _assert_waiting_for_approval(waiting)
         run_id = waiting["run_id"]
+        approval_execution_id = waiting["approval_request"]["approval_execution_id"]
         if _ticket_count(database_url) != ticket_count_before:
             raise RuntimeError("Ticket was created before approval")
     finally:
@@ -84,14 +85,20 @@ def main() -> None:
             _assert_waiting_for_approval(restored.json())
             approved = client.post(
                 f"{base_url}/api/v1/runs/{run_id}/resume",
-                json={"decision": decision},
+                json={
+                    "decision": decision,
+                    "approval_execution_id": approval_execution_id,
+                },
             )
             _expect_status(approved, 200)
             successful = approved.json()
             if decision == "approve":
                 duplicate = client.post(
                     f"{base_url}/api/v1/runs/{run_id}/resume",
-                    json={"decision": "approve"},
+                    json={
+                        "decision": "approve",
+                        "approval_execution_id": approval_execution_id,
+                    },
                 )
         _assert_success(
             successful,

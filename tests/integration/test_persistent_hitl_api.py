@@ -303,11 +303,19 @@ def test_fastapi_hitl_approval_survives_full_runtime_recreation() -> None:
         )
         approved = second_client.post(
             f"/api/v1/runs/{run_id}/resume",
-            json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+            json={
+                "decision": "approve",
+                "user_clearance": "CONFIDENTIAL",
+                "approval_execution_id": request_id,
+            },
         )
         duplicate = second_client.post(
             f"/api/v1/runs/{run_id}/resume",
-            json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+            json={
+                "decision": "approve",
+                "user_clearance": "CONFIDENTIAL",
+                "approval_execution_id": request_id,
+            },
         )
     finally:
         second_client.close()
@@ -360,7 +368,11 @@ def test_fastapi_hitl_reject_survives_runtime_recreation_without_ticket() -> Non
     try:
         rejected = second_client.post(
             f"/api/v1/runs/{run_id}/resume",
-            json={"decision": "reject", "user_clearance": "CONFIDENTIAL"},
+            json={
+                "decision": "reject",
+                "user_clearance": "CONFIDENTIAL",
+                "approval_execution_id": request_id,
+            },
         )
     finally:
         second_client.close()
@@ -405,7 +417,11 @@ def test_fastapi_hitl_concurrent_approvals_claim_one_postgres_resume() -> None:
         try:
             return client.post(
                 f"/api/v1/runs/{run_id}/resume",
-                json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+                json={
+                    "decision": "approve",
+                    "user_clearance": "CONFIDENTIAL",
+                    "approval_execution_id": request_id,
+                },
             ).status_code
         finally:
             client.close()
@@ -423,14 +439,20 @@ def test_fastapi_resume_contract_rejects_unknown_invalid_and_client_context() ->
     client, sessions = _application(factory)
     try:
         unknown = client.post(
-            f"/api/v1/runs/{uuid4()}/resume", json={"decision": "approve"}
+            f"/api/v1/runs/{uuid4()}/resume",
+            json={"decision": "approve", "approval_execution_id": str(uuid4())},
         )
         invalid = client.post(
-            f"/api/v1/runs/{uuid4()}/resume", json={"decision": "later"}
+            f"/api/v1/runs/{uuid4()}/resume",
+            json={"decision": "later", "approval_execution_id": str(uuid4())},
         )
         manipulated = client.post(
             f"/api/v1/runs/{uuid4()}/resume",
-            json={"decision": "approve", "model_id": "public_fast"},
+            json={
+                "decision": "approve",
+                "model_id": "public_fast",
+                "approval_execution_id": str(uuid4()),
+            },
         )
     finally:
         client.close()

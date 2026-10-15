@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import os
 import sys
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from mcp.client.stdio import StdioServerParameters
@@ -213,6 +213,9 @@ def test_factory_mcp_reads_the_ticket_created_by_the_same_capability() -> None:
         )
         await store.claim_resume(
             run_id,
+            approval_execution_id=UUID(
+                (await store.get(run_id)).approval_request["approval_execution_id"]
+            ),
             decision="approve",
             approval_clearance=DataClassification.CONFIDENTIAL,
         )

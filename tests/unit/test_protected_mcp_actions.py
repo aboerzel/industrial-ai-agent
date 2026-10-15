@@ -178,7 +178,12 @@ async def _approve(store, kind, *, decision="approve", approval_execution_id=Non
         RUN_ID, _payload(kind), approval_execution_id=approval_execution_id
     )
     await store.claim_resume(
-        RUN_ID, decision=decision, approval_clearance=DataClassification.CONFIDENTIAL
+        RUN_ID,
+        approval_execution_id=UUID(
+            (await store.get(RUN_ID)).approval_request["approval_execution_id"]
+        ),
+        decision=decision,
+        approval_clearance=DataClassification.CONFIDENTIAL,
     )
     return pending.approval_request["approval_execution_id"]
 
@@ -400,6 +405,9 @@ def test_normal_hitl_and_direct_mcp_use_the_same_persisted_execution_guard():
             await _execute(server, "factory", context)
         await store.claim_resume(
             RUN_ID,
+            approval_execution_id=UUID(
+                (await store.get(RUN_ID)).approval_request["approval_execution_id"]
+            ),
             decision="approve",
             approval_clearance=DataClassification.CONFIDENTIAL,
         )

@@ -606,6 +606,7 @@ def create_app(
             )
         claimed = await store.claim_resume(
             run_id,
+            approval_execution_id=payload.approval_execution_id,
             decision=payload.decision.value,
             approval_clearance=security_context.clearance,
         )
@@ -1429,9 +1430,7 @@ def _to_approval_request(
     if payload is None:
         return None
     public_payload = {
-        key: value
-        for key, value in payload.items()
-        if key not in {"action_id", "approval_execution_id"}
+        key: value for key, value in payload.items() if key != "action_id"
     }
     return ApprovalRequestResponse.model_validate(sanitize_public_value(public_payload))
 

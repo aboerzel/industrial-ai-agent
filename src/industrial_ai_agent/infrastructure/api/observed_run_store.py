@@ -104,6 +104,7 @@ class ObservedAgentRunStore:
         self,
         run_id: UUID,
         *,
+        approval_execution_id: UUID,
         decision: str,
         approval_clearance: DataClassification,
     ) -> StoredAgentRun | None:
@@ -112,6 +113,7 @@ class ObservedAgentRunStore:
             run_id,
             self._delegate.claim_resume,
             run_id,
+            approval_execution_id=approval_execution_id,
             decision=decision,
             approval_clearance=approval_clearance,
         )

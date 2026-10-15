@@ -74,6 +74,9 @@ async def _approve(
     assert (
         await store.claim_resume(
             run_id,
+            approval_execution_id=UUID(
+                (await store.get(run_id)).approval_request["approval_execution_id"]
+            ),
             decision="approve",
             approval_clearance=DataClassification.CONFIDENTIAL,
         )

@@ -293,6 +293,9 @@ def test_run_store_approval_adapter_requires_approved_exact_pending_action_once(
         asyncio.run(
             store.claim_resume(
                 run_id,
+                approval_execution_id=UUID(
+                    pending.approval_request["approval_execution_id"]
+                ),
                 decision="approve",
                 approval_clearance=DataClassification.CONFIDENTIAL,
             )
@@ -346,6 +349,9 @@ def test_run_store_rejected_or_mismatched_approval_cannot_be_claimed() -> None:
         asyncio.run(
             store.claim_resume(
                 run_id,
+                approval_execution_id=UUID(
+                    pending.approval_request["approval_execution_id"]
+                ),
                 decision="reject",
                 approval_clearance=DataClassification.CONFIDENTIAL,
             )

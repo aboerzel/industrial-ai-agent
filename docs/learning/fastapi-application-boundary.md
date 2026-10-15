@@ -101,11 +101,21 @@ actually declares that capability.
 
 The official LangGraph PostgreSQL checkpointer persists a run's thread. A protected
 maintenance or physical recovery action interrupts the graph and returns
-`waiting_for_approval`. `POST /api/v1/runs/{run_id}/resume` accepts only `approve` or
-`reject`; it checks authorization before atomically claiming the pending action, then
+`waiting_for_approval`. The bounded public approval includes its server-generated
+`approval_execution_id`. `POST /api/v1/runs/{run_id}/resume` requires this UUID together
+with `approve` or `reject`; it checks authorization before atomically comparing the
+expected generation and claiming the pending action, then
 resumes the same thread with its persisted model and classification binding. A rejected
 action never executes. Hardware recovery additionally performs deterministic fresh
 precondition checks and post-action verification through `ClosedLoopRecoveryService`.
+
+Missing or malformed generation IDs fail closed. A stale generation returns a neutral
+409 conflict without changing the current approval. The UI retains the displayed UUID,
+submits it unchanged, removes stale controls on conflict, reloads the authoritative
+proposal and requires a fresh explicit decision. It never retries an old intent against
+a new generation. The UUID is a concurrency token, not authorization. It remains the
+same through decision persistence, execution authorization and idempotency; model
+`action_id` is correlation only.
 
 The demo records the approval clearance used for attribution, not a real authenticated
 user identity. This is deliberately not production approval attribution. Current opaque

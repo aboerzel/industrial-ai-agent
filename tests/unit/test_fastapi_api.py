@@ -263,10 +263,13 @@ class RecordingRunStore(InMemoryAgentRunStore):
         super().__init__()
         self.claim_resume_calls = 0
 
-    async def claim_resume(self, run_id, *, decision, approval_clearance):
+    async def claim_resume(
+        self, run_id, *, approval_execution_id, decision, approval_clearance
+    ):
         self.claim_resume_calls += 1
         return await super().claim_resume(
             run_id,
+            approval_execution_id=approval_execution_id,
             decision=decision,
             approval_clearance=approval_clearance,
         )
@@ -1496,7 +1499,7 @@ def test_resume_rejects_unknown_decision_before_run_lookup() -> None:
 
     response = client.post(
         "/api/v1/runs/0ca96c57-66f6-4e12-b151-6f7f6ef9c9f8/resume",
-        json={"decision": "later"},
+        json={"decision": "later", "approval_execution_id": str(uuid4())},
     )
 
     assert response.status_code == 422
@@ -1550,7 +1553,8 @@ def test_resume_hides_protected_pending_run_without_claiming_it(
     run_id = asyncio.run(_create_pending_run(store, classification=classification))
     service = ResumeCapableFakeRunService()
     response = TestClient(_create_app(service, run_store=store)).post(
-        f"/api/v1/runs/{run_id}/resume", json=payload
+        f"/api/v1/runs/{run_id}/resume",
+        json={**payload, "approval_execution_id": str(uuid4())},
     )
 
     assert response.status_code == 404
@@ -1574,7 +1578,13 @@ def test_authorized_resume_claims_pending_run_and_records_demo_clearance() -> No
     service = ResumeCapableFakeRunService()
     response = TestClient(_create_app(service, run_store=store)).post(
         f"/api/v1/runs/{run_id}/resume",
-        json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+        json={
+            "decision": "approve",
+            "user_clearance": "CONFIDENTIAL",
+            "approval_execution_id": (
+                asyncio.run(store.get(run_id)).approval_request or {}
+            ).get("approval_execution_id", str(uuid4())),
+        },
     )
 
     assert response.status_code == 200
@@ -1596,11 +1606,23 @@ def test_denied_resume_does_not_consume_the_authorized_claim() -> None:
 
     denied = client.post(
         f"/api/v1/runs/{run_id}/resume",
-        json={"decision": "approve", "user_clearance": "PUBLIC"},
+        json={
+            "decision": "approve",
+            "user_clearance": "PUBLIC",
+            "approval_execution_id": asyncio.run(store.get(run_id)).approval_request[
+                "approval_execution_id"
+            ],
+        },
     )
     approved = client.post(
         f"/api/v1/runs/{run_id}/resume",
-        json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+        json={
+            "decision": "approve",
+            "user_clearance": "CONFIDENTIAL",
+            "approval_execution_id": (
+                asyncio.run(store.get(run_id)).approval_request or {}
+            ).get("approval_execution_id", str(uuid4())),
+        },
     )
 
     assert denied.status_code == 404
@@ -1624,7 +1646,13 @@ def test_visible_run_without_pending_approval_preserves_conflict_contract() -> N
         _create_app(ResumeCapableFakeRunService(), run_store=store)
     ).post(
         f"/api/v1/runs/{run_id}/resume",
-        json={"decision": "approve", "user_clearance": "CONFIDENTIAL"},
+        json={
+            "decision": "approve",
+            "user_clearance": "CONFIDENTIAL",
+            "approval_execution_id": (
+                asyncio.run(store.get(run_id)).approval_request or {}
+            ).get("approval_execution_id", str(uuid4())),
+        },
     )
 
     assert response.status_code == 409
@@ -1641,11 +1669,17 @@ def test_concurrent_authorized_resume_claims_remain_single_use() -> None:
         return await asyncio.gather(
             store.claim_resume(
                 run_id,
+                approval_execution_id=UUID(
+                    (await store.get(run_id)).approval_request["approval_execution_id"]
+                ),
                 decision="approve",
                 approval_clearance=DataClassification.CONFIDENTIAL,
             ),
             store.claim_resume(
                 run_id,
+                approval_execution_id=UUID(
+                    (await store.get(run_id)).approval_request["approval_execution_id"]
+                ),
                 decision="approve",
                 approval_clearance=DataClassification.CONFIDENTIAL,
             ),

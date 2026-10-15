@@ -795,24 +795,41 @@ function renderApproval(turn) {
   const approve = document.createElement("button");
   approve.type = "button";
   approve.textContent = "Approve";
-  approve.addEventListener("click", () => decide(turn.run_id, "approve"));
+  approve.addEventListener("click", () => decide(turn.run_id, "approve", approval.approval_execution_id, section));
   const reject = document.createElement("button");
   reject.type = "button";
   reject.className = "reject-button";
   reject.textContent = "Reject";
-  reject.addEventListener("click", () => decide(turn.run_id, "reject"));
+  reject.addEventListener("click", () => decide(turn.run_id, "reject", approval.approval_execution_id, section));
   section.append(title, summary, approve, reject);
   return section;
 }
 
-async function decide(runId, decision) {
+async function decide(runId, decision, approvalExecutionId, section) {
   const generation = getSecurityContextGeneration();
+  const investigationId = currentInvestigationId;
+  const buttons = section.querySelectorAll("button");
+  for (const button of buttons) button.disabled = true;
   try {
-    await resumeRun(runId, decision);
-    if (!isCurrentSecurityContext(generation)) return;
+    await resumeRun(runId, decision, approvalExecutionId);
+    if (!isCurrentSecurityContext(generation) || investigationId !== currentInvestigationId) return;
     await reloadInvestigation();
   } catch (error) {
-    if (!isCurrentSecurityContext(generation)) return;
+    if (!isCurrentSecurityContext(generation) || investigationId !== currentInvestigationId) return;
+    if (error instanceof ApiClientError && error.status === 409) {
+      section.remove();
+      try {
+        await reloadInvestigation();
+      } catch {
+        // The invalidated controls remain unavailable if refreshing fails.
+      }
+      if (!isCurrentSecurityContext(generation) || investigationId !== currentInvestigationId) return;
+      showError(responseLanguage.value === "DE"
+        ? "Die Freigabeanforderung hat sich geändert. Bitte prüfen Sie die aktuelle Aktion erneut."
+        : "The approval request changed. Please review the current action.");
+      return;
+    }
+    for (const button of buttons) button.disabled = false;
     showError(publicError(error, "The decision could not be submitted."));
     setStatus("failed");
   }

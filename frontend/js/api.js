@@ -106,10 +106,13 @@ export async function getRun(runId) {
   return request(`/api/v1/runs/${encodeURIComponent(runId)}`);
 }
 
-export async function resumeRun(runId, decision) {
+export async function resumeRun(runId, decision, approvalExecutionId) {
+  if (!isUuid(approvalExecutionId)) {
+    throw new ApiClientError(0, "invalid_approval_generation", "The approval request is unavailable.");
+  }
   return request(`/api/v1/runs/${encodeURIComponent(runId)}/resume`, {
     method: "POST",
-    body: JSON.stringify({ decision }),
+    body: JSON.stringify({ decision, approval_execution_id: approvalExecutionId }),
   });
 }
 
@@ -461,6 +464,7 @@ function isApprovalRequest(value) {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, [
+      "approval_execution_id",
       "action",
       "summary",
       "arguments",
@@ -469,6 +473,7 @@ function isApprovalRequest(value) {
       "status",
       "created_at",
     ]) &&
+    isUuid(value.approval_execution_id) &&
     isPublicToolName(value.action) &&
     isBoundedString(value.summary, 500, true) &&
     isRecord(value.arguments) &&

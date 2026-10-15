@@ -46,6 +46,9 @@ async def _approve(
     assert (
         await store.claim_resume(
             run_id,
+            approval_execution_id=UUID(
+                (await store.get(run_id)).approval_request["approval_execution_id"]
+            ),
             decision="approve",
             approval_clearance=DataClassification.CONFIDENTIAL,
         )
@@ -72,6 +75,11 @@ def test_same_run_reused_model_action_id_does_not_alias_independent_approvals():
             assert (
                 await store.claim_resume(
                     run_id,
+                    approval_execution_id=UUID(
+                        (await store.get(run_id)).approval_request[
+                            "approval_execution_id"
+                        ]
+                    ),
                     decision="approve",
                     approval_clearance=DataClassification.CONFIDENTIAL,
                 )
@@ -367,6 +375,9 @@ def test_payload_generation_is_ignored_and_caller_payload_mutation_cannot_rebind
         payload["arguments"]["summary"] = "Unapproved mutation"
         await store.claim_resume(
             run_id,
+            approval_execution_id=UUID(
+                (await store.get(run_id)).approval_request["approval_execution_id"]
+            ),
             decision="approve",
             approval_clearance=DataClassification.CONFIDENTIAL,
         )
@@ -394,6 +405,9 @@ def test_legacy_approval_without_generation_history_fails_closed():
         assert (
             await store.claim_resume(
                 run_id,
+                approval_execution_id=UUID(
+                    (await store.get(run_id)).approval_request["approval_execution_id"]
+                ),
                 decision="approve",
                 approval_clearance=DataClassification.CONFIDENTIAL,
             )
@@ -567,6 +581,9 @@ def test_returned_snapshots_cannot_mutate_persisted_approval_authority():
         )
         approved = await store.claim_resume(
             run_id,
+            approval_execution_id=UUID(
+                (await store.get(run_id)).approval_request["approval_execution_id"]
+            ),
             decision="approve",
             approval_clearance=DataClassification.CONFIDENTIAL,
         )

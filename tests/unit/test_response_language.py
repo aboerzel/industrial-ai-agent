@@ -1,5 +1,5 @@
 import asyncio
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -145,6 +145,9 @@ def test_run_store_preserves_response_language_across_approval_lifecycle() -> No
         await store.wait_for_approval(run_id, {"action": "create_maintenance_ticket"})
         claimed = await store.claim_resume(
             run_id,
+            approval_execution_id=UUID(
+                (await store.get(run_id)).approval_request["approval_execution_id"]
+            ),
             decision="approve",
             approval_clearance=DataClassification.CONFIDENTIAL,
         )

@@ -146,6 +146,7 @@ test("renders every public terminal and approval lifecycle state", async (t) => 
       answer: null,
       tool_calls: [],
       approval_request: {
+        approval_execution_id: RUN_ID,
         action: "create_maintenance_ticket",
         summary: "Inspect S04.",
         arguments: { station_id: "S04" },
@@ -172,6 +173,7 @@ test("accepts the bounded S04 recovery approval response contract", async () => 
     answer: null,
     tool_calls: [],
     approval_request: {
+      approval_execution_id: RUN_ID,
       action: "execute_reference_calibration",
       summary: "Reference calibration is ready for approval.",
       arguments: {
@@ -599,6 +601,7 @@ test("submits a resume decision without caller-controlled clearance", async () =
     assert.equal(options.method, "POST");
     assert.deepEqual(JSON.parse(options.body), {
       decision: "approve",
+      approval_execution_id: RUN_ID,
     });
     return new Response(JSON.stringify({
       run_id: RUN_ID,
@@ -609,9 +612,34 @@ test("submits a resume decision without caller-controlled clearance", async () =
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
   try {
-    await resumeRun(RUN_ID, "approve");
+    await resumeRun(RUN_ID, "approve", RUN_ID);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("missing or malformed approval generation fails before a resume request", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("Unexpected request"); };
+  try {
+    for (const token of [undefined, null, "invalid"]) {
+      await assert.rejects(resumeRun(RUN_ID, "approve", token), ApiClientError);
+    }
+    assert.equal(calls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("public approval requires a valid generation token", async () => {
+  for (const token of [undefined, null, "invalid"]) {
+    await assert.rejects(requestRun({
+      ...{ run_id: RUN_ID, status: "waiting_for_approval", data_classification: "CONFIDENTIAL", answer: null, tool_calls: [] },
+      approval_request: {
+        approval_execution_id: token, action: "create_maintenance_ticket", summary: "Synthetic action",
+        arguments: {}, classification: "CONFIDENTIAL", model_id: "local_quality",
+        status: "waiting_for_approval", created_at: "2026-10-15T10:00:00Z",
+      },
+    }), ApiClientError);
   }
 });
 

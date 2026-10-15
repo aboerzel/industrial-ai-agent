@@ -26,6 +26,7 @@ from industrial_ai_agent.infrastructure.api.run_store import (
     StoredAgentRun,
     _consume_approval_generation,
     _decide_approval_generation,
+    _generation_id,
     _has_current_generation,
     _matches_approval_generation,
     _matches_protected_action_approval,
@@ -308,16 +309,22 @@ class PostgreSqlAgentRunStore(AgentRunStore):
         self,
         run_id: UUID,
         *,
+        approval_execution_id: UUID,
         decision: str,
         approval_clearance: DataClassification,
     ) -> StoredAgentRun | None:
         return await asyncio.to_thread(
-            self._claim_resume, run_id, decision, approval_clearance
+            self._claim_resume,
+            run_id,
+            approval_execution_id,
+            decision,
+            approval_clearance,
         )
 
     def _claim_resume(
         self,
         run_id: UUID,
+        approval_execution_id: UUID,
         decision: str,
         approval_clearance: DataClassification,
     ) -> StoredAgentRun | None:
@@ -330,7 +337,11 @@ class PostgreSqlAgentRunStore(AgentRunStore):
             if record is None or record.status != RunStatus.WAITING_FOR_APPROVAL.value:
                 return None
             stored = _stored(record)
-            if not _has_current_generation(stored):
+            if (
+                not isinstance(approval_execution_id, UUID)
+                or _generation_id(stored.approval_request) != str(approval_execution_id)
+                or not _has_current_generation(stored)
+            ):
                 return None
             record.approval_generations = _decide_approval_generation(
                 stored, decision, approval_clearance

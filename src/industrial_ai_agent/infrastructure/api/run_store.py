@@ -138,6 +138,7 @@ class AgentRunStore(Protocol):
         self,
         run_id: UUID,
         *,
+        approval_execution_id: UUID,
         decision: str,
         approval_clearance: DataClassification,
     ) -> StoredAgentRun | None: ...
@@ -320,6 +321,7 @@ class InMemoryAgentRunStore:
         self,
         run_id: UUID,
         *,
+        approval_execution_id: UUID,
         decision: str,
         approval_clearance: DataClassification,
     ) -> StoredAgentRun | None:
@@ -328,6 +330,9 @@ class InMemoryAgentRunStore:
             if (
                 existing is None
                 or existing.status is not RunStatus.WAITING_FOR_APPROVAL
+                or not isinstance(approval_execution_id, UUID)
+                or _generation_id(existing.approval_request)
+                != str(approval_execution_id)
                 or not _has_current_generation(existing)
             ):
                 return None
