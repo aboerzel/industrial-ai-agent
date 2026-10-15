@@ -5,7 +5,7 @@ The older `npm run test:e2e` specification contains five German journeys. Neithe
 is part of FAST, and a green historical report is not proof of the current assertions.
 Both use explicit assertion plans; model behavior still requires a deliberate local
 real-model measurement. Separate synthetic browser fixtures exercise the same assertion
-functions with the shipped UI and a local fake HTTP server, without Compose, MCP or models.
+functions with the shipped UI and local synthetic HTTP/API servers, without Compose, MCP or models.
 
 Run it after the local stack is healthy:
 
@@ -51,8 +51,34 @@ npm run test:e2e:fixtures
 ```
 
 The fixture configuration is separate from the live E2E configuration, needs no secrets,
-and denies browser requests outside its ephemeral loopback server. Synthetic responses
-prove the assertion and UI paths, not real-model choices, live authorization or MCP behavior.
+and denies browser requests outside its ephemeral loopback server. The Demo Auth fixture
+uses the real FastAPI session/authorization code with synthetic run services and in-memory
+data; other fixtures supply synthetic HTTP responses. They verify UI/assertion paths and
+that session implementation, not live Compose/Nginx, PostgreSQL RLS, MCP or model choices.
+
+`frontend/package.json` registers `test:e2e:fixtures` through
+`frontend/playwright.fixtures.config.mjs`, which discovers `tests/e2e/fixtures/*.spec.mjs`.
+Inspect the actual registered cases without running a browser or model:
+
+```text
+npm run test:e2e:fixtures -- --list
+```
+
+| Automated fixture coverage | Registered specification |
+| --- | --- |
+| Fresh PUBLIC startup; all five users; quick switch/logout; account/language/Monitoring; Configuration permissions; station visibility | `demo-auth.spec.mjs` |
+| R04 shared-session invalidation, sender/receiver identity-refresh failures, late JSON/download/PDF, pending-approval purge and BFCache | `demo-auth.spec.mjs` |
+| R03 multi-tab stale approve/reject, fresh-decision refresh, old BFCache controls and preserved requests after identity switch | `r03-approval.spec.mjs` |
+| Journey assertion controls, context transitions, document bytes/filename, PDF and denied documents | `journey-evidence.spec.mjs` |
+| Active document MIME sanitization before Blob publication | `document-mime.spec.mjs` |
+
+The configured users are `demo-public`, `demo-internal`, `demo-confidential`,
+`demo-restricted` and `demo-admin`; see the [demo visibility matrix](../demo/demo-user-visibility.md).
+`demo-restricted` has RESTRICTED clearance without MODEL_ADMIN; `demo-admin` has
+MODEL_ADMIN at PUBLIC clearance. Password-free quick switching is intentional in Demo
+Auth Mode; disabling that mode removes the convenience session endpoints and chooser.
+R03 fixtures exercise approval decisions with a synthetic resume service, not protected
+side effects; ADR-011 remains the authoritative HITL contract.
 
 ```text
 cd frontend
@@ -163,8 +189,10 @@ protected HITL execution. Browser session identity switching is automatically as
 The read journeys never propose or approve a write. Existing deterministic backend and
 boundary tests cover those contracts separately; these browser reports do not certify them.
 Real-model answer correctness, full PDF layout/content semantics and physical recovery
-are NOT COVERED by the synthetic suite. Credentials are not available for a second ordinary
-identity in the current journey configuration, so identity switching is not an automated claim.
+are NOT COVERED by the synthetic suite. The manual runner's `documentation` and
+`clearance-boundary` journeys include REQUIRED `switch-user` steps; they count as measured
+only when that current complete journey plan actually runs. Passing the safe fixture
+suite does not claim a real-model journey measurement.
 
 ## Regression Tiers
 

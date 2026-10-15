@@ -2,6 +2,7 @@
 
 import json
 import re
+import tomllib
 from pathlib import Path
 
 from industrial_ai_agent.agent.agent_run import MAX_TOOL_CALLS
@@ -157,3 +158,53 @@ def test_manual_real_model_registry_retains_the_twelve_baseline_journeys() -> No
     )
 
     assert len(journey_keys) == 12
+
+
+def test_current_overview_describes_the_browser_session_proxy_boundary() -> None:
+    overview = (PROJECT_ROOT / "docs/architecture/overview.md").read_text(
+        encoding="utf-8"
+    )
+    nginx = (PROJECT_ROOT / "frontend/nginx.conf").read_text(encoding="utf-8")
+    gateway = re.search(r'Gateway\["([^"\n]+)"\]', overview).group(1)
+
+    assert "cookie" in gateway.lower()
+    assert "Authorization" in gateway
+    assert not re.search(r"API[- ]token|Basic", gateway, re.IGNORECASE)
+    for marker in (
+        "DemoSessions",
+        "industrial_demo_session",
+        "HttpOnly",
+        "SameSite=Strict",
+        "SESSION_INVALIDATED",
+    ):
+        assert marker in overview
+    assert 'proxy_set_header Authorization "";' in nginx
+    assert "auth_basic" not in nginx
+
+
+def test_documented_demo_switch_coverage_uses_the_registered_fixture_suite() -> None:
+    documentation = (PROJECT_ROOT / "docs/learning/browser-e2e-journeys.md").read_text(
+        encoding="utf-8"
+    )
+    package = json.loads(
+        (PROJECT_ROOT / "frontend/package.json").read_text(encoding="utf-8")
+    )
+    configuration = (
+        PROJECT_ROOT / "frontend/playwright.fixtures.config.mjs"
+    ).read_text(encoding="utf-8")
+    users = tomllib.loads(
+        (PROJECT_ROOT / "config/demo-users.toml").read_text(encoding="utf-8")
+    )["users"]
+
+    assert "playwright.fixtures.config.mjs" in package["scripts"]["test:e2e:fixtures"]
+    assert 'testDir: "../tests/e2e/fixtures"' in configuration
+    assert not re.search(r"\b(?:testIgnore|testMatch)\s*:", configuration)
+    assert "--grep" not in package["scripts"]["test:e2e:fixtures"]
+    for filename in ("demo-auth.spec.mjs", "r03-approval.spec.mjs"):
+        assert filename in documentation
+        assert (PROJECT_ROOT / "tests/e2e/fixtures" / filename).is_file()
+    for user in users:
+        assert f"`{user['username']}`" in documentation
+    assert "R04" in documentation and "BFCache" in documentation
+    assert "second ordinary" not in documentation
+    assert "identity switching is not an automated claim" not in documentation

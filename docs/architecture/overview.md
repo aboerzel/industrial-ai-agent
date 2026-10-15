@@ -36,8 +36,8 @@ flowchart LR
     end
 
     subgraph Application["Industrial AI Agent"]
-        Gateway["Nginx frontend gateway<br/>authenticated demo user -> API token"]
-        API["FastAPI"]
+        Gateway["Nginx frontend gateway<br/>cookie proxy; strips Authorization"]
+        API["FastAPI<br/>DemoSessions -> SecurityContext"]
         Run["Run service and durable run state"]
         Agent["LangGraph troubleshooting workflow"]
         Policy["Classification, tool policy,<br/>model routing and egress check"]
@@ -68,8 +68,8 @@ flowchart LR
         Langfuse["Langfuse<br/>allowed AI metadata only"]
     end
 
-    UI --> Gateway --> API
-    APIClient --> API
+    UI -->|"Demo Auth / session cookie"| Gateway -->|"Cookie forwarded; Authorization stripped"| API
+    APIClient -->|"Direct bearer authentication"| API
     API --> Run --> Agent
     Agent --> Policy
     Agent --> Factory
@@ -467,9 +467,9 @@ requires their agent-authorized capabilities. Compose uses this dependency-aware
 operational readiness endpoint for the Agent API Docker healthcheck. `GET /api/v1/runs/{run_id}` reads the durable application
 record. The separate static `frontend/` browser client communicates only with this public
 HTTP/JSON API through its same-origin Nginx gateway. Compose serves that gateway on
-loopback at `http://localhost:8080`; it authenticates a demo username/password before
-mapping that user to a server-owned API token and
-forwards `/api/` without exposing the credential to browser code or storage. The local API
+loopback at `http://localhost:8080` and proxies `/api/`, including `/api/v1/auth/*`,
+to the Agent API. Authentication and session resolution happen in the API, not Nginx.
+The local API
 entry point also retains explicit CORS configuration for authenticated development clients
 and does not serve frontend assets. The API has no CORS wildcard, TLS, rate limiting, or
 streaming endpoint. Its explicit
@@ -477,42 +477,64 @@ streaming endpoint. Its explicit
 `reject` decision contract for a persisted pending action.
 Swagger UI at `/docs` remains the generated API contract explorer.
 
-Nginx serves static assets without a native Basic challenge and proxies browser session
-cookies, never service tokens. Explicit `DEMO_AUTH_MODE` enables the canonical demo
-identities in `config/demo-users.toml`. The API authenticates each opaque HttpOnly session
-and creates its normal server-derived `SecurityContext`. A fresh browser starts as
-`demo-public`; quick switch intentionally permits all predefined demo identities.
-Switch/logout revokes the old session and purges browser state before reauthorization.
+Nginx serves static assets without a native Basic challenge, strips browser `Authorization`
+and forwards cookies through its normal proxy behavior; it injects no service credential.
+With explicit `DEMO_AUTH_MODE=true`, the browser uses the API's bootstrap/login/quick-switch
+session endpoints. `DemoSessions` generates a random opaque token, stores its predefined
+principal server-side and returns the `industrial_demo_session` cookie. Subsequent cookie
+requests are resolved to that principal's clearance and roles, then to `SecurityContext`.
+The cookie is `HttpOnly`, `SameSite=Strict`, scoped to `/api/`, and has no Max-Age/Expires;
+`Secure` is not set in this local HTTP demo. The process-local registry has a default
+server TTL of 28,800 seconds (8 hours) and a capacity of 4,096; API restart loses sessions.
+Session mutations require `X-Demo-Session: 1` and same-origin Origin/Fetch-Metadata checks.
+This is a single-process demo, not production TLS/OIDC authentication.
+A fresh browser bootstraps `demo-public`; quick switch intentionally selects any predefined
+demo identity without password entry. Switch/logout revokes the old server session;
+explicit logout remains logged out until a new user is selected or login succeeds.
 Roles remain orthogonal: `demo-admin` has MODEL_ADMIN at PUBLIC clearance;
 `demo-restricted` has RESTRICTED clearance without administration. Ordinary ownership,
 transaction-local PostgreSQL RLS, classification, MCP permissions, egress and HITL still
 apply. Browser requests reject caller-controlled clearance; direct bearer clients keep
-existing optional narrowing. Disabled demo mode has no browser convenience login.
+existing optional narrowing. Within `/api/v1/auth/`, disabled demo mode exposes only
+`/api/v1/auth/config` with
+`demo_mode=false`; the demo session/login/switch endpoints are not registered.
 See [Demo authentication](../learning/demo-authentication.md) for the explicit trust model,
 public demo credentials, bounded process-local sessions and production limitations.
+The [demo visibility matrix](../demo/demo-user-visibility.md) lists all five identities.
+ADR-013's [current session refinement](../decisions/ADR-013-fastapi-application-boundary.md#browser-demo-sessions--current-authentication-refinement)
+supersedes its historical Basic-auth/token-mapping design.
 Unknown free text without a documented demo identifier is conservatively
 resolved as `RESTRICTED_TROUBLESHOOTING`: unknown sensitivity never authorizes
 public-cloud model processing.
 
 The browser API adapter owns a security-context generation and abort signal. Any
-clearance change (upgrade or downgrade) synchronously invalidates old requests and
-purges the conversation DOM, pending turns, export transcript, draft, model dialog,
-and document Blob URLs before reloading the active investigation under the new requested
-clearance. Every JSON/binary response is checked after retrieval and body parsing;
+identity/session change (upgrade or downgrade) invalidates old requests and purges
+conversation DOM, pending turns/approval generation, exports, draft, sensitive dialogs
+and Blob URLs. Before a shared session mutation is dispatched, `SESSION_INVALIDATED`
+notifies other tabs through BroadcastChannel; pending/settled notifications do not depend
+on successful `/auth/me`.
+Each tab purges before independently refreshing identity metadata. Refresh failure stays
+fail-closed with no old identity or content and Configuration disabled. Every JSON/binary
+response is checked after retrieval and body parsing;
 generation checks reject late responses even if abort is ignored. API requests bypass
 the browser response cache. HTTP 401 invalidates the session view. `pagehide` purges
 active state; a Back/Forward-cache restoration fetches fresh authorized data on
 `pageshow`. Normal reloads retain only an investigation ID and UI preferences in
 `sessionStorage`, never conversation content. Those values are navigation preferences,
-not identity or authority. Gateway identity changes require navigation in this demo;
-there is no in-page identity/tenant/role switch or stream. Backend authorization remains
+not identity or authority. Quick switch happens in-page, clears the previous investigation
+reference and starts the next request in a new context; it does not automatically transfer
+an old conversation. Language may survive. Navigation/reload rechecks `/auth/me` and
+reauthorizes saved-reference reads independently at the API; restored conversation content
+is freshly fetched, never restored from browser storage. Backend authorization remains
 authoritative. Already exported files cannot be recalled by clearing browser state.
 
 ```mermaid
 flowchart LR
-    Change["Clearance change / session invalidation / navigation"] --> Cancel["Advance context generation<br/>abort old API requests"]
+    Change["Shared session may change / logout"] --> Cancel["Advance context generation<br/>abort old API requests"]
     Cancel --> Purge["Purge sensitive UI / transcript / Blob URLs"]
-    Purge --> Fetch["Fresh fetch via authenticated gateway<br/>new requested clearance"]
+    Purge --> Identity["Refresh /auth/me independently"]
+    Identity -->|"valid identity"| Fetch["Fresh API reads via session cookie"]
+    Identity -->|"refresh failed"| Unknown["Remain empty; identity unknown"]
     Fetch --> Authorize["Backend authoritative authorization"]
     Authorize -->|"allowed + current generation"| Render["Render freshly authorized data"]
     Authorize -->|"denied"| Empty["Remain empty"]
