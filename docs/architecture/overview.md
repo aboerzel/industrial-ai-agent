@@ -1232,7 +1232,13 @@ authorized `knowledge_mcp` tools, never through direct retriever injection.
 `MaintenanceTicketCapability.get_maintenance_ticket(ticket_id)` is a bounded
 read-only projection over the RLS-filtered ticket store; invisible and unknown ticket
 IDs share the same not-found result and it does not expose a general ticket query
-interface. `MaintenanceTicketCapability.create_maintenance_ticket(...)` remains exposed
+interface. A visible ticket with an RLS-hidden station uses that same neutral
+not-found result: the successful domain projection requires a visible station identity.
+Both ticket-ID and request-ID reads project within the caller's RLS transaction;
+they never expose the raw station FK or load the station with elevated privileges.
+Consumed-generation replay fails closed when its existing ticket is unavailable.
+When the station is visible, its label still contributes to the emitted classification.
+`MaintenanceTicketCapability.create_maintenance_ticket(...)` remains exposed
 only through the fixed Factory MCP action contract. Its deterministic approval boundary
 executes it only after explicit approval.
 

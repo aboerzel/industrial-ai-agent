@@ -345,7 +345,9 @@ class PostgreSqlMaintenanceTicketRepository:
                 .options(joinedload(MaintenanceTicketRecord.station))
                 .where(MaintenanceTicketRecord.request_id == request_id.value)
             )
-            if record is None:
+            # A successful ticket requires an authorized station identity. Never
+            # substitute the raw FK when RLS hides that mandatory relationship.
+            if record is None or record.station is None:
                 return None
             return MaintenanceTicket(
                 ticket_id=record.ticket_code,
@@ -367,20 +369,20 @@ class PostgreSqlMaintenanceTicketRepository:
                 .options(joinedload(MaintenanceTicketRecord.station))
                 .where(MaintenanceTicketRecord.ticket_code == ticket_id.value)
             )
-        if record is None:
-            return None
-        return MaintenanceTicket(
-            ticket_id=record.ticket_code,
-            request_id=MaintenanceTicketRequestId(
-                record.request_id or record.ticket_code
-            ),
-            station_id=StationId(record.station.code),
-            summary=record.summary or "Maintenance ticket",
-            status=record.status,
-            classification=_classification_with_emitted_station(
-                record.classification, record.station
-            ),
-        )
+            if record is None or record.station is None:
+                return None
+            return MaintenanceTicket(
+                ticket_id=record.ticket_code,
+                request_id=MaintenanceTicketRequestId(
+                    record.request_id or record.ticket_code
+                ),
+                station_id=StationId(record.station.code),
+                summary=record.summary or "Maintenance ticket",
+                status=record.status,
+                classification=_classification_with_emitted_station(
+                    record.classification, record.station
+                ),
+            )
 
     def create_maintenance_ticket(
         self,

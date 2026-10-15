@@ -132,7 +132,8 @@ class MaintenanceTicketRecord(Base):
     classification: Mapped[int] = mapped_column(SmallInteger)
     request_id: Mapped[str | None] = mapped_column(String, unique=True)
     summary: Mapped[str | None] = mapped_column(Text)
-    station: Mapped[StationRecord] = relationship()
+    # RLS can hide the related row even while the physical foreign key is valid.
+    station: Mapped[StationRecord | None] = relationship()
 
 
 class ProcessParameterRecord(Base):
