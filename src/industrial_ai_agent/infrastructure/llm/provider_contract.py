@@ -2,7 +2,8 @@
 
 This module is deliberately outside model selection and production runtime wiring.
 It exercises one explicit catalog model through the real adapter without Factory,
-MCP, LangGraph, persisted assignments, routing, or egress policy.
+MCP, LangGraph, persisted assignments or routing. Fixed synthetic requests still use
+the authoritative PUBLIC egress policy and concrete provider authorization boundary.
 """
 
 from __future__ import annotations
@@ -32,10 +33,12 @@ from industrial_ai_agent.agent.llm import (
     MessageRole,
     ModelId,
 )
+from industrial_ai_agent.agent.model_egress import EgressCheckedLLMClient
 from industrial_ai_agent.agent.model_selection import (
     call_requirement_for_request,
     validate_model_capabilities,
 )
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.llm.configuration import (
     ModelCatalogConfiguration,
 )
@@ -229,6 +232,9 @@ class ProviderContractRunner:
             configuration, environment=self._environment
         )
         self._owns_client = client is None
+        self._checked_client = EgressCheckedLLMClient(
+            self._client, configuration, DataClassification.PUBLIC
+        )
 
     def close(self) -> None:
         if self._owns_client:
@@ -379,7 +385,7 @@ class ProviderContractRunner:
         started = perf_counter()
         call_type = call_requirement_for_request(request).call_type.value
         try:
-            response = self._client.chat(ModelId(model_id), request)
+            response = self._checked_client.chat(ModelId(model_id), request)
         except LLMProviderError as error:
             return _provider_error_result(error, perf_counter() - started, call_type)
         except ValueError:

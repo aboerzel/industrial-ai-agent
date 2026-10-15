@@ -35,6 +35,22 @@ MISTRAL_FAST_PROFILE = ModelProfile("mistral_fast")
 NVIDIA_QUALITY_PROFILE = ModelProfile("nvidia_quality")
 
 
+def chat_with_policy(adapter, model_id, request):
+    """Authorize synthetic adapter fixtures so mapping/transport guards remain exercised."""
+    from industrial_ai_agent.agent.model_egress import ModelExecutionAuthorizer
+    from industrial_ai_agent.domain.security import DataClassification
+
+    configuration = adapter._configuration
+    authorized = ModelExecutionAuthorizer().authorize_request(
+        model_id,
+        request,
+        DataClassification.PUBLIC,
+        configuration.get_execution_zone(model_id.value),
+        configuration.get_max_data_classification(model_id.value),
+    )
+    return adapter.chat(model_id, authorized)
+
+
 class FakeCompletions:
     def __init__(self, completion: SimpleNamespace | Exception) -> None:
         self.completion = completion
@@ -121,7 +137,7 @@ def test_passes_supported_structured_output_request_to_provider() -> None:
         reasoning_effort=LLMReasoningEffort.NONE,
     )
 
-    client.chat(LOCAL_QUALITY_PROFILE, request)
+    chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
     assert fake_client.completions.parameters is not None
     assert fake_client.completions.parameters["response_format"] == {
@@ -152,7 +168,8 @@ def test_passes_reasoning_effort_to_non_ollama_provider() -> None:
         client_factory=lambda **_: fake_client,
     )
 
-    client.chat(
+    chat_with_policy(
+        client,
         LOCAL_QUALITY_PROFILE,
         LLMRequest(
             messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
@@ -180,7 +197,8 @@ def test_passes_configured_output_limit_to_provider() -> None:
         client_factory=lambda **_: fake_client,
     )
 
-    client.chat(
+    chat_with_policy(
+        client,
         LOCAL_QUALITY_PROFILE,
         LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
     )
@@ -207,7 +225,8 @@ def test_explicit_use_case_budget_overrides_catalog_default_only_when_set(
         configuration, environment={}, client_factory=lambda **_: fake_client
     )
 
-    client.chat(
+    chat_with_policy(
+        client,
         LOCAL_QUALITY_PROFILE,
         LLMRequest(
             messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
@@ -247,7 +266,8 @@ def test_normalizes_provider_parsed_structured_response_object() -> None:
         client_factory=lambda **_: FakeOpenAIClient(completion),
     )
 
-    response = client.chat(
+    response = chat_with_policy(
+        client,
         LOCAL_QUALITY_PROFILE,
         LLMRequest(
             messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
@@ -281,7 +301,8 @@ def test_normalizes_provider_text_content_blocks() -> None:
         client_factory=lambda **_: FakeOpenAIClient(completion),
     )
 
-    response = client.chat(
+    response = chat_with_policy(
+        client,
         LOCAL_QUALITY_PROFILE,
         LLMRequest(
             messages=(LLMMessage(role=MessageRole.USER, content="Hello"),),
@@ -311,7 +332,7 @@ def test_rejects_structured_output_for_unsupported_profile() -> None:
     )
 
     with pytest.raises(ValueError, match="does not support structured response"):
-        client.chat(LOCAL_QUALITY_PROFILE, request)
+        chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
 
 def test_rejects_reasoning_effort_for_unsupported_profile() -> None:
@@ -327,7 +348,7 @@ def test_rejects_reasoning_effort_for_unsupported_profile() -> None:
     )
 
     with pytest.raises(ValueError, match="does not support reasoning-effort"):
-        client.chat(LOCAL_QUALITY_PROFILE, request)
+        chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
 
 def create_authenticated_configuration() -> LLMConfiguration:
@@ -381,7 +402,7 @@ def test_maps_chat_request_and_text_response_without_network_call() -> None:
         messages=(LLMMessage(role=MessageRole.USER, content="Why was P4711 rejected?"),)
     )
 
-    response = client.chat(LOCAL_QUALITY_PROFILE, request)
+    response = chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
     transport = factory_arguments.pop("http_client")
     assert not transport.trust_env and not transport.follow_redirects
@@ -443,7 +464,7 @@ def test_maps_tool_definitions_and_tool_calls_without_executing_them() -> None:
         ),
     )
 
-    response = client.chat(LOCAL_QUALITY_PROFILE, request)
+    response = chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
     assert response.text is None
     assert response.finish_reason is FinishReason.TOOL_CALLS
@@ -525,7 +546,7 @@ def test_external_profiles_reuse_openai_compatible_tool_and_usage_contract(
         ),
     )
 
-    response = client.chat(profile, request)
+    response = chat_with_policy(client, profile, request)
 
     transport = client_arguments.pop("http_client")
     assert not transport.trust_env and not transport.follow_redirects
@@ -581,7 +602,7 @@ def test_nvidia_profile_uses_the_existing_structured_output_contract() -> None:
         ),
     )
 
-    response = client.chat(NVIDIA_QUALITY_PROFILE, request)
+    response = chat_with_policy(client, NVIDIA_QUALITY_PROFILE, request)
 
     assert response.text == '{"status":"ok","provider":"nvidia"}'
     assert fake_client.completions.parameters is not None
@@ -633,7 +654,7 @@ def test_groq_strict_response_schema_requires_defaulted_object_properties() -> N
         client_factory=lambda **_: fake_client,
     )
 
-    client.chat(GROQ_BENCHMARK_PROFILE, request)
+    chat_with_policy(client, GROQ_BENCHMARK_PROFILE, request)
 
     assert fake_client.completions.parameters is not None
     schema = fake_client.completions.parameters["response_format"]["json_schema"][
@@ -662,7 +683,7 @@ def test_groq_structured_output_records_content_free_request_diagnostics() -> No
         client_factory=lambda **_: FakeOpenAIClient(completion),
     )
 
-    response = client.chat(GROQ_BENCHMARK_PROFILE, request)
+    response = chat_with_policy(client, GROQ_BENCHMARK_PROFILE, request)
 
     assert response.request_diagnostics is not None
     diagnostics = response.request_diagnostics.model_dump()
@@ -700,7 +721,7 @@ def test_schema_fingerprint_is_stable_for_content_changes_and_changes_for_schema
                 )
             ),
         )
-        response = client.chat(GROQ_BENCHMARK_PROFILE, request)
+        response = chat_with_policy(client, GROQ_BENCHMARK_PROFILE, request)
         assert response.request_diagnostics is not None
         assert response.request_diagnostics.structured_schema_hash is not None
         return response.request_diagnostics.structured_schema_hash
@@ -755,7 +776,7 @@ def test_maps_assistant_tool_call_and_tool_result_messages() -> None:
         )
     )
 
-    client.chat(LOCAL_QUALITY_PROFILE, request)
+    chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
     assert fake_client.completions.parameters is not None
     messages = fake_client.completions.parameters["messages"]
@@ -792,7 +813,7 @@ def test_requires_api_key_from_configured_environment_variable() -> None:
         ValueError,
         match="Missing API key environment variable: CLOUD_LLM_API_KEY",
     ):
-        client.chat(LOCAL_QUALITY_PROFILE, request)
+        chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
 
 def test_explicit_groq_benchmark_rejects_missing_api_key_without_network_call() -> None:
@@ -812,7 +833,7 @@ def test_explicit_groq_benchmark_rejects_missing_api_key_without_network_call() 
         ValueError,
         match="Missing API key environment variable: GROQ_API_KEY",
     ):
-        client.chat(GROQ_BENCHMARK_PROFILE, request)
+        chat_with_policy(client, GROQ_BENCHMARK_PROFILE, request)
 
 
 def test_reads_authenticated_profile_api_key_from_environment_variable() -> None:
@@ -838,7 +859,7 @@ def test_reads_authenticated_profile_api_key_from_environment_variable() -> None
     )
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),))
 
-    client.chat(LOCAL_QUALITY_PROFILE, request)
+    chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
     transport = factory_arguments.pop("http_client")
     assert not transport.trust_env and not transport.follow_redirects
@@ -868,7 +889,7 @@ def test_maps_unknown_finish_reason() -> None:
     )
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),))
 
-    response = client.chat(LOCAL_QUALITY_PROFILE, request)
+    response = chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
     assert response.finish_reason is FinishReason.UNKNOWN
 
@@ -893,7 +914,8 @@ def test_maps_provider_reported_usage_without_estimation() -> None:
         client_factory=lambda **_: FakeOpenAIClient(completion),
     )
 
-    response = client.chat(
+    response = chat_with_policy(
+        client,
         LOCAL_QUALITY_PROFILE,
         LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
     )
@@ -919,7 +941,8 @@ def test_keeps_usage_unavailable_when_provider_does_not_supply_it() -> None:
         client_factory=lambda **_: FakeOpenAIClient(completion),
     )
 
-    response = client.chat(
+    response = chat_with_policy(
+        client,
         LOCAL_QUALITY_PROFILE,
         LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
     )
@@ -947,7 +970,8 @@ def test_ignores_malformed_provider_usage_without_failing_response() -> None:
         client_factory=lambda **_: FakeOpenAIClient(completion),
     )
 
-    response = client.chat(
+    response = chat_with_policy(
+        client,
         LOCAL_QUALITY_PROFILE,
         LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
     )
@@ -985,7 +1009,7 @@ def test_rejects_non_object_tool_call_arguments() -> None:
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),))
 
     with pytest.raises(TypeError, match="arguments must be a JSON object"):
-        client.chat(LOCAL_QUALITY_PROFILE, request)
+        chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
 
 def test_classifies_openai_rate_limit_without_exposing_provider_message() -> None:
@@ -1001,7 +1025,8 @@ def test_classifies_openai_rate_limit_without_exposing_provider_message() -> Non
     )
 
     with pytest.raises(LLMProviderError) as raised:
-        client.chat(
+        chat_with_policy(
+            client,
             LOCAL_QUALITY_PROFILE,
             LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
         )
@@ -1029,7 +1054,8 @@ def test_classifies_bad_provider_request_without_exposing_provider_message() -> 
     )
 
     with pytest.raises(LLMProviderError) as raised:
-        client.chat(
+        chat_with_policy(
+            client,
             LOCAL_QUALITY_PROFILE,
             _structured_request("private prompt that must not be diagnosed"),
         )
@@ -1059,7 +1085,8 @@ def test_classifies_known_quota_code_before_rate_limit() -> None:
     )
 
     with pytest.raises(LLMProviderError) as raised:
-        client.chat(
+        chat_with_policy(
+            client,
             LOCAL_QUALITY_PROFILE,
             LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
         )
@@ -1080,7 +1107,8 @@ def test_does_not_classify_unrecognized_provider_http_429_as_rate_limit() -> Non
     )
 
     with pytest.raises(APIStatusError):
-        client.chat(
+        chat_with_policy(
+            client,
             LOCAL_QUALITY_PROFILE,
             LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
         )
@@ -1099,7 +1127,8 @@ def test_classifies_known_provider_maintenance_status_as_unavailable() -> None:
     )
 
     with pytest.raises(LLMProviderError) as raised:
-        client.chat(
+        chat_with_policy(
+            client,
             LOCAL_QUALITY_PROFILE,
             LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
         )
@@ -1118,7 +1147,8 @@ def test_classifies_provider_timeout_as_unavailable() -> None:
     )
 
     with pytest.raises(LLMProviderError) as raised:
-        client.chat(
+        chat_with_policy(
+            client,
             LOCAL_QUALITY_PROFILE,
             LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),)),
         )
@@ -1142,7 +1172,7 @@ def test_closes_created_clients() -> None:
         client_factory=lambda **_: fake_client,
     )
     request = LLMRequest(messages=(LLMMessage(role=MessageRole.USER, content="Hello"),))
-    client.chat(LOCAL_QUALITY_PROFILE, request)
+    chat_with_policy(client, LOCAL_QUALITY_PROFILE, request)
 
     client.close()
 

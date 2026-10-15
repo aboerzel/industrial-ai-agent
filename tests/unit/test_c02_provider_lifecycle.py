@@ -11,7 +11,11 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from opentelemetry import context as otel_context
-from test_openai_compatible_llm_client import FakeOpenAIClient, create_configuration
+from test_openai_compatible_llm_client import (
+    FakeOpenAIClient,
+    chat_with_policy,
+    create_configuration,
+)
 from test_rca_reasoning import RUN_ID, _profile, _report, _resolver, _valid_output
 from test_telemetry import _recording_telemetry
 
@@ -503,13 +507,17 @@ def test_shared_adapter_defaults_and_other_consumer_requests_are_unchanged():
     adapter = OpenAICompatibleLLMClient(create_configuration(), client_factory=factory)
     messages = (LLMMessage(role=MessageRole.USER, content="Synthetic"),)
     try:
-        adapter.chat(
-            ModelId("local_quality"), LLMRequest(messages=messages, timeout_seconds=0.1)
+        chat_with_policy(
+            adapter,
+            ModelId("local_quality"),
+            LLMRequest(messages=messages, timeout_seconds=0.1),
         )
         assert sdk.completions.parameters["timeout"] == 0.1
         assert options["timeout"] == 45.0
         assert options["max_retries"] == 0
-        adapter.chat(ModelId("local_quality"), LLMRequest(messages=messages))
+        chat_with_policy(
+            adapter, ModelId("local_quality"), LLMRequest(messages=messages)
+        )
         assert "timeout" not in sdk.completions.parameters
         assert options["timeout"] == 45.0
     finally:

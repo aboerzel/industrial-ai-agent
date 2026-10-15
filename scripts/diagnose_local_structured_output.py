@@ -20,6 +20,8 @@ from industrial_ai_agent.agent.llm import (
     MessageRole,
     ModelId,
 )
+from industrial_ai_agent.agent.model_egress import EgressCheckedLLMClient
+from industrial_ai_agent.domain.security import DataClassification
 from industrial_ai_agent.infrastructure.llm.configuration import load_model_catalog
 from industrial_ai_agent.infrastructure.llm.openai_compatible import (
     OpenAICompatibleLLMClient,
@@ -171,7 +173,8 @@ def main() -> None:
 
     load_local_environment(PROJECT_ROOT / ".env")
     configuration = load_model_catalog(PROJECT_ROOT / "config" / "model_catalog.toml")
-    client = OpenAICompatibleLLMClient(configuration)
+    adapter = OpenAICompatibleLLMClient(configuration)
+    client = EgressCheckedLLMClient(adapter, configuration, DataClassification.PUBLIC)
     results: list[dict[str, object]] = []
     try:
         for model_id in args.model_id:
@@ -212,7 +215,7 @@ def main() -> None:
                     }
                 )
     finally:
-        client.close()
+        adapter.close()
     args.output.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
 
 

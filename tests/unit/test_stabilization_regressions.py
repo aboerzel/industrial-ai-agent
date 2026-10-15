@@ -19,6 +19,7 @@ from test_langgraph_mcp_hitl import (
     _agent,
 )
 from test_openai_compatible_llm_client import (
+    chat_with_policy,
     create_authenticated_configuration,
     create_configuration,
 )
@@ -93,7 +94,8 @@ def test_local_model_redirect_cannot_forward_request_body():
     )
     try:
         with pytest.raises(APIStatusError, match="307"):
-            adapter.chat(
+            chat_with_policy(
+                adapter,
                 ModelId("local_quality"),
                 LLMRequest(
                     messages=(LLMMessage(role=MessageRole.USER, content="SYNTHETIC"),)
@@ -260,7 +262,7 @@ def test_invalid_endpoint_fixture_stops_at_schema_before_the_guard(
     )
     try:
         with pytest.raises(ValidationError) as invalid:
-            adapter.chat(ModelId("local_quality"), LLMRequest(messages=()))
+            chat_with_policy(adapter, ModelId("local_quality"), LLMRequest(messages=()))
         assert [(error["loc"], error["type"]) for error in invalid.value.errors()] == [
             (("messages",), "too_short")
         ]

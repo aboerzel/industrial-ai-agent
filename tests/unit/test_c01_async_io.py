@@ -328,12 +328,10 @@ def _reasoning_server(
             assert security_context.authenticated
             return _report(classification=classification)
 
-    class Authorization:
+    class Authorization(ModelExecutionAuthorizer):
         def require_allowed(self, classification, execution_zone, max_classification):
             authorizations.append((classification, execution_zone))
-            ModelExecutionAuthorizer().require_allowed(
-                classification, execution_zone, max_classification
-            )
+            super().require_allowed(classification, execution_zone, max_classification)
 
     def client_factory(classification, focus):
         metadata.append((classification, _REQUEST_CONTEXT.get()))

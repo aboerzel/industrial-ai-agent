@@ -387,6 +387,39 @@ Negative:
 
 ## Agent Run Classification Policy Refinement
 
+### Concrete provider authorization refinement
+
+Classification is a data-sensitivity input, not proof of authorization. The single
+`ModelExecutionAuthorizer` applies the existing matrix and issues an immutable
+`ModelEgressAuthorization` on a private, authorized copy of `LLMRequest`. Normal request
+construction, JSON labels and an `authorized=True` flag cannot create this decision.
+Only the policy issuer attaches it. The decision binds the exact request instance,
+stable model ID, trusted classification, execution zone and configured classification
+ceiling. It is process-local, excluded from request schemas, serialization and repr;
+copying or deserializing an authorized request requires fresh authorization. The copied
+request isolates nested input structures from subsequent changes to the caller's input.
+This is a trusted server-code API boundary, not a sandbox against arbitrary Python
+reflection or malicious code already executing inside the process.
+
+```mermaid
+flowchart TD
+    C[Server-classified model request] --> P[Authoritative egress policy]
+    P --> A[Trusted request-bound authorization]
+    A --> V[Provider adapter verifies issuer and exact request/model/zone/ceiling]
+    V --> T[Existing destination and TLS validation]
+    T --> K[Credential resolution and SDK construction]
+    K --> S[Provider payload serialization and transport]
+```
+
+The concrete provider boundary rejects missing, forged or mismatched decisions before
+credential lookup, SDK construction or provider serialization. Verification checks the
+policy result; it does not repeat the classification matrix. Approved LOCAL calls also
+require authorization. Valid HTTPS does **not** authorize data egress: transport checks
+remain additional requirements, including approved local destinations, disabled proxies
+and redirects. Agent, RCA and diagnostic composition obtain decisions through the same
+policy/wrapper; fixed content-free provider diagnostics are explicitly PUBLIC. Existing
+worker capacity, timeout, caching and client-lifecycle behavior remain unchanged.
+
 The FastAPI run boundary separates target/profile resolution from effective request
 classification. A server-owned `AgentRunProfile` defines domain behavior and the bounded
 tool/MCP data scope; it does not classify the complete user message. A PUBLIC target

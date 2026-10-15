@@ -20,6 +20,7 @@ from industrial_ai_agent.agent.model_egress import (
     ModelEgressPolicy,
     ModelExecutionAuthorizer,
     effective_data_classification,
+    require_model_egress_authorization,
 )
 from industrial_ai_agent.agent.run_classification_policy import (
     AgentRunClassificationPolicy,
@@ -182,7 +183,7 @@ def test_allowed_request_reaches_adapter(
     response = client.chat(PROFILE, outbound_request)
 
     assert response.text == "response"
-    assert adapter.calls == [(PROFILE, outbound_request)]
+    _assert_authorized_forward(adapter, PROFILE, outbound_request, classification)
 
 
 def test_denied_public_cloud_request_never_reaches_adapter() -> None:
@@ -219,7 +220,9 @@ def test_s04_confidential_egress_uses_the_same_final_policy_for_new_public_profi
     response = client.chat(ModelProfile(profile_name), request)
 
     assert response.text == "response"
-    assert adapter.calls == [(ModelProfile(profile_name), request)]
+    _assert_authorized_forward(
+        adapter, ModelProfile(profile_name), request, DataClassification.CONFIDENTIAL
+    )
     assert ModelExecutionAuthorizer().is_allowed(
         DataClassification.CONFIDENTIAL,
         configuration.get_execution_zone(profile_name),
@@ -272,5 +275,24 @@ def test_mixed_public_target_and_restricted_text_is_checked_before_provider_call
         assert adapter.calls == []
     else:
         checked.chat(PROFILE, request)
-        assert adapter.calls == [(PROFILE, request)]
+        _assert_authorized_forward(
+            adapter, PROFILE, request, DataClassification.RESTRICTED
+        )
         assert adapter.calls[0][1].messages[0].content == message
+
+
+def _assert_authorized_forward(adapter, model_id, original, classification):
+    assert len(adapter.calls) == 1
+    forwarded_model, forwarded = adapter.calls[0]
+    assert forwarded_model == model_id
+    assert forwarded is not original
+    assert forwarded.model_dump() == original.model_dump()
+    assert original.egress_authorization is None
+    decision = forwarded.egress_authorization
+    assert decision.data_classification is classification
+    require_model_egress_authorization(
+        model_id,
+        forwarded,
+        ExecutionZone(decision.execution_zone),
+        decision.max_data_classification,
+    )

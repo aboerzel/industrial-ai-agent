@@ -1,8 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, Protocol, Self
+from weakref import ReferenceType
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+
+from industrial_ai_agent.domain.security import DataClassification
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,8 +156,30 @@ class LLMReasoningEffort(StrEnum):
     MAX = "max"
 
 
+@dataclass(frozen=True, slots=True, init=False, eq=False)
+class ModelEgressAuthorization:
+    """Opaque server-policy result, never a caller-supplied classification label."""
+
+    model_id: ModelId
+    data_classification: DataClassification
+    execution_zone: str
+    max_data_classification: DataClassification
+    _request: ReferenceType["LLMRequest"] = field(repr=False)
+    _issuer: object = field(repr=False)
+
+    def __init__(self) -> None:
+        raise TypeError("Model egress authorization must be issued by policy")
+
+
 class LLMRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # Policy-issued call metadata is absent from JSON, schemas and provider input.
+    _egress_authorization: ModelEgressAuthorization | None = PrivateAttr(default=None)
+
+    @property
+    def egress_authorization(self) -> ModelEgressAuthorization | None:
+        return self._egress_authorization
 
     messages: tuple[LLMMessage, ...] = Field(min_length=1)
     tools: tuple[LLMToolDefinition, ...] = ()

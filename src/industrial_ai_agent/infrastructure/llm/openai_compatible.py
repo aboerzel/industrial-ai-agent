@@ -31,7 +31,10 @@ from industrial_ai_agent.agent.llm import (
     LLMUsage,
     ModelId,
 )
-from industrial_ai_agent.agent.model_egress import ExecutionZone
+from industrial_ai_agent.agent.model_egress import (
+    ExecutionZone,
+    require_model_egress_authorization,
+)
 from industrial_ai_agent.infrastructure.llm.configuration import (
     AuthenticationMode,
     ModelCatalogConfiguration,
@@ -83,6 +86,12 @@ class OpenAICompatibleLLMClient:
 
     def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
         profile_config = self._configuration.get_model_config(model_id.value)
+        require_model_egress_authorization(
+            model_id,
+            request,
+            profile_config.execution_zone,
+            profile_config.max_data_classification,
+        )
         client = self._get_client(model_id)
         parameters: dict[str, Any] = {
             "model": _resolve_configured_value(

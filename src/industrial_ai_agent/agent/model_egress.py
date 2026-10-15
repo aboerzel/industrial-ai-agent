@@ -1,10 +1,12 @@
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, cast
+from weakref import ReferenceType, ref
 
 from industrial_ai_agent.agent.llm import (
     LLMClient,
     LLMRequest,
     LLMResponse,
+    ModelEgressAuthorization,
     ModelId,
 )
 from industrial_ai_agent.domain.security import (
@@ -16,6 +18,9 @@ from industrial_ai_agent.domain.security import (
 class ExecutionZone(StrEnum):
     LOCAL = "LOCAL"
     PUBLIC_CLOUD = "PUBLIC_CLOUD"
+
+
+_MODEL_EGRESS_ISSUER = object()
 
 
 class ModelEgressDeniedError(RuntimeError):
@@ -101,6 +106,56 @@ class ModelExecutionAuthorizer:
         ):
             raise ModelEgressDeniedError("Model egress denied by policy")
 
+    def authorize_request(
+        self,
+        model_id: ModelId,
+        request: LLMRequest,
+        data_classification: object | None,
+        execution_zone: object | None,
+        max_data_classification: object | None,
+    ) -> LLMRequest:
+        """Apply the one policy and issue a decision for an isolated exact request."""
+        self.require_allowed(
+            data_classification, execution_zone, max_data_classification
+        )
+        authorized = request.model_copy(deep=True)
+        decision = object.__new__(ModelEgressAuthorization)
+        for name, value in (
+            ("model_id", model_id),
+            ("data_classification", cast(DataClassification, data_classification)),
+            ("execution_zone", cast(ExecutionZone, execution_zone).value),
+            (
+                "max_data_classification",
+                cast(DataClassification, max_data_classification),
+            ),
+            ("_request", ref(authorized)),
+            ("_issuer", _MODEL_EGRESS_ISSUER),
+        ):
+            object.__setattr__(decision, name, value)
+        authorized._egress_authorization = decision
+        return authorized
+
+
+def require_model_egress_authorization(
+    model_id: ModelId,
+    request: LLMRequest,
+    execution_zone: ExecutionZone,
+    max_data_classification: DataClassification,
+) -> None:
+    """Verify an issued decision structurally; do not duplicate business policy."""
+    decision = request.egress_authorization
+    if (
+        type(decision) is not ModelEgressAuthorization
+        or getattr(decision, "_issuer", None) is not _MODEL_EGRESS_ISSUER
+        or not isinstance(getattr(decision, "_request", None), ReferenceType)
+        or decision._request() is not request
+        or decision.model_id != model_id
+        or not isinstance(execution_zone, ExecutionZone)
+        or decision.execution_zone != execution_zone.value
+        or decision.max_data_classification != max_data_classification
+    ):
+        raise ModelEgressDeniedError("Model egress denied by policy")
+
 
 class EgressCheckedLLMClient:
     def __init__(
@@ -124,12 +179,14 @@ class EgressCheckedLLMClient:
         max_data_classification = (
             self._execution_zone_resolver.get_max_data_classification(model_id.value)
         )
-        self._authorizer.require_allowed(
+        authorized_request = self._authorizer.authorize_request(
+            model_id,
+            request,
             self._request_classification,
             execution_zone,
             max_data_classification,
         )
-        return self._delegate.chat(model_id, request)
+        return self._delegate.chat(model_id, authorized_request)
 
     def raise_request_classification(self, classification: DataClassification) -> None:
         """Monotonically retain the highest classified data observed in this run."""

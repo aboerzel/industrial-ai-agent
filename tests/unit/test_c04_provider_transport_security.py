@@ -4,6 +4,7 @@ import httpx
 import pytest
 from openai import APIStatusError, OpenAI
 from test_openai_compatible_llm_client import (
+    chat_with_policy,
     create_authenticated_configuration,
     create_configuration,
 )
@@ -158,8 +159,20 @@ def test_public_http_denied_before_credentials_sdk_and_transport(
             if invocation == "direct"
             else _authorized_client(adapter, configuration)
         )
+        if invocation == "direct":
+            from industrial_ai_agent.agent.model_egress import ModelExecutionAuthorizer
+
+            outbound = ModelExecutionAuthorizer().authorize_request(
+                _MODEL_ID,
+                _REQUEST,
+                DataClassification.PUBLIC,
+                configuration.get_execution_zone(_MODEL_ID.value),
+                configuration.get_max_data_classification(_MODEL_ID.value),
+            )
+        else:
+            outbound = _REQUEST
         with pytest.raises(PermissionError) as denied:
-            client.chat(_MODEL_ID, _REQUEST)
+            client.chat(_MODEL_ID, outbound)
         assert type(denied.value) is PermissionError
         recording.assert_denied(endpoint)
         captured = capsys.readouterr()
@@ -176,7 +189,7 @@ def test_public_http_denied_even_when_configured_credential_is_missing(monkeypat
     recording = _RecordingProvider(monkeypatch)
     with recording.adapter(monkeypatch, configuration, environment) as adapter:
         with pytest.raises(PermissionError):
-            adapter.chat(_MODEL_ID, _REQUEST)
+            chat_with_policy(adapter, _MODEL_ID, _REQUEST)
         recording.assert_denied(endpoint)
 
 
@@ -246,7 +259,7 @@ def test_unsafe_endpoint_override_reaches_guard_and_denies_before_transport(
     recording = _RecordingProvider(monkeypatch)
     with recording.adapter(monkeypatch, configuration, environment) as adapter:
         with pytest.raises(ValueError) as denied:
-            adapter.chat(_MODEL_ID, _REQUEST)
+            chat_with_policy(adapter, _MODEL_ID, _REQUEST)
         assert type(denied.value) is ValueError
         recording.assert_denied(endpoint)
         assert "synthetic-pass" not in str(denied.value)
@@ -260,7 +273,7 @@ def test_public_https_redirect_to_http_is_not_followed(monkeypatch):
     recording.redirect = True
     with recording.adapter(monkeypatch, configuration, environment) as adapter:
         with pytest.raises(APIStatusError) as redirected:
-            adapter.chat(_MODEL_ID, _REQUEST)
+            chat_with_policy(adapter, _MODEL_ID, _REQUEST)
         assert redirected.value.status_code == 307
         assert recording.guard_calls == [(endpoint, ExecutionZone.PUBLIC_CLOUD)]
         assert recording.requests == [(endpoint + "/chat/completions", True)]
@@ -275,7 +288,7 @@ def test_environment_proxy_settings_do_not_override_transport_policy(monkeypatch
     configuration, environment = _configuration(endpoint)
     recording = _RecordingProvider(monkeypatch)
     with recording.adapter(monkeypatch, configuration, environment) as adapter:
-        assert adapter.chat(_MODEL_ID, _REQUEST).text == "SYNTHETIC"
+        assert chat_with_policy(adapter, _MODEL_ID, _REQUEST).text == "SYNTHETIC"
         assert recording.requests == [(endpoint + "/chat/completions", True)]
 
 
