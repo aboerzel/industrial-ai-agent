@@ -93,15 +93,15 @@ newInvestigationButton.addEventListener("click", () => {
 
 exportPdfButton.addEventListener("click", async () => {
   const generation = getSecurityContextGeneration();
-  if (currentInvestigationId) {
-    try {
+  try {
+    if (currentInvestigationId) {
       await downloadInvestigationPdf(currentInvestigationId);
-    } catch (error) {
-      if (!isCurrentSecurityContext(generation)) return;
-      showError(publicError(error, "The PDF export could not be downloaded."));
+    } else if (hasExportableConversation) {
+      downloadTranscriptPdf(visibleTranscript, generation);
     }
-  } else if (hasExportableConversation) {
-    downloadTranscriptPdf(visibleTranscript);
+  } catch (error) {
+    if (!isCurrentSecurityContext(generation)) return;
+    showError(publicError(error, "The PDF export could not be downloaded."));
   }
 });
 

@@ -1,3 +1,5 @@
+import { createDocumentUrl, getSecurityContextGeneration, isCurrentSecurityContext, revokeObjectUrlLater } from "./api.js?v=20261013-2";
+
 const PAGE_WIDTH = 595;
 const PAGE_HEIGHT = 842;
 const LEFT_MARGIN = 48;
@@ -6,17 +8,20 @@ const BOTTOM_MARGIN = 52;
 const LINE_HEIGHT = 14;
 const MAX_FIELD_LENGTH = 8_000;
 
-export function downloadTranscriptPdf(transcript) {
+export function downloadTranscriptPdf(transcript, generation = getSecurityContextGeneration()) {
   const content = createTranscriptPdf(transcript);
-  const objectUrl = URL.createObjectURL(new Blob([content], { type: "application/pdf" }));
+  const objectUrl = createDocumentUrl(new Blob([content], { type: "application/pdf" }), generation);
   const link = document.createElement("a");
   link.href = objectUrl;
   link.download = "investigation-transcript.pdf";
   link.hidden = true;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)?.unref?.();
+  try {
+    document.body.append(link);
+    if (isCurrentSecurityContext(generation)) link.click();
+  } finally {
+    link.remove();
+    revokeObjectUrlLater(objectUrl);
+  }
 }
 
 export function createTranscriptPdf(transcript) {

@@ -54,6 +54,12 @@ API clients retain their existing optional clearance narrowing for compatibility
 Switch/logout invalidates frontend context generation, aborts pending requests, clears
 conversation/drafts/investigation references/export state, revokes Blob URLs and closes
 the model dialog **before** mutating the session. Late JSON/binary results are discarded.
+Object URLs for transcript-only browser PDFs share the API module's existing
+context-owned document URL registry with server PDF and document downloads. Context
+invalidation revokes them synchronously, independently of identity refresh; stale
+export generations cannot publish a URL or start a download. The existing 60-second
+cleanup remains a secondary mechanism for normal same-context exports. Language-only
+preference changes do not invalidate that owner.
 An identity switch starts a new investigation; it does not automatically restore the previous identity's history. Demo investigations
 remain shared by classification, not private per-user tenants. Explicit reads under the
 new identity may succeed when its clearance authorizes the data. Refresh and BFCache restoration verify the current server identity and authorize

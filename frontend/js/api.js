@@ -37,9 +37,13 @@ function requireCurrentSecurityContext(generation) {
   if (!isCurrentSecurityContext(generation)) throw new SecurityContextChangedError();
 }
 
-function createDocumentUrl(content, generation) {
+export function createDocumentUrl(content, generation) {
   requireCurrentSecurityContext(generation);
   const url = URL.createObjectURL(content);
+  if (!isCurrentSecurityContext(generation)) {
+    URL.revokeObjectURL(url);
+    throw new SecurityContextChangedError();
+  }
   documentUrls.add(url);
   return url;
 }
@@ -209,7 +213,7 @@ function filenameFromContentDisposition(header, fallbackFilename = "document") {
   return match?.[1] ?? fallbackFilename;
 }
 
-function revokeObjectUrlLater(objectUrl) {
+export function revokeObjectUrlLater(objectUrl) {
   const timer = globalThis.setTimeout(() => {
     if (documentUrls.delete(objectUrl)) URL.revokeObjectURL(objectUrl);
   }, 60_000);

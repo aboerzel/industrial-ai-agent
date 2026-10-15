@@ -77,6 +77,7 @@ npm run test:e2e:fixtures -- --list
 | Journey assertion controls, context transitions, document bytes/filename, PDF and denied documents | `journey-evidence.spec.mjs` |
 | Active document MIME sanitization before Blob publication | `document-mime.spec.mjs` |
 | FC03 exact product inventory for all five identities in DE/EN, narrative fallback and bounded references; disposable PostgreSQL required | `fc03-discovery.spec.mjs` |
+| FC04 actual retained transcript-PDF URL reads across switch/logout, failed identity refresh, pagehide/BFCache and publication races; normal export, server PDF and document controls | `fc04-transcript-blob.spec.mjs` |
 
 The configured users are `demo-public`, `demo-internal`, `demo-confidential`,
 `demo-restricted` and `demo-admin`; see the [demo visibility matrix](../demo/demo-user-visibility.md).
