@@ -33,7 +33,11 @@ from industrial_ai_agent.domain.product_history import (
     ProductionStepStatus,
     StationId,
 )
-from industrial_ai_agent.domain.security import DataClassification, SecurityContext
+from industrial_ai_agent.domain.security import (
+    DataClassification,
+    SecurityContext,
+    effective_data_classification,
+)
 from industrial_ai_agent.infrastructure.persistence.models import (
     DocumentCatalogRecord,
     MachineStateRecord,
@@ -136,7 +140,9 @@ class PostgreSqlMachineStatusRepository:
             station_id=StationId(record.station.code),
             state=MachineState(record.state),
             active_error_code=record.active_error_code,
-            classification=DataClassification(record.classification),
+            classification=_classification_with_emitted_station(
+                record.classification, record.station
+            ),
         )
 
 
@@ -309,6 +315,16 @@ def _distinct_products(
     return tuple(products)
 
 
+def _classification_with_emitted_station(
+    classification: int, station: StationRecord | None
+) -> DataClassification:
+    """Join the source label with a visible station included in the projection."""
+    classifications = (DataClassification(classification),)
+    if station is not None:
+        classifications += (DataClassification(station.classification),)
+    return effective_data_classification(*classifications)
+
+
 class PostgreSqlMaintenanceTicketRepository:
     """Create station maintenance tickets with a database-enforced request key."""
 
@@ -337,7 +353,9 @@ class PostgreSqlMaintenanceTicketRepository:
                 station_id=StationId(record.station.code),
                 summary=record.summary or "Maintenance ticket",
                 status=record.status,
-                classification=DataClassification(record.classification),
+                classification=_classification_with_emitted_station(
+                    record.classification, record.station
+                ),
             )
 
     def get_maintenance_ticket(
@@ -359,7 +377,9 @@ class PostgreSqlMaintenanceTicketRepository:
             station_id=StationId(record.station.code),
             summary=record.summary or "Maintenance ticket",
             status=record.status,
-            classification=DataClassification(record.classification),
+            classification=_classification_with_emitted_station(
+                record.classification, record.station
+            ),
         )
 
     def create_maintenance_ticket(
@@ -381,7 +401,9 @@ class PostgreSqlMaintenanceTicketRepository:
                     station_id=StationId(existing.station.code),
                     summary=existing.summary or summary,
                     status=existing.status,
-                    classification=DataClassification(existing.classification),
+                    classification=_classification_with_emitted_station(
+                        existing.classification, existing.station
+                    ),
                 )
             ticket_code = f"MT-{uuid4().hex[:12].upper()}"
             record = MaintenanceTicketRecord(
@@ -419,7 +441,9 @@ class PostgreSqlMaintenanceTicketRepository:
                     station_id=StationId(existing.station.code),
                     summary=existing.summary or summary,
                     status=existing.status,
-                    classification=DataClassification(existing.classification),
+                    classification=_classification_with_emitted_station(
+                        existing.classification, existing.station
+                    ),
                 )
             return MaintenanceTicket(
                 ticket_id=ticket_code,
@@ -457,7 +481,9 @@ class PostgreSqlDocumentCatalogRepository:
             CatalogDocument(
                 document_id=record.id,
                 title=record.title,
-                classification=DataClassification(record.classification),
+                classification=_classification_with_emitted_station(
+                    record.classification, record.station
+                ),
                 mime_type=record.mime_type,
                 source_system=record.source_system,
                 station_code=record.station.code

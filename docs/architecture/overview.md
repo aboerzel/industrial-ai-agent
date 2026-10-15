@@ -119,6 +119,15 @@ decides eligible profiles and enforces the final data-to-model check. `RESTRICTE
 can only use approved local profiles; a configured public profile can be eligible only
 up to its approved maximum classification.
 
+The classification of a projection is the maximum classification of all classified
+data actually emitted by that projection. Caller clearance controls visibility but
+does not define the result label. PostgreSQL adapters use the Domain
+`effective_data_classification` join before capability/MCP serialization: machine and
+ticket identifiers include the visible station's label; document catalog/chunk metadata
+includes it only when the station association is emitted. Hidden or unexposed foreign
+keys do not raise the result label. The existing tool-result and model-egress guards
+consume that label before model context or provider access.
+
 Product visibility does not authorize its referenced stations. Product list, overview
 and history project an event only when both the event and its station are visible in
 the caller's RLS transaction. Hidden relationships emit no station or fault references
