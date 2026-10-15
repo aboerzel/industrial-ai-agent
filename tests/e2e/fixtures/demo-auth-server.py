@@ -2,12 +2,23 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
 import uvicorn
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from industrial_ai_agent.agent.agent_run import AgentRunResult, AgentRunStatus
+from industrial_ai_agent.agent.agent_run import (
+    AgentRunResult,
+    AgentRunStatus,
+    DocumentReference,
+    IdentifierReference,
+)
+from industrial_ai_agent.agent.troubleshooting_run_service import (
+    PendingApproval,
+    RunExecution,
+)
 from industrial_ai_agent.infrastructure.api.app import create_app
 from industrial_ai_agent.infrastructure.api.demo_security import (
     BearerTokenSecurityContextResolver,
@@ -45,6 +56,32 @@ from industrial_ai_agent.infrastructure.persistence.demo_seed import (
 
 
 class SyntheticRunService:
+    persistent_hitl_enabled = True
+
+    async def start(self, message, *, run_id, **kwargs):
+        if message == "Investigate S04.":
+            return SimpleNamespace(name="local_quality"), RunExecution(
+                approval=PendingApproval(
+                    action="create_maintenance_ticket",
+                    action_id="synthetic-r04-action",
+                    approval_execution_id=str(uuid4()),
+                    arguments={"station_id": "S04", "summary": "Synthetic R04 action"},
+                    summary="SYNTHETIC CONFIDENTIAL PENDING APPROVAL",
+                )
+            )
+        return SimpleNamespace(name="local_quality"), RunExecution(
+            result=await self.run_with_policy(message, **kwargs)
+        )
+
+    async def resume(self, **kwargs):
+        return RunExecution(
+            result=AgentRunResult(
+                status=AgentRunStatus.SUCCESS,
+                final_answer="Synthetic decision; no action executed.",
+                tool_call_count=0,
+            )
+        )
+
     async def run_with_policy(self, message, **kwargs):
         if resolve_demo_discovery_tool(message):
             # Browser-only recording repository; real PostgreSQL RLS is covered by
@@ -65,9 +102,26 @@ class SyntheticRunService:
                 )
             )
             return await service.run_with_policy(message, **kwargs)
+        references = message == "Investigate P4711."
         return AgentRunResult(
             status=AgentRunStatus.SUCCESS,
-            final_answer="SYNTHETIC CONFIDENTIAL CONVERSATION",
+            final_answer=(
+                "R04 SYNTHETIC RESTRICTED CONTEXT"
+                if message == "Investigate S07."
+                else "SYNTHETIC CONFIDENTIAL CONVERSATION"
+            ),
+            identifiers=(IdentifierReference(type="station", value="S04"),)
+            if references
+            else (),
+            documents=(
+                DocumentReference(
+                    document_id="CONFIDENTIAL",
+                    title="SYNTHETIC CONFIDENTIAL REFERENCE",
+                    format="text",
+                ),
+            )
+            if references
+            else (),
             tool_call_count=0,
         )
 

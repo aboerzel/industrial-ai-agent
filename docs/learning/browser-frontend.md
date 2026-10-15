@@ -159,6 +159,12 @@ MODEL_ADMIN remains orthogonal to data visibility. Identity switch/logout invali
 request generations, aborts old requests, clears conversation/export/dialog state and
 revokes Blob URLs before updating the session. A new principal starts a new investigation;
 refresh/BFCache restores a saved reference only after matching the server identity and
-reauthorizing it. Cross-tab session notifications contain no credentials and trigger the
-same purge. Client cleanup complements backend authorization. Streaming and production
+reauthorizing it. Cross-tab invalidation is sent before a session mutation can affect the
+shared cookie, with a completion notification even if its response fails. Other tabs
+purge immediately and reload identity independently after pending mutations settle;
+failed `/auth/me` leaves empty state and disabled capabilities. Notifications contain
+only an event type, opaque operation ID and phase, never credentials. Language may
+survive; the previous investigation, approval controls and export state may not.
+See [Demo authentication](demo-authentication.md) for the lifecycle and BFCache contract.
+Client cleanup complements backend authorization. Streaming and production
 federated authentication remain outside this local demo.

@@ -79,10 +79,45 @@ available. A production browser authentication design is deliberately outside th
 See [ADR-013](../decisions/ADR-013-fastapi-application-boundary.md). ADR-015 continues to
 govern the separate MCP bearer identity/permission boundary.
 
-Modern browsers also propagate a metadata-free session-change notification through an
-owned BroadcastChannel. Other open tabs purge context and retrieve the current server
-identity; the channel closes on pagehide and reconnects on pageshow. No token or password
-is sent through it. Browsers without BroadcastChannel revalidate on refresh/BFCache.
+Shared-session invalidation is independent of identity metadata refresh. Before dispatching
+a session mutation, the sender purges through the existing context-generation boundary and
+broadcasts `SESSION_INVALIDATED` with an opaque client operation ID and `pending` phase.
+Receivers immediately purge through the same boundary and wait for pending mutations to
+settle before reading identity. The sender broadcasts `settled` even after network,
+HTTP or response-parsing failures: once dispatched, the session may have changed.
+Client validation that prevents dispatch sends no invalidation. Conservative purging for
+a server-rejected request is harmless; it never restores the previous investigation.
+
+```mermaid
+flowchart TD
+    M[Session mutation requested] --> P[Advance context generation and purge locally]
+    P --> B[Broadcast pending: other tabs purge and suspend identity reads]
+    B --> R[Send session mutation]
+    R --> S[Broadcast settled even if the response fails]
+    S --> I[Each tab independently reads authoritative identity]
+    I -->|Valid current response| N[Install new identity without restoring old investigation]
+    I -->|Network, HTTP or metadata failure| U[Remain empty with unknown identity and disabled capabilities]
+```
+
+No notification depends on successful `/auth/me`. Receivers clear investigation/chat,
+references, pending approvals and their generation tokens, requests, Blob/download and
+PDF/export state, and identity-sensitive dialogs before attempting refresh. Language may
+survive. Unknown identity grants no usable data context or MODEL_ADMIN capability. A local
+auth revision and the existing request generation prevent late identity/results/errors from
+overwriting newer state. Duplicate or out-of-order notifications are idempotent; operation
+IDs correlate invalidations and never authorize server access. Messages carry no identity,
+conversation, credentials or approval token.
+
+The owned BroadcastChannel closes on pagehide and reconnects on pageshow. A mutation
+settling after pagehide sends its completion through a short-lived channel that closes
+immediately, so closure does not suppress invalidation. The existing
+synchronous pagehide purge removes protected DOM before BFCache entry; pageshow revalidates
+server identity before saved-reference restoration. Missed pending notifications are cleared
+on BFCache restoration so reconciliation does not depend on delivery while frozen. No shared
+storage epoch is required. Initial loading checks `/auth/me` before bootstrapping a missing
+session, so opening another tab with a valid cookie does not unnecessarily mutate that session.
+Browsers without BroadcastChannel retain refresh/BFCache revalidation; live cross-tab purge
+requires BroadcastChannel. No bounded auth-fetch timeout is currently configured.
 
 Server-owned operation scopes may narrow the identity ceiling: structured diagnostics
 require at least INTERNAL before target lookup and retain their INTERNAL RLS scope,

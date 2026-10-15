@@ -3,7 +3,7 @@ import { openAccount, switchDemoUser, setResponseLanguage } from "../../../front
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
-import { test, expect } from "../../../frontend/node_modules/@playwright/test/index.mjs";
+import { test, expect, chromium } from "../../../frontend/node_modules/@playwright/test/index.mjs";
 import { demoUsers } from "../../frontend/fixtures/demo-auth-fake.mjs";
 
 let process;
@@ -304,4 +304,286 @@ test("manually enabling the model button cannot bypass backend MODEL_ADMIN", asy
   expect((await denied).status()).toBe(403);
   await expect(page.locator("#model-configuration-content .model-configuration-status.error")).toBeVisible();
   expect(await page.locator(".model-assignment-row").count()).toBe(0);
+});
+
+test("R04 successful downgrade purges another tab even when sender identity refresh aborts", async ({ page, context }, testInfo) => {
+  await select(page, "demo-confidential");
+  const other = await context.newPage();
+  await other.goto(origin);
+  await expect(other.locator("#current-user")).toHaveText("demo-confidential");
+  await other.locator("#composer-message").fill("Investigate P4711.");
+  await other.locator("#composer-form").evaluate(form => form.requestSubmit());
+  await expect(other.locator("#conversation-history")).toContainText("SYNTHETIC CONFIDENTIAL CONVERSATION");
+  await expect(other.locator("#export-pdf-button")).toBeEnabled();
+  let failedIdentityRead = false;
+  await page.route("**/api/v1/auth/me", route => {
+    failedIdentityRead = true;
+    return route.abort();
+  });
+  await openAccount(page);
+  await page.locator("#switch-user-button").click();
+  const mutation = page.waitForResponse(response => response.url().endsWith("/auth/switch"));
+  await page.locator('[data-demo-username="demo-public"]').click();
+  expect((await mutation).status()).toBe(200);
+  await expect.poll(() => failedIdentityRead).toBe(true);
+  await expect(page.locator("#current-user")).not.toHaveText("demo-confidential");
+  const server = await (await page.request.get(`${origin}/api/v1/auth/me`)).json();
+  expect(server.clearance).toBe("PUBLIC");
+  const state = {
+    server: server.username,
+    sender: await page.locator("#current-user").textContent(),
+    receiver: await other.locator("#current-user").textContent(),
+    confidentialDomSurvived: (await other.locator("#conversation-history").textContent()).includes("SYNTHETIC CONFIDENTIAL CONVERSATION"),
+    exportEnabled: await other.locator("#export-pdf-button").isEnabled(),
+  };
+  await testInfo.attach("R04 observed state", { body: JSON.stringify(state), contentType: "application/json" });
+  console.log("R04 observed state", JSON.stringify(state));
+  await expect(other.locator("#conversation-history")).not.toContainText("SYNTHETIC CONFIDENTIAL CONVERSATION");
+  await expect(other.locator("#export-pdf-button")).toBeDisabled();
+});
+
+async function r04Conversation(page, prompt = "Investigate P4711.") {
+  const response = page.waitForResponse(r => r.url().endsWith("/api/v1/runs") && r.request().method() === "POST");
+  await page.locator("#composer-message").fill(prompt);
+  await page.locator("#composer-form").evaluate(form => form.requestSubmit());
+  const run = await response;
+  expect(run.status()).toBe(200);
+  await expect(page.locator("#composer-button")).toBeEnabled();
+  await expect(page.locator("#export-pdf-button")).toBeEnabled();
+}
+
+async function r04Shared(page, context, username = "demo-confidential") {
+  await select(page, username);
+  const other = await context.newPage();
+  await other.goto(origin);
+  await expect(other.locator("#current-user")).toHaveText(username);
+  const prompt = username === "demo-public" ? "welche stationen kennst du" : username === "demo-restricted" ? "Investigate S07." : "Investigate P4711.";
+  await r04Conversation(page, prompt);
+  await r04Conversation(other, prompt);
+  return other;
+}
+
+async function r04Purged(page) {
+  await expect(page.locator("#conversation-history article")).toHaveCount(0);
+  await expect(page.locator("#conversation-history")).not.toContainText(/SYNTHETIC|R04 references/);
+  await expect(page.locator(".approval-card, .reference-popover, .reference-action")).toHaveCount(0);
+  await expect(page.locator("#export-pdf-button")).toBeDisabled();
+  await expect(page.locator("#model-configuration-button")).toBeDisabled();
+  expect((await page.evaluate(() => JSON.parse(sessionStorage.getItem("industrial-ai-agent.active-investigation")))).investigationId).toBe(null);
+}
+
+async function r04Switch(page, username = "demo-public") {
+  await openAccount(page);
+  if (await page.locator("#demo-user-list").isHidden()) await page.locator("#switch-user-button").click();
+  const response = page.waitForResponse(r => r.url().endsWith("/auth/switch"));
+  await page.locator(`[data-demo-username="${username}"]`).click();
+  expect((await response).status()).toBe(200);
+}
+
+for (const failure of ["http", "json", "schema", "receiver"]) {
+  test(`R04 all tabs purge with ${failure} identity refresh failure`, async ({ page, context }) => {
+    const other = await r04Shared(page, context);
+    let reads = 0;
+    const fail = route => {
+      reads++;
+      if (failure === "receiver") return route.abort();
+      return route.fulfill({ status: failure === "http" ? 503 : 200, contentType: "application/json",
+        body: failure === "json" ? "{" : failure === "schema" ? JSON.stringify({ username: "demo-confidential", clearance: "INVALID", roles: [] }) : "{}" });
+    };
+    await page.route("**/api/v1/auth/me", fail);
+    if (failure === "receiver") await other.route("**/api/v1/auth/me", fail);
+    await r04Switch(page);
+    expect((await (await page.request.get(`${origin}/api/v1/auth/me`)).json()).clearance).toBe("PUBLIC");
+    await expect.poll(() => reads).toBeGreaterThan(0);
+    await r04Purged(page);
+    await r04Purged(other);
+    await expect(page.locator("#account-clearance")).toBeEmpty();
+    if (failure === "receiver") await expect(other.locator("#account-clearance")).toBeEmpty();
+    else await expect(other.locator("#current-user")).toHaveText("demo-public");
+  });
+}
+
+for (const [before, after] of [["demo-confidential", "demo-public"], ["demo-public", "demo-restricted"], ["demo-restricted", "demo-public"]]) {
+  test(`R04 normal shared switch ${before} to ${after} purges both contexts`, async ({ page, context }) => {
+    const other = await r04Shared(page, context, before);
+    await setResponseLanguage(other, "DE");
+    await r04Switch(page, after);
+    await expect(page.locator("#current-user")).toHaveText(after);
+    await expect(other.locator("#current-user")).toHaveText(after);
+    await r04Purged(page);
+    await r04Purged(other);
+    expect(await other.locator("#response-language").inputValue()).toBe("DE");
+  });
+}
+
+for (const ambiguous of [false, true]) {
+  test(`R04 logout purges both tabs despite ${ambiguous ? "ambiguous mutation response" : "receiver identity failure"}`, async ({ page, context }) => {
+    const other = await r04Shared(page, context);
+    await other.route("**/api/v1/auth/me", route => route.abort());
+    if (ambiguous) await page.route("**/api/v1/auth/logout", async route => {
+      await route.fetch(); // Real server revocation, then deliberately lose its response.
+      await route.abort();
+    });
+    await openAccount(page);
+    await page.locator("#logout-button").click();
+    await r04Purged(page);
+    await r04Purged(other);
+    await expect.poll(async () => (await page.request.get(`${origin}/api/v1/auth/me`)).status()).toBe(401);
+    await expect(other.locator("#account-clearance")).toBeEmpty();
+  });
+}
+
+for (const operation of ["json", "error", "document", "pdf"]) {
+  test(`R04 cross-tab invalidation discards late ${operation} after failed sender identity refresh`, async ({ page, context }) => {
+    const other = await r04Shared(page, context);
+    const saved = await other.evaluate(() => JSON.parse(sessionStorage.getItem("industrial-ai-agent.active-investigation")));
+    const resource = ["json", "error"].includes(operation) ? `/api/v1/investigations/${saved.investigationId}`
+      : operation === "pdf" ? `/api/v1/investigations/${saved.investigationId}/pdf` : "/api/v1/documents/CONFIDENTIAL/download";
+    const downloads = [];
+    other.on("download", download => downloads.push(download));
+    await other.evaluate(async ({ resource, operation, id }) => {
+      const api = await import("/js/api.js?v=20261013-2");
+      const original = window.fetch;
+      const create = URL.createObjectURL;
+      window.createdUrls = 0;
+      URL.createObjectURL = (...args) => { window.createdUrls++; return create(...args); };
+      window.fetch = async (url, options) => {
+        const response = await original(url, options);
+        if (url === resource) {
+          if (response.status !== 200) throw new Error("Synthetic protected request must be authorized before downgrade");
+          window.responseReady = true;
+          await new Promise(resolve => { window.releaseR04 = resolve; });
+          if (operation === "error") return new Response(JSON.stringify({ code: "synthetic_error", message: "SYNTHETIC CONFIDENTIAL ERROR", documents: [{ title: "SYNTHETIC SECRET" }] }), { status: 500 });
+        }
+        return response;
+      };
+      const pending = operation === "pdf" ? api.downloadInvestigationPdf(id) : operation === "document" ? api.downloadDocument("CONFIDENTIAL") : api.getInvestigation(id);
+      void pending.then(() => { window.oldOutcome = "unexpected-success"; }, error => { window.oldOutcome = error.name; });
+    }, { resource, operation, id: saved.investigationId });
+    await other.waitForFunction(() => window.responseReady);
+    await page.route("**/api/v1/auth/me", route => route.abort());
+    await r04Switch(page);
+    await r04Purged(other);
+    await other.evaluate(() => window.releaseR04());
+    await other.waitForFunction(() => window.oldOutcome);
+    expect(await other.evaluate(() => window.oldOutcome)).toBe("SecurityContextChangedError");
+    expect(await other.evaluate(() => window.createdUrls)).toBe(0);
+    expect(downloads).toHaveLength(0);
+    await r04Purged(other);
+  });
+}
+
+test("R04 cross-tab failure purge removes pending approval controls and their generation", async ({ page, context }) => {
+  await select(page, "demo-confidential");
+  const other = await context.newPage();
+  await other.goto(origin);
+  const pending = other.waitForResponse(r => r.url().endsWith("/api/v1/runs") && r.request().method() === "POST");
+  await r04Conversation(other, "Investigate S04.");
+  const run = await (await pending).json();
+  await expect(other.locator(".approval-card")).toContainText("SYNTHETIC CONFIDENTIAL PENDING APPROVAL");
+  expect(run.approval_request.approval_execution_id).toMatch(/^[0-9a-f-]{36}$/);
+  await page.route("**/api/v1/auth/me", route => route.abort());
+  await r04Switch(page);
+  await r04Purged(other);
+  const denied = await other.request.post(`${origin}/api/v1/runs/${run.run_id}/resume`, { headers: { "X-Demo-Session": "1", Origin: origin },
+    data: { decision: "approve", approval_execution_id: run.approval_request.approval_execution_id } });
+  expect(denied.status()).toBe(404);
+});
+
+for (const failure of ["network", "json"]) {
+  test(`R04 ${failure} mutation response still purges peers and revokes active document URLs`, async ({ page, context }) => {
+    const other = await r04Shared(page, context);
+    await other.evaluate(async () => {
+      const api = await import("/js/api.js?v=20261013-2");
+      const revoke = URL.revokeObjectURL;
+      window.revokedR04Urls = [];
+      URL.revokeObjectURL = url => { window.revokedR04Urls.push(url); return revoke(url); };
+      window.open = url => { window.openR04Url = url; };
+      await api.openDocument("CONFIDENTIAL");
+    });
+    expect(await other.evaluate(() => window.openR04Url)).toMatch(/^blob:/);
+    let mutated = false;
+    await page.route("**/api/v1/auth/switch", async route => {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      mutated = true;
+      if (failure === "network") await route.abort();
+      else await route.fulfill({ response, body: "{" });
+    });
+    await openAccount(page);
+    await page.locator("#switch-user-button").click();
+    await page.locator('[data-demo-username="demo-public"]').click();
+    await expect.poll(() => mutated).toBe(true);
+    expect((await (await page.request.get(`${origin}/api/v1/auth/me`)).json()).clearance).toBe("PUBLIC");
+    await r04Purged(page);
+    await r04Purged(other);
+    expect(await other.evaluate(() => window.revokedR04Urls.includes(window.openR04Url))).toBe(true);
+    expect(await other.evaluate(async () => { try { await fetch(window.openR04Url); return "accessible"; } catch { return "revoked"; } })).toBe("revoked");
+  });
+}
+
+test("R04 new tab during delayed sender refresh reads the authoritative new identity", async ({ page, context }) => {
+  const other = await r04Shared(page, context);
+  let release;
+  let started = false;
+  await page.route("**/api/v1/auth/me", async route => {
+    started = true;
+    await new Promise(resolve => { release = resolve; });
+    await route.abort();
+  });
+  await r04Switch(page);
+  await expect.poll(() => started).toBe(true);
+  const fresh = await context.newPage();
+  await fresh.goto(origin);
+  await expect(fresh.locator("#current-user")).toHaveText("demo-public");
+  await r04Purged(fresh);
+  await r04Purged(other);
+  release();
+});
+
+test("R04 rapid confidential to public to internal ignores an old delayed identity", async ({ page, context }) => {
+  const other = await r04Shared(page, context);
+  await page.evaluate(() => {
+    const original = window.fetch;
+    window.fetch = (url, options) => original(url, String(url).endsWith("/auth/me") ? { ...options, signal: undefined } : options);
+  });
+  let release;
+  let held = false;
+  await page.route("**/api/v1/auth/me", async route => {
+    const response = await route.fetch();
+    if (!held) {
+      held = true;
+      await new Promise(resolve => { release = resolve; });
+    }
+    await route.fulfill({ response });
+  });
+  await r04Switch(page);
+  await expect.poll(() => held).toBe(true);
+  await page.locator('[data-demo-username="demo-internal"]').click();
+  await expect(page.locator("#current-user")).toHaveText("demo-internal");
+  release();
+  await expect(other.locator("#current-user")).toHaveText("demo-internal");
+  await r04Purged(page);
+  await r04Purged(other);
+  expect((await (await page.request.get(`${origin}/api/v1/auth/me`)).json()).username).toBe("demo-internal");
+  await expect(page.locator("#current-user")).toHaveText("demo-internal");
+});
+
+test("R04 real BFCache restores only purged context after a shared downgrade", async () => {
+  const browser = await chromium.launch({ channel: "chromium", ignoreDefaultArgs: ["--disable-back-forward-cache"] });
+  try {
+    const context = await browser.newContext();
+    await context.addInitScript(() => window.addEventListener("pageshow", event => { window.r04BFCache = event.persisted; }));
+    const sender = await context.newPage();
+    await sender.goto(origin);
+    await expect(sender.locator("#current-user")).toHaveText("demo-public");
+    const other = await r04Shared(sender, context);
+    await other.waitForLoadState("networkidle");
+    await other.goto(`${origin}/health`);
+    await r04Switch(sender);
+    await other.goBack({ waitUntil: "commit" });
+    expect(await other.evaluate(() => window.r04BFCache)).toBe(true);
+    await r04Purged(other);
+    await expect(other.locator("#current-user")).toHaveText("demo-public");
+  } finally { await browser.close(); }
 });
