@@ -129,7 +129,9 @@ flowchart LR
     V --> A[Decision persisted for generation G]
     A --> C[Atomic single-use execution claim for G]
     C --> K[SHA-256 of run ID and generation UUID]
-    K --> T[Unique maintenance-ticket request ID]
+    K --> B[Owned bounded async-to-sync persistence bridge]
+    B --> T[Synchronous transaction with unique ticket request ID]
+    T --> I[Idempotent persisted result]
 ```
 
 The bounded public approval DTO exposes the existing `approval_execution_id` UUID as an
@@ -166,6 +168,34 @@ remains denied. Approval consumption still precedes side-effect creation in sepa
 transactions; this is not a transactional outbox or a claim of crash-proof execution.
 Legacy approvals lacking authoritative generation history fail closed. Migration 0025
 adds empty history without inferring or authorizing legacy generations.
+
+### Maintenance-ticket persistence lifetime
+
+The async ticket capability awaits blocking create and consumed-result lookup through
+the existing AnyIO worker pool, whose shared default limiter admits at most 40 concurrent
+worker calls unless explicitly configured otherwise. Admission waits asynchronously;
+each call retains its own awaited work and introduces no executor or detached retry
+queue. Provider-specific RCA capacity and deadlines are independent and unchanged.
+The authoritative execution claim still precedes every write. The synchronous repository
+opens, uses, commits/rolls back and closes its SQLAlchemy session entirely inside the
+worker; only immutable request ID, station and summary values cross the boundary.
+AnyIO propagates tracing context without moving a live database session between threads.
+The synthetic in-memory ticket repository locks ID allocation, idempotency lookup,
+insertion and read snapshots so the same synchronous contract remains safe in workers.
+
+Cancellation observed before the claim creates neither claim nor ticket. Cancellation
+after consumption but before dispatch creates no ticket; the consumed generation remains
+fail-closed. If cancellation arrives while waiting for worker capacity, the queued call
+is marked to skip the repository operation and is drained. Once synchronous I/O has
+started, the request owns and awaits its completion, including repeated native asyncio
+cancellation and AnyIO cancellation scopes, before propagating cancellation. Capacity
+remains occupied until the actual operation completes. There is no added application
+timeout or automatic retry; an enclosing timeout may therefore wait for that drain.
+Cancellation is not proof that no commit occurred. A committed result is recoverable
+only through the existing authorized consumed-generation lookup; a missing result is
+denied, never recreated. Database errors propagate through the existing bounded MCP
+error contract, with no fake success or retry. Process termination can still leave a
+consumed generation without a result, as described above.
 
 ### MCP Execution Authorization
 

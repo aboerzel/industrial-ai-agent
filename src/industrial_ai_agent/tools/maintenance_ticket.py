@@ -1,7 +1,13 @@
 import asyncio
+from collections.abc import Callable
+from functools import partial
 from hashlib import sha256
+from threading import Event
 from uuid import UUID
 
+import anyio
+from anyio.lowlevel import checkpoint
+from anyio.to_thread import run_sync
 from pydantic import BaseModel, ConfigDict
 
 from industrial_ai_agent.application.action_approval import (
@@ -95,16 +101,25 @@ class MaintenanceTicketCapability:
         idempotency_id = MaintenanceTicketRequestId(
             sha256(f"{run_id}:{request.value}".encode()).hexdigest()
         )
+        await checkpoint()
         if await self._approval_claims.claim_approved_action(claim, security_context):
-            ticket = self._repository.create_maintenance_ticket(
-                idempotency_id, station, summary
+            ticket = await _run_owned_ticket_io(
+                partial(
+                    self._repository.create_maintenance_ticket,
+                    idempotency_id,
+                    station,
+                    summary,
+                )
             )
         elif await self._approval_claims.is_consumed_approved_action(
             claim, security_context
         ):
             # A consumed claim can authorize a read of its existing result only.
-            ticket = await asyncio.to_thread(
-                self._repository.get_maintenance_ticket_by_request_id, idempotency_id
+            ticket = await _run_owned_ticket_io(
+                partial(
+                    self._repository.get_maintenance_ticket_by_request_id,
+                    idempotency_id,
+                )
             )
         else:
             raise PermissionError("Protected action is not authorized")
@@ -115,3 +130,36 @@ class MaintenanceTicketCapability:
             station_id=ticket.station_id.value,
             summary=ticket.summary,
         )
+
+
+async def _run_owned_ticket_io[T](operation: Callable[[], T]) -> T:
+    """Keep bounded blocking I/O owned until completion, including on cancellation."""
+    # A consumed approval does not require dispatch if cancellation is already known.
+    await checkpoint()
+    cancelled = Event()
+
+    def invoke() -> T:
+        # Cancellation while waiting for pool capacity must not start a new write.
+        if cancelled.is_set():
+            raise asyncio.CancelledError
+        return operation()
+
+    worker = asyncio.create_task(
+        run_sync(invoke, abandon_on_cancel=False),
+        name="maintenance-ticket-owned-io",
+    )
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancelled.set()
+        # Native Task.cancel() also needs shielding; AnyIO's worker shield alone
+        # protects cancellation scopes, not a direct cancellation of its task.
+        with anyio.CancelScope(shield=True):
+            while not worker.done():
+                try:
+                    await asyncio.wait({worker})
+                except asyncio.CancelledError:
+                    continue
+            if not worker.cancelled():
+                worker.exception()  # Retrieve a late failure without losing cancellation.
+        raise
