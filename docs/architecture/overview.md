@@ -21,6 +21,11 @@ Package paths in the table are relative to `src/industrial_ai_agent/`.
 | Provider/model configuration | Catalog TOML plus declared environment overrides | `config/model_catalog.toml`, `config/model_catalog.docker.toml`; no universal chat/RCA/embedding default |
 | Embedding baseline | `qwen3-embedding:0.6b` | `infrastructure/ollama_embedding_client.py`; separate from chat/RCA assignments |
 
+The [RTX 3070 8-GiB deployment policy](../learning/local-model-capacity.md) keeps
+this embedding model on CPU through a persisted Ollama `num_gpu=0` model parameter,
+while chat stays on GPU. This is deployment placement, not a classification/routing
+or port change; the 45-second provider timeout remains unchanged.
+
 The tool budget is currently fixed, not an environment/CLI setting. Demo model values
 are configuration/bootstrap choices, not required architectural model identities.
 Credential ownership is defined in [Browser Frontend](../learning/browser-frontend.md#credential-ownership).
@@ -667,7 +672,7 @@ flowchart LR
         OEC["OllamaEmbeddingClient"]
         VEC["LangChain InMemoryVectorStore"]
         KB["Versioned local Markdown knowledge base"]
-        OLLAMA["Local Ollama qwen3-embedding:0.6b"]
+        OLLAMA["Local Ollama qwen3-embedding:0.6b<br/>CPU on 8-GiB deployment"]
         FMCP["factory_mcp MCP server"]
         KMCP["knowledge_mcp MCP server"]
         MCPCLIENT["Official MCP stdio / Streamable HTTP client"]
@@ -1483,7 +1488,7 @@ flowchart LR
     Hybrid --> Reranked
     Reranker --> Reranked
     Adapter --> Guard["Embedding egress authorization<br/>trusted DataClassification + destination"]
-    Guard -->|"ALLOW only: SDK call"| Model["Local Ollama<br/>qwen3-embedding:0.6b"]
+    Guard -->|"ALLOW only: SDK call"| Model["Local Ollama<br/>qwen3-embedding:0.6b<br/>CPU on 8-GiB deployment"]
 
     classDef core fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
