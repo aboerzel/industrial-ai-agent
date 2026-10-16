@@ -1294,6 +1294,15 @@ selected stable model ID and explicit run classification in checkpointed graph s
 resume rejects a mismatched assignment or classification rather than selecting another
 model.
 
+`TroubleshootingRunService` owns each synchronous agent/provider context through an
+asynchronous boundary for run, start, and resume. Context acquisition and exit use the
+shared bounded AnyIO worker pool, following the owned ticket-I/O cancellation pattern.
+Cancellation, deadlines, and asynchronous request shutdown wait for mandatory cleanup,
+including repeated native cancellation, without blocking the event loop or abandoning
+workers. The provider adapter still stops admissions, drains active SDK calls, closes
+the SDK and owned HTTPX client, and finalizes its synchronized lifecycle exactly once.
+The model-call execution path, security checks, and timeout/retry policy are unchanged.
+
 Possible later responsibilities include:
 
 * context compression

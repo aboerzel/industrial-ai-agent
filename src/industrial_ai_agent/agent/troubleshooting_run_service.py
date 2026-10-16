@@ -1,10 +1,21 @@
 """Application service for one routed, MCP-backed troubleshooting run."""
 
-from contextlib import AbstractAsyncContextManager, AbstractContextManager
+import asyncio
+import sys
+from collections.abc import AsyncIterator, Callable
+from contextlib import (
+    AbstractAsyncContextManager,
+    AbstractContextManager,
+    ExitStack,
+    asynccontextmanager,
+)
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal, Protocol
 from uuid import UUID
 
+import anyio
+from anyio.to_thread import run_sync
 from pydantic import BaseModel, ConfigDict, Field
 
 from industrial_ai_agent.agent.agent_run import (
@@ -177,9 +188,11 @@ class TroubleshootingRunService:
             message
         )
         try:
-            with self._agent_factory.open_agent(
-                model_id=model_id,
-                run_policy=run_policy,
+            async with _owned_agent_context(
+                self._agent_factory.open_agent(
+                    model_id=model_id,
+                    run_policy=run_policy,
+                )
             ) as agent:
                 if not conversation_context:
                     return await agent.aanswer_via_mcp(
@@ -233,16 +246,20 @@ class TroubleshootingRunService:
         resolved_response_language = response_language or detect_response_language(
             message
         )
-        async with self._checkpointer_factory.open() as saver:
-            with self._agent_factory.open_agent(
-                model_id=model_id, run_policy=resolved, checkpointer=saver
-            ) as agent:
-                state, payload = await agent.astart_via_mcp(
-                    message,
-                    thread_id=str(run_id),
-                    response_language=resolved_response_language,
-                    conversation_context=conversation_context,
+        async with (
+            self._checkpointer_factory.open() as saver,
+            _owned_agent_context(
+                self._agent_factory.open_agent(
+                    model_id=model_id, run_policy=resolved, checkpointer=saver
                 )
+            ) as agent,
+        ):
+            state, payload = await agent.astart_via_mcp(
+                message,
+                thread_id=str(run_id),
+                response_language=resolved_response_language,
+                conversation_context=conversation_context,
+            )
         return model_id, _execution_from_state(state, payload)
 
     async def resume(
@@ -269,16 +286,64 @@ class TroubleshootingRunService:
             or model_decision.model.model_id.value != model_id
         ):
             raise RuntimeError("Persisted run model ID is no longer assigned")
-        async with self._checkpointer_factory.open() as saver:
-            with self._agent_factory.open_agent(
-                model_id=model_decision.model.model_id,
-                run_policy=resolved,
-                checkpointer=saver,
-            ) as agent:
-                state = await agent.aresume_via_mcp(
-                    thread_id=str(run_id), approval=decision
+        async with (
+            self._checkpointer_factory.open() as saver,
+            _owned_agent_context(
+                self._agent_factory.open_agent(
+                    model_id=model_decision.model.model_id,
+                    run_policy=resolved,
+                    checkpointer=saver,
                 )
+            ) as agent,
+        ):
+            state = await agent.aresume_via_mcp(
+                thread_id=str(run_id), approval=decision
+            )
         return _execution_from_state(state, None)
+
+
+@asynccontextmanager
+async def _owned_agent_context(
+    context: AbstractContextManager[McpBackedTroubleshootingAgent],
+) -> AsyncIterator[McpBackedTroubleshootingAgent]:
+    """Own synchronous provider acquisition and drain outside the event loop."""
+    resources = ExitStack()
+    try:
+        # Register ownership inside the worker, even if acquisition is cancelled.
+        agent = await _run_owned_provider_lifecycle(
+            partial(resources.enter_context, context)
+        )
+        yield agent
+    except BaseException:
+        if not await _run_owned_provider_lifecycle(
+            partial(resources.__exit__, *sys.exc_info())
+        ):
+            raise
+    else:
+        await _run_owned_provider_lifecycle(resources.close)
+
+
+async def _run_owned_provider_lifecycle[T](operation: Callable[[], T]) -> T:
+    """Drain the shared bounded AnyIO worker before propagating cancellation."""
+    # Cleanup is mandatory even when already cancelled or queued for pool capacity.
+    worker = asyncio.create_task(
+        run_sync(operation, abandon_on_cancel=False),
+        name="provider-owned-lifecycle",
+    )
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # As for owned ticket I/O, handle both AnyIO scopes and repeated native
+        # Task.cancel() without abandoning the worker or closing its resources twice.
+        with anyio.CancelScope(shield=True):
+            while not worker.done():
+                try:
+                    await asyncio.wait({worker})
+                except asyncio.CancelledError:
+                    continue
+            if not worker.cancelled():
+                worker.exception()
+        raise
 
 
 def internal_diagnostic_message(target: InternalDiagnosticTarget) -> str:
