@@ -147,36 +147,41 @@ provider-boundary guard. Provider failures never trigger reselection.
 
 ```mermaid
 flowchart TD
-    A[Request] --> B[Trusted DataClassification]
-    B --> C[Model Consumer]
-    C --> D[Required Capabilities]
-    D --> F[Load persisted consumer/classification assignment]
-    F --> G{Valid assignment exists?}
-    G -->|No| H[MODEL_NOT_CONFIGURED]
-    G -->|Yes| E{Persisted selection mode}
-    E -->|MANUAL| I[Lookup assigned stable model_id]
-    E -->|AUTO| J[Load runtime catalog and persisted policy]
-    J --> J1[Filter static runtime availability]
-    J1 --> J2{Any statically available models?}
-    J2 -->|No| H
-    J2 -->|Yes| K[Filter by required capabilities]
-    K --> L{Any capable models?}
-    L -->|No| M[CAPABILITY_MISMATCH]
-    L -->|Yes| N[Filter by Security / Egress Policy]
-    N --> O{Any authorized models?}
-    O -->|No| P[EGRESS_DENIED]
-    O -->|Yes| Q[Apply deterministic selection policy]
-    Q --> R[Selected model]
-    I --> S[Final Capability Validation]
-    R --> S
-    S --> T{Capabilities valid?}
-    T -->|No| M
-    T -->|Yes| U[Final Security / Egress Authorization]
-    U --> V{Authorized?}
-    V -->|No| P
-    V -->|Yes| W[Provider Boundary Guard]
-    W --> X[Execute Model]
-    X --> Y[EXECUTED]
+    A["Request + trusted DataClassification"] --> C["Model consumer + required capabilities"]
+    C --> F["Load persisted consumer/classification assignment"]
+    F --> G{"Valid assignment exists?"}
+    G -->|"No"| H["MODEL_NOT_CONFIGURED"]
+    G -->|"Yes"| E{"Persisted selection mode"}
+    E -->|"MANUAL"| I["Lookup assigned stable model_id"]
+    E -->|"AUTO"| J["Resolve AUTO candidate<br/>see filtering below"]
+    I --> S["Selected model<br/>continue with final validation"]
+    J --> S
+```
+
+```mermaid
+flowchart TD
+    J["AUTO: runtime catalog + persisted policy"] --> J1["Filter static runtime availability"]
+    J1 --> J2{"Any statically available models?"}
+    J2 -->|"No"| H["MODEL_NOT_CONFIGURED"]
+    J2 -->|"Yes"| K["Filter by required capabilities"]
+    K --> L{"Any capable models?"}
+    L -->|"No"| M["CAPABILITY_MISMATCH"]
+    L -->|"Yes"| N["Filter by security / egress policy"]
+    N --> O{"Any authorized models?"}
+    O -->|"No"| P["EGRESS_DENIED"]
+    O -->|"Yes"| Q["Apply deterministic selection policy"]
+    Q --> R["Selected model<br/>continue with final validation"]
+```
+
+```mermaid
+flowchart TD
+    S["Selected model: MANUAL or AUTO"] --> T{"Final capability validation passes?"}
+    T -->|"No"| M["CAPABILITY_MISMATCH"]
+    T -->|"Yes"| V{"Final security / egress authorization allows?"}
+    V -->|"No"| P["EGRESS_DENIED"]
+    V -->|"Yes"| W["Provider-boundary guard"]
+    W --> X["Execute model"]
+    X --> Y["EXECUTED"]
 ```
 
 The loaded runtime catalog is the static availability boundary for `AUTO`: models using
@@ -601,7 +606,7 @@ sequenceDiagram
 
     User->>UI: Troubleshooting request
     UI->>Gateway: Demo session cookie + request
-    Gateway->>API: Forward cookie; strip Authorization
+    Gateway->>API: Forward cookie and strip Authorization
     API->>API: Resolve canonical session identity, clearance and roles
     API->>Run: Load authorized investigation context from request-scoped RLS store
     Run->>Policy: Resolve target profile and bounded tool/MCP scope
@@ -838,55 +843,46 @@ The implemented LLM boundary resolves persistent assignments and applies capabil
 security checks before a separate final provider guard:
 
 ```mermaid
-flowchart LR
-    A["Composition Root / Use Case"] --> R["ModelResolutionService"]
+flowchart TD
+    A["Composition Root / use case"] --> R["ModelResolutionService"]
     DB["PostgreSQL assignments"] --> R
-    M["Validated model catalog"] --> R
+    M["Validated runtime model catalog"] --> R
     S["ModelExecutionAuthorizer"] --> R
-    R -->|"authorized model_id"| A
-    A -->|"model_id + LLMRequest"| V["CapabilityCheckedLLMClient"]
-    V --> G["EgressCheckedLLMClient"]
-    P["LLMClient port"]
-    G -.->|"implements"| P
-    C["OpenAICompatibleLLMClient<br/>Endpoint guard before credentials/SDK"] -.->|"implements"| P
-    CL["Explicit DataClassification"] --> G
-    S --> G
-    TOML["config/model_catalog.toml<br/>model metadata + provider settings"] --> M
-    TOML --> V
-    TOML --> G
-    TOML --> C
-    ENV["Environment variables<br/>API keys for authenticated profiles only"] -.-> C
-    G -->|"allowed only"| C
+    R -->|"authorized model_id returned to use case"| Request["model_id + LLMRequest<br/>explicit trusted DataClassification"]
+    Request --> V["CapabilityCheckedLLMClient"]
+    V --> G{"EgressCheckedLLMClient<br/>ModelExecutionAuthorizer allows?"}
     G -->|"denied"| F["ModelEgressDeniedError<br/>no adapter call"]
-    C -->|"PUBLIC_CLOUD: HTTPS<br/>LOCAL: approved HTTP/HTTPS only"| E["Configured OpenAI-compatible endpoint"]
-
-    subgraph Core["Application Core"]
-        A
-        P
-        V
-        G
-        CL
-        R
-        S
-        F
-    end
-
-    subgraph Infrastructure["Infrastructure"]
-        C
-        TOML
-        ENV
-    end
-
-    subgraph External["External system"]
-        E
-    end
+    G -->|"allowed"| C["OpenAICompatibleLLMClient<br/>endpoint guard before credentials / SDK"]
+    C --> E["Configured OpenAI-compatible endpoint<br/>PUBLIC_CLOUD: HTTPS<br/>LOCAL: approved HTTP/HTTPS only"]
 
     classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef external fill:#fff7ed,stroke:#ea580c,color:#431407
-    class A,P,G,CL,R,S,F core
-    class C,TOML,M,DB,ENV adapter
+    class A,R,S,Request,V,G,F core
+    class DB,M,C adapter
     class E external
+```
+
+Configuration and port relationships are shown separately from the execution path.
+
+```mermaid
+flowchart TD
+    subgraph Configuration["Configuration dependencies"]
+        TOML["config/model_catalog.toml"] --> Catalog["Validated runtime catalog"]
+        TOML --> Capabilities["CapabilityCheckedLLMClient"]
+        TOML --> Egress["EgressCheckedLLMClient"]
+        TOML --> Provider["OpenAICompatibleLLMClient"]
+        Environment["Environment API keys<br/>authenticated profiles only"] -.-> Provider
+    end
+    subgraph Contracts["Dependency direction: Infrastructure implements the inner port"]
+        Guard["EgressCheckedLLMClient<br/>Application Core"] -.->|"implements"| Port["LLMClient port<br/>Application Core"]
+        Adapter["OpenAICompatibleLLMClient<br/>Infrastructure"] -.->|"implements"| Port
+    end
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef adapter fill:#ecfdf5,stroke:#059669,color:#022c22
+    class Capabilities,Egress,Guard,Port core
+    class TOML,Catalog,Provider,Environment,Adapter adapter
 ```
 
 `config/model_catalog.toml` describes models and never assigns one to a classification.
@@ -921,33 +917,43 @@ The implemented tool-calling flow is:
 ```mermaid
 flowchart TD
     Start["User request + admitted evidence-eligible MCP tools"] --> Inventory{"Exact neutral demo inventory?"}
-    Inventory -->|"yes: first list_stations/list_products"| Admit
+    Inventory -->|"yes"| First["First list_stations / list_products<br/>continue at tool admission below"]
     Inventory -->|"no"| Decide["LLM decision<br/>resolved model_id"]
     Decide --> Shape{"Response shape"}
+    Shape -->|"malformed response"| Invalid["Deterministic error"]
+    Shape -->|"tool calls"| Admit["Continue at tool admission below"]
     Shape -->|"candidate final text"| Complete{"Trusted required evidence complete?"}
+    Complete -->|"no"| Missing["Bounded missing-evidence retry<br/>return to LLM decision, or terminal evidence error"]
     Complete -->|"yes"| Normalize["Bounded final-output and language validation"]
     Normalize -->|"valid"| Present["Explicit inventory: deterministic authorized station/product list"]
     Present --> Success["AgentRunResult<br/>SUCCESS + final answer"]
-    Complete -->|"no"| Missing["Bounded missing-evidence retry<br/>or terminal evidence error"]
-    Missing -->|"retry budget remains"| Decide
-    Shape -->|"malformed response"| Invalid["Deterministic error"]
-    Shape -->|"one or more tool calls"| Admit["Admit first call only; discard others"]
-    Admit --> Budget{"MAX_TOOL_CALLS budget exhausted?"}
-    Budget -->|"yes"| Limit["AgentRunResult<br/>LIMIT_REACHED<br/>call not executed"]
-    Budget -->|"no"| Validate["Validate discovered name<br/>and tool-specific arguments"]
-    Validate -->|"invalid"| Invalid
-    Validate -->|"valid"| Dispatch["MCP tool dispatch<br/>execute one call"]
-    Dispatch --> Observe["Append assistant tool call<br/>and structured tool result"]
-    Observe --> Count["Increment executed-tool count"]
-    Count --> Decide
 
     classDef llm fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef deterministic fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef success fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class Decide,Shape llm
-    class Start,Inventory,Admit,Budget,Validate,Dispatch,Observe,Count,Complete,Normalize,Present,Missing deterministic
+    class Start,Inventory,First,Admit,Complete,Normalize,Present,Missing deterministic
     class Success success
+    class Invalid failure
+```
+
+Tool admission and execution return to the same sequential decision loop:
+
+```mermaid
+flowchart TD
+    Admit["Tool admission<br/>admit first call only; discard others"] --> Budget{"MAX_TOOL_CALLS budget exhausted?"}
+    Budget -->|"yes"| Limit["AgentRunResult<br/>LIMIT_REACHED<br/>call not executed"]
+    Budget -->|"no"| Validate["Validate discovered name<br/>and tool-specific arguments"]
+    Validate -->|"invalid"| Invalid["Deterministic error"]
+    Validate -->|"valid"| Dispatch["MCP tool dispatch<br/>execute one call"]
+    Dispatch --> Observe["Append assistant tool call<br/>and structured tool result"]
+    Observe --> Count["Increment executed-tool count"]
+    Count --> Next["Return to LLM decision above<br/>with updated observations and evidence-eligible tools"]
+
+    classDef deterministic fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class Admit,Budget,Validate,Dispatch,Observe,Count,Next deterministic
     class Invalid,Limit failure
 ```
 
@@ -982,7 +988,7 @@ language-correction invocations do not grant further tool execution.
 The LangGraph MCP path preserves that behavior in an explicit graph:
 
 ```mermaid
-flowchart LR
+flowchart TD
     CR["Composition Root"] --> Resolver["ModelResolutionService"]
     Resolver -->|"authorized model_id"| Capability["CapabilityCheckedLLMClient<br/>per LLM request"]
     Capability --> Security["EgressCheckedLLMClient"]
@@ -990,25 +996,38 @@ flowchart LR
     Adapter --> Model["model node"]
     Model --> Route{"conditional route"}
     Route -->|"final / invalid / limit"| End["END"]
+    Route -->|"write proposal"| Approval["Continue at approval path below"]
     Route -->|"read request"| Tool["MCP read-tool node"]
-    Route -->|"write proposal"| Generation["Server-owned approval UUID<br/>checkpointed before interrupt"]
+    Tool --> Provider["MCP Tool Provider"]
+    Provider --> Factory["factory_mcp"]
+    Provider --> Knowledge["knowledge_mcp"]
+    Factory --> Observation["Structured observation<br/>return to the same model node"]
+    Knowledge --> Observation
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
+    classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
+    classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
+    class CR,Resolver,Provider,Factory,Knowledge core
+    class Adapter,Model,Route,Tool,Approval,End,Observation framework
+    class Capability,Security security
+```
+
+The write branch uses the same executing-capability guard as direct MCP calls:
+
+```mermaid
+flowchart TD
+    Proposal["Write proposal"] --> Generation["Server-owned approval UUID<br/>checkpointed before interrupt"]
     Generation --> Approval["HITL interrupt"]
     Approval -->|"approved"| Action["MCP action node"]
     Action --> Guard["Executing capability<br/>RLS + exact generation + single-use claim"]
     Direct["Direct authenticated MCP caller"] --> Guard
     Guard -->|"authorized"| Execute["Protected side effect"]
     Guard -->|"consumed ticket generation"| Receipt["Bound existing-ticket lookup<br/>no execution"]
-    Tool -->|"structured observation"| Model
-    Tool --> Provider["MCP Tool Provider"]
-    Provider --> Factory["factory_mcp"]
-    Provider --> Knowledge["knowledge_mcp"]
 
-    classDef core fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef framework fill:#f5f3ff,stroke:#7c3aed,color:#2e1065
     classDef security fill:#fff1f2,stroke:#e11d48,color:#4c0519
-    class CR,Resolver,Provider,Factory,Knowledge core
-    class Adapter,Model,Route,Tool,Approval,Action,End framework
-    class Capability,Security,Guard,Generation,Receipt security
+    class Proposal,Approval,Action,Direct,Execute framework
+    class Generation,Guard,Receipt security
 ```
 
 `TroubleshootingGraphState` holds LangChain messages, the executed-tool count,
@@ -1352,24 +1371,24 @@ cost, latency, or provider errors never trigger fallback.
 
 ```mermaid
 flowchart TD
-    Catalog["Model Catalog<br/>stable model_id + metadata"] --> Lookup["Catalog lookup"]
-    Assignment["MANUAL assignment<br/>consumer_id + classification -> model_id"] --> Lookup
-    Requirements["Consumer Requirements<br/>required capabilities"] --> Capability["Capability validation"]
-    Lookup --> Capability
-    Capability -->|"pass"| Security["ADR-009 security authorization"]
-    Capability -->|"fail"| Mismatch["CAPABILITY_MISMATCH"]
-    RunClass["Trusted effective DataClassification"] --> Assignment
-    RunClass --> Security
-    Security -->|"allow"| Guard["Provider-boundary final guard"]
-    Security -->|"deny"| EgressDenied["EGRESS_DENIED"]
-    Guard -->|"allow"| Executed["EXECUTED"]
+    RunClass["Trusted effective DataClassification"] --> Assignment["MANUAL assignment<br/>consumer_id + classification -> model_id"]
     Assignment -->|"missing"| Missing["MODEL_NOT_CONFIGURED"]
+    Assignment -->|"configured"| Lookup["Catalog lookup"]
+    Catalog["Model Catalog<br/>stable model_id + metadata"] --> Lookup
+    Lookup --> Capability{"Capability validation passes?"}
+    Requirements["Consumer Requirements<br/>required capabilities"] --> Capability
+    Capability -->|"fail"| Mismatch["CAPABILITY_MISMATCH"]
+    Capability -->|"pass"| Security{"ADR-009 security authorization allows?"}
+    SameClass["Same trusted effective DataClassification"] --> Security
+    Security -->|"deny"| EgressDenied["EGRESS_DENIED"]
+    Security -->|"allow"| Guard["Provider-boundary final guard"]
+    Guard -->|"allow"| Executed["EXECUTED"]
 
     classDef config fill:#e8f1ff,stroke:#2563eb,color:#172554
     classDef security fill:#fee2e2,stroke:#b91c1c,color:#450a0a
     classDef execution fill:#ecfdf5,stroke:#059669,color:#022c22
     class Catalog,Assignment,Requirements,Lookup config
-    class RunClass,Capability,Security,Guard,Mismatch,EgressDenied,Missing security
+    class RunClass,SameClass,Capability,Security,Guard,Mismatch,EgressDenied,Missing security
     class Executed execution
 ```
 
