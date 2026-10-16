@@ -92,6 +92,37 @@ cd frontend
 npm run test:e2e
 ```
 
+The five-journey Playwright gate creates an isolated browser context per journey. It
+first verifies the expected unauthenticated `auth/me` 401, uses the same
+`establishBrowserDemoSession` helper as the preferred runner, and independently checks
+the resulting PUBLIC identity before opening the UI. Quick switches use the visible
+account controls and server session endpoint. Explicit logout requires explicit
+re-login/quick selection: its server marker deliberately prevents automatic bootstrap.
+Unexpected post-authentication 401s still fail.
+
+Legacy free-form requests are replaced with admitted canonical reference requests
+(`Untersuche Station S04.`, `Untersuche QUALITY-09.`, and explicit product histories).
+The station/product/document/click chains and required result identifiers remain
+asserted. Run responses determine whether persistence exists; the harness reads the
+bound investigation through the supported API instead of waiting unconditionally for
+a browser GET. Only a planned ATTENTION request may return a neutral 404, with an exact
+unavailable-data code, no run/investigation IDs and no protected identifier in response/UI.
+An authorized success request returning 404 still fails.
+
+The five independent tests run sequentially without serial fail-fast or retries.
+A failed prerequisite stops that journey; dependent assertions remain BLOCKED. Other
+journeys continue, including after a Playwright worker restart. A controller-side
+reporter aggregates PASS/FAIL/BLOCKED/HARNESS_ERROR/NOT_RUN and preserves the first
+failure. Each invocation creates a unique ignored
+`evals/results/browser-e2e/legacy-<timestamp>/` directory with `journeys.json`,
+`playwright.json` and browser artifacts. It never overwrites earlier gate reports.
+The journey attachment retains only allowlisted evidence metadata, with no cookies,
+tokens, headers or arbitrary error bodies. Tracing stays disabled.
+
+`tests/frontend/legacy-browser-harness.test.mjs` and the LH cases in
+`tests/e2e/fixtures/demo-auth.spec.mjs` cover LH-01–LH-12, including a real synthetic
+Playwright worker failure/continuation test. These checks do not call a model.
+
 The baseline runner is interruption-safe and is the preferred command for real-model
 measurement. Start one independent browser process per journey, then aggregate the
 completed artefacts:

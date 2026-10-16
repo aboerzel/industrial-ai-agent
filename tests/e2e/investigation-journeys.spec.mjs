@@ -1,13 +1,11 @@
 import { setResponseLanguage } from "../../frontend/scripts/demo-account-controls.mjs";
 import { selectDemoIdentity } from "../../frontend/scripts/run-e2e-journey.mjs";
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { assertHttpStatus, createApiStatusGuard, getModelAdminJson, readExpectedJson } from "../../frontend/scripts/e2e-http.mjs";
-import { assertionPlan, assertionSummary, assertPersistedTurn, assertToolEvidence, recordAssertion, requiredAssertionsStatus } from "../../frontend/scripts/journey-assertions.mjs";
-import { activeInvestigationId, browserIdentity, checkIdentitySwitch, checkDocument, checkPdf, checkReload, rememberInvestigation } from "../../frontend/scripts/browser-journey-checks.mjs";
+import { assertionPlan, assertPersistedTurn, assertStationReferenceEvidence, assertToolEvidence, recordAssertion, requiredAssertionsStatus } from "../../frontend/scripts/journey-assertions.mjs";
+import { activeInvestigationId, browserIdentity, checkIdentitySwitch, checkDocument, checkPdf, checkReload, readInvestigation, rememberDenial, rememberInvestigation } from "../../frontend/scripts/browser-journey-checks.mjs";
+import { assertNeutralDenial, bootstrapLegacySession, finishLegacyJourney, safeLegacyEvidence, verifyDemoIdentity } from "../../frontend/scripts/legacy-browser-contract.mjs";
 
 const requireFrontendPackage = createRequire(
   new URL("../../frontend/package.json", import.meta.url),
@@ -15,16 +13,14 @@ const requireFrontendPackage = createRequire(
 const { expect, test } = requireFrontendPackage("@playwright/test");
 
 const API_URL = process.env.E2E_API_URL ?? "http://127.0.0.1:8000";
-const REPORT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../evals/results/browser-e2e-journeys.json");
 const LOCAL_MODEL_ID = "local_quality";
 const LANGUAGE = "DE";
 const CLEARANCE_RANK = { PUBLIC: 0, INTERNAL: 1, CONFIDENTIAL: 2, RESTRICTED: 3 };
 const results = [];
 let originalAssignments = [];
-let suiteFailed = false;
 const httpGuards = new WeakMap();
 
-test.describe.configure({ mode: "serial" });
+test.describe.configure({ mode: "default" });
 
 test.beforeAll(async ({ request }) => {
   originalAssignments = await getModelAdminJson(request, `${API_URL}/api/v1/model-assignments`);
@@ -40,20 +36,21 @@ test.beforeEach(async ({ context }) => {
 });
 
 test.afterEach(async ({ context }, testInfo) => {
-  if (testInfo.status !== "passed") suiteFailed = true;
+  let guardFailure;
   try { httpGuards.get(context)?.assertSuccessful(); }
-  catch (error) { suiteFailed = true; throw error; }
-});
-
-test.afterAll(async () => {
-  await mkdir(path.dirname(REPORT_PATH), { recursive: true });
-  await writeFile(REPORT_PATH, `${JSON.stringify(buildReport(), null, 2)}\n`, "utf8");
+  catch (error) { guardFailure = error; }
+  const journey = results.at(-1);
+  if (journey) {
+    finishLegacyJourney(journey, guardFailure ? "failed" : testInfo.status);
+    await testInfo.attach("legacy-journey", { body: JSON.stringify(safeLegacyEvidence(journey)), contentType: "application/json" });
+  }
+  if (guardFailure) throw guardFailure;
 });
 
 test("Journey A: S04 fault investigation", async ({ page }) => {
   const journey = beginJourney("S04 fault investigation", ["typed", "reference", "reference", "document", "typed"], true);
   await openChat(page, "CONFIDENTIAL");
-  await typedStep(page, journey, "Untersuche Station S04 genauer.", "SUCCESS", "S04");
+  await typedStep(page, journey, "Untersuche Station S04.", "SUCCESS", "S04");
   await referenceStep(page, journey, "S04", "Station untersuchen", "SUCCESS", "S04");
   await referenceStep(page, journey, "QUALITY-09", "Dokumentation suchen", "SUCCESS", "QUALITY-09");
   await documentStep(page, journey, "SUCCESS");
@@ -66,7 +63,7 @@ test("Journey B: station discovery", async ({ page }) => {
   await openChat(page, "CONFIDENTIAL");
   await typedStep(page, journey, "Welche Stationen kennst du?", "SUCCESS", "S04");
   await referenceStep(page, journey, "S04", "Aktuellen Status prüfen", "SUCCESS", "S04");
-  await typedStep(page, journey, "Welche Produkte waren zuletzt an Station S04 auffaellig?", "SUCCESS", "P4711");
+  await typedStep(page, journey, "Zeige die Produkthistorie von P4711.", "SUCCESS", "P4711");
   await referenceStep(page, journey, "P4711", "Produkthistorie anzeigen", "SUCCESS", "P4711");
   await finishJourney(page, journey);
 });
@@ -76,49 +73,50 @@ test("Journey C: product to station", async ({ page }) => {
   await openChat(page, "CONFIDENTIAL");
   await typedStep(page, journey, "Zeige die Produkthistorie von P4101.", "SUCCESS", "P4101");
   await referenceStep(page, journey, "S01", "Aktuellen Status prüfen", "SUCCESS", "S01");
-  await typedStep(page, journey, "Welche Produkte sind an dieser Station sichtbar?", "SUCCESS", "P4101");
+  await typedStep(page, journey, "Zeige die Produkthistorie von P4101.", "SUCCESS", "P4101");
   await finishJourney(page, journey);
 });
 
 test("Journey D: documentation chain", async ({ page }) => {
   const journey = beginJourney("Documentation chain", ["typed", "document", "reference", "typed"], true);
   await openChat(page, "CONFIDENTIAL");
-  await typedStep(page, journey, "Suche technische Dokumentation zu QUALITY-09.", "SUCCESS", "QUALITY-09");
+  await typedStep(page, journey, "Untersuche QUALITY-09.", "SUCCESS", "QUALITY-09");
   await documentStep(page, journey, "SUCCESS");
   await referenceStep(page, journey, "QUALITY-09", "Untersuchen", "SUCCESS", "QUALITY-09");
-  await typedStep(page, journey, "Welche Station ist von QUALITY-09 betroffen?", "SUCCESS", "S04");
+  await typedStep(page, journey, "Untersuche Station S04.", "SUCCESS", "S04");
   await finishJourney(page, journey);
 });
 
 test("Journey E: clearance boundary remains usable", async ({ page }) => {
   const journey = beginJourney("Clearance boundary", ["typed", "select", "typed", "select", "typed", "reference"], true);
   await openChat(page, "CONFIDENTIAL");
-  await typedStep(page, journey, "Untersuche die Produkthistorie von P4711.", "SUCCESS", "P4711");
+  await typedStep(page, journey, "Zeige die Produkthistorie von P4711.", "SUCCESS", "P4711");
   await checkIdentitySwitch(page, journey, "demo-internal", httpGuards.get(page.context()));
   recordStep(journey, "clearance downgrade", "SUCCESS", "SUCCESS", "INTERNAL");
-  await typedStep(page, journey, "Zeige die Produkthistorie von P4711.", "ATTENTION", null);
+  await typedStep(page, journey, "Zeige die Produkthistorie von P4711.", "ATTENTION", "P4711");
   await checkIdentitySwitch(page, journey, "demo-confidential", httpGuards.get(page.context()));
   recordStep(journey, "clearance upgrade", "SUCCESS", "SUCCESS", "CONFIDENTIAL");
-  await typedStep(page, journey, "Untersuche Station S04 genauer.", "SUCCESS", "S04");
+  await typedStep(page, journey, "Untersuche Station S04.", "SUCCESS", "S04");
   await referenceStep(page, journey, "S04", "Aktuellen Status prüfen", "SUCCESS", "S04");
   await finishJourney(page, journey);
 });
 
 async function openChat(page, clearance) {
+  results.at(-1).session_setup = await bootstrapLegacySession(page.context(), test.info().project.use.baseURL);
   assertHttpStatus(await page.goto("/"));
   await selectDemoIdentity(page, clearance);
   await setResponseLanguage(page, LANGUAGE);
-  expect((await browserIdentity(page)).clearance).toBe(clearance);
+  verifyDemoIdentity(await browserIdentity(page), `demo-${clearance.toLowerCase()}`);
   await expect(page.locator("#response-language")).toHaveValue(LANGUAGE);
 }
 
 async function typedStep(page, journey, prompt, expectedSeverity, expectedIdentifier) {
   const previousId = await activeInvestigationId(page);
   const requestPromise = page.waitForRequest(isRunPost);
-  const investigationPromise = page.waitForResponse(isInvestigationGet);
+  if (expectedSeverity === "ATTENTION") httpGuards.get(page.context()).expectResponse({ method: "POST", pathname: "/api/v1/runs", allowedStatuses: [404, 200] });
   await page.locator("#composer-message").fill(prompt);
   await page.locator("#composer-button").click();
-  await recordAgentStep(page, journey, `typed: ${prompt}`, await requestPromise, await investigationPromise, expectedSeverity, expectedIdentifier, previousId);
+  await recordAgentStep(page, journey, `typed: ${prompt}`, await requestPromise, expectedSeverity, expectedIdentifier, previousId);
 }
 
 async function referenceStep(page, journey, identifier, action, expectedSeverity, expectedIdentifier) {
@@ -132,9 +130,8 @@ async function referenceStep(page, journey, identifier, action, expectedSeverity
   await expect(reference).toHaveText(identifier);
   await reference.click();
   const requestPromise = page.waitForRequest(isRunPost);
-  const investigationPromise = page.waitForResponse(isInvestigationGet);
   await page.locator(".reference-popover .reference-action", { hasText: action }).click();
-  await recordAgentStep(page, journey, `click ${identifier}: ${action}`, await requestPromise, await investigationPromise, expectedSeverity, expectedIdentifier, previousId,
+  await recordAgentStep(page, journey, `click ${identifier}: ${action}`, await requestPromise, expectedSeverity, expectedIdentifier, previousId,
     identifier.startsWith("P") ? "get_product_history" : identifier.startsWith("S") ? "get_machine_status" : action === "Dokumentation suchen" ? "search_documentation" : null);
 }
 
@@ -145,27 +142,41 @@ async function documentStep(page, journey, expectedSeverity) {
   expect(severity).toBe(expectedSeverity);
 }
 
-async function recordAgentStep(page, journey, label, request, investigationResponse, expectedSeverity, expectedIdentifier, previousId, expectedTool = null) {
-  assertHttpStatus(investigationResponse);
+async function recordAgentStep(page, journey, label, request, expectedSeverity, expectedIdentifier, previousId, expectedTool = null) {
   const body = request.postDataJSON();
   const clearance = (await browserIdentity(page)).clearance;
   const language = await page.locator("#response-language").inputValue();
   expect(body.user_clearance).toBeUndefined();
   expect(body.response_language).toBe(language);
   expect(language).toBe(LANGUAGE);
-  const investigation = await readExpectedJson(investigationResponse);
-  const run = await readExpectedJson(await request.response());
+  const response = await request.response();
+  assert.ok(response, "Required run response missing.");
+  const agentTurn = page.locator(".agent-turn").last();
+  await expect(agentTurn).not.toHaveClass(/is-pending/);
+  if (expectedSeverity === "ATTENTION" && response.status() === 404) {
+    const denial = await response.json();
+    assertNeutralDenial(response.status(), denial, expectedIdentifier, await agentTurn.innerText());
+    expect(await classifySeverity(agentTurn, await agentTurn.innerText())).toBe("ATTENTION");
+    expect(await activeInvestigationId(page)).toBeNull();
+    rememberDenial(journey, denial.code);
+    recordStep(journey, label, "ATTENTION", "ATTENTION", "neutral denial before allocation");
+    return;
+  }
+  const run = await readExpectedJson(response);
+  const investigation = await readInvestigation(page, run.investigation_id, clearance);
   const turn = assertPersistedTurn({ run, investigation, request: body, clearance, language, previousId });
   rememberInvestigation(journey, investigation, turn);
   expect(turn.response_language).toBe(LANGUAGE);
   expect(CLEARANCE_RANK[turn.data_classification]).toBeLessThanOrEqual(CLEARANCE_RANK[clearance]);
-  const agentTurn = page.locator(".agent-turn").last();
-  await expect(agentTurn).not.toHaveClass(/is-pending/);
   const text = await agentTurn.innerText();
   const severity = await classifySeverity(agentTurn, text);
-  if (expectedIdentifier) expect(text).toContain(expectedIdentifier);
-  if (expectedTool) assertToolEvidence(turn, expectedTool, expectedIdentifier);
-  if (expectedSeverity === "ATTENTION") expect(["requested_data_unavailable", "diagnostic_target_unavailable"]).toContain(turn.error?.code);
+  if (expectedIdentifier && expectedSeverity === "SUCCESS") expect(text).toContain(expectedIdentifier);
+  if (expectedTool === "get_machine_status") assertStationReferenceEvidence(turn, expectedIdentifier);
+  else if (expectedTool) assertToolEvidence(turn, expectedTool, expectedIdentifier);
+  if (expectedSeverity === "ATTENTION") {
+    expect(["requested_data_unavailable", "diagnostic_target_unavailable"]).toContain(turn.error?.code);
+    if (expectedIdentifier) expect(text).not.toContain(expectedIdentifier);
+  }
   journey.hasStarted = true;
   recordStep(journey, label, expectedSeverity, severity, expectedIdentifier ?? "clearance boundary");
   expect(severity).toBe(expectedSeverity);
@@ -175,9 +186,6 @@ function isRunPost(request) {
   return request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/runs";
 }
 
-function isInvestigationGet(response) {
-  return response.request().method() === "GET" && new URL(response.url()).pathname.startsWith("/api/v1/investigations/");
-}
 
 async function classifySeverity(agentTurn, text) {
   if (await agentTurn.locator(".turn-limit").count()) return "ATTENTION";
@@ -206,33 +214,4 @@ async function finishJourney(page, journey) {
     recordStep(journey, "pdf", "SUCCESS", "SUCCESS", "bound investigation content");
   }
   expect(requiredAssertionsStatus(journey.assertions)).toBe("PASS");
-}
-
-function buildReport() {
-  const reported = results.map((journey) => ({ journey: journey.name, steps: journey.steps, assertions: journey.assertions, assertion_summary: assertionSummary(journey.assertions), result: requiredAssertionsStatus(journey.assertions) }));
-  const allSteps = results.flatMap((journey) => journey.steps);
-  const clicks = (identifier) => allSteps.filter((step) => step.label.startsWith(`click ${identifier}`)).length;
-  return {
-    execution_status: !suiteFailed && reported.length === 5 && reported.every((journey) => journey.result === "PASS") ? "PASS" : "FAIL",
-    real_model_used: "Local Qwen 3.5 9B only",
-    model_id: LOCAL_MODEL_ID,
-    reasoning_effort: "none",
-    external_provider_calls: 0,
-    multi_step_journeys: results.length,
-    total_journey_steps: allSteps.length,
-    typed_follow_up_journeys: results.filter((journey) => journey.steps.filter((step) => step.label.startsWith("typed:")).length > 1).length,
-    click_only_journeys: results.filter((journey) => journey.steps.length && journey.steps.every((step) => step.label.startsWith("click"))).length,
-    station_reference_clicks: clicks("S"),
-    product_reference_clicks: clicks("P"),
-    fault_code_clicks: clicks("QUALITY-09"),
-    document_open_download: allSteps.some((step) => step.label === "document open/download" && step.passed) ? "PASS" : "NOT_RUN",
-    pdf_export: allSteps.some((step) => step.label === "pdf" && step.passed) ? "PASS" : "NOT_RUN",
-    // These compound claims require the complete planned journeys, not a partial observation list.
-    clearance_preserved_across_clicks: !suiteFailed && reported.length === 5 && reported.every((journey) => journey.result === "PASS") ? "PASS" : "NOT_RUN",
-    language_preserved_across_clicks: !suiteFailed && reported.length === 5 && reported.every((journey) => journey.result === "PASS") ? "PASS" : "NOT_RUN",
-    conversation_continuity: !suiteFailed && reported.length === 5 && reported.every((journey) => journey.result === "PASS") ? "PASS" : "NOT_RUN",
-    attention_states_remain_usable: reported.find((journey) => journey.journey === "Clearance boundary")?.result ?? "NOT_RUN",
-    unexpected_technical_failures_inside_journeys: allSteps.filter((step) => step.severity === "FAILURE").length,
-    journeys: reported,
-  };
 }

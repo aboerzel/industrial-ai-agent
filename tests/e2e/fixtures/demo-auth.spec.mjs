@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { test, expect, chromium } from "../../../frontend/node_modules/@playwright/test/index.mjs";
 import { demoUsers } from "../../frontend/fixtures/demo-auth-fake.mjs";
+import { bootstrapLegacySession, verifyDemoIdentity } from "../../../frontend/scripts/legacy-browser-contract.mjs";
 
 let process;
 let origin;
@@ -59,6 +60,56 @@ test("real-model harness bootstrap shares the server session cookie before page 
     await expect(page.locator("#current-user")).toHaveText("demo-public");
     guard.assertSuccessful();
   } finally { await context.close(); }
+});
+
+test("LH-01/02/03 legacy bootstrap verifies a fresh server-owned public session", async ({ browser }) => {
+  const context = await browser.newContext();
+  try {
+    const setup = await bootstrapLegacySession(context, origin);
+    expect(setup.initial_auth_status).toBe(401);
+    const page = await context.newPage();
+    const guard = createApiStatusGuard(context);
+    await page.goto(origin);
+    await expect(page.locator("#current-user")).toHaveText("demo-public");
+    verifyDemoIdentity(await (await context.request.get(`${origin}/api/v1/auth/me`)).json(), "demo-public");
+    guard.assertSuccessful();
+  } finally { await context.close(); }
+});
+
+test("LH-04 quick switch uses the supported session mutation and verifies all permissions", async ({ page }) => {
+  for (const username of ["demo-internal", "demo-confidential", "demo-restricted", "demo-admin", "demo-public"]) {
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === "/api/v1/auth/switch");
+    await switchDemoUser(page, username);
+    expect((await response).request().postDataJSON()).toEqual({ username });
+    verifyDemoIdentity(await (await page.request.get(`${origin}/api/v1/auth/me`)).json(), username);
+  }
+});
+
+test("LH-05 logout invalidates the authoritative session and purges protected UI", async ({ page }) => {
+  await select(page, "demo-confidential");
+  await page.locator("#composer-message").fill("Investigate P4711.");
+  await page.locator("#composer-form").evaluate(form => form.requestSubmit());
+  await expect(page.locator("#conversation-history")).toContainText("SYNTHETIC CONFIDENTIAL CONVERSATION");
+  await openAccount(page);
+  const response = page.waitForResponse(r => new URL(r.url()).pathname === "/api/v1/auth/logout");
+  await page.locator("#logout-button").click();
+  expect((await response).status()).toBe(200);
+  expect((await page.request.get(`${origin}/api/v1/auth/me`)).status()).toBe(401);
+  await expect(page.locator(".agent-turn, .structured-reference")).toHaveCount(0);
+  await expect(page.locator("#export-pdf-button")).toBeDisabled();
+});
+
+test("LH-06 logout requires explicit re-login; quick switch establishes a fresh public session", async ({ page, context }) => {
+  await openAccount(page);
+  const response = page.waitForResponse(r => new URL(r.url()).pathname === "/api/v1/auth/logout");
+  await page.locator("#logout-button").click();
+  expect((await response).status()).toBe(200);
+  const bootstrap = await context.request.post(`${origin}/api/v1/auth/bootstrap`, { headers: { "X-Demo-Session": "1" }, data: {} });
+  expect(bootstrap.status()).toBe(401);
+  await expect(page.locator("#current-user")).not.toHaveText("demo-public");
+  await switchDemoUser(page, "demo-public");
+  await expect(page.locator("#current-user")).toHaveText("demo-public");
+  verifyDemoIdentity(await (await page.request.get(`${origin}/api/v1/auth/me`)).json(), "demo-public");
 });
 
 test("header account menu shows authoritative permissions, active user and keyboard dismissal", async ({ page }) => {
