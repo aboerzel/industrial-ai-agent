@@ -131,7 +131,9 @@ def test_knowledge_mcp_keeps_docling_and_rapidocr_compatible() -> None:
 
     assert expected_constraint in dependencies
     dockerfile = (PROJECT_ROOT / "Dockerfile.knowledge-mcp").read_text(encoding="utf-8")
-    assert f'"{expected_constraint}"' in dockerfile
+    assert 'tomllib.loads(Path("pyproject.toml").read_text())' in dockerfile
+    assert "--constraint /tmp/constraints.txt" in dockerfile
+    assert "rapidocr sentence-transformers transformers" in dockerfile
 
 
 def test_agent_api_installs_response_language_detector_runtime_dependency() -> None:

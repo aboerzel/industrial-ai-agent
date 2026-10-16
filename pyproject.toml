@@ -31,6 +31,8 @@ dependencies = [
     "rapidocr>=3.9.1,<3.10",
     "sqlalchemy>=2.0.52,<2.1",
     "sentence-transformers>=5.0,<6.0",
+    # Transformers 5.20 imports distributed checkpoint APIs absent from Torch 2.7.1.
+    "transformers==5.16.1",
     "uvicorn>=0.52.4,<0.53",
 ]
 

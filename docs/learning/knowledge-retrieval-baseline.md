@@ -203,12 +203,16 @@ performance target.
 
 `knowledge_mcp` composes this exact frozen pipeline once at process startup and exposes
 only `search_documentation(query, top_k=3)`. It supports stdio for development/test and
-Streamable HTTP for Docker deployment. Its Docker image contains source and the knowledge
-base but no Ollama or Hugging Face model artifact. Compose connects to local host Ollama
-and mounts a pre-populated Hugging Face cache read-only; CPU is portable default, while
+Streamable HTTP for Docker deployment. Its Docker image contains source; document
+content and the knowledge base are externally mounted read-only. Compose connects to
+local host Ollama and mounts the persistent model cache; offline verification mounts
+the pre-populated cache read-only. CPU is the portable default, while
 in-process development can retain CUDA. MCP network transport is separate from model
 egress: documents, chunks, queries, embeddings, and reranker inputs remain local under
 ADR-009 and never reach a public provider.
+
+See [Knowledge runtime dependencies](knowledge-runtime-dependencies.md) for the
+shared compatibility constraints, persistent OCR artifacts and offline image gate.
 
 ## Retrieval Evaluation Datasets
 

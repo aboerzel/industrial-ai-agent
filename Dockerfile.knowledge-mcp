@@ -15,31 +15,40 @@ RUN apt-get update \
 COPY pyproject.toml ./
 COPY src ./src
 
-# Keep the image independent from model artifacts and use a CPU-only Torch wheel.
+# Share package version constraints with development; only the CPU wheel pair is
+# deployment-specific. Constraints do not install unrelated Agent/API dependencies.
+RUN python - <<'PY'
+from pathlib import Path
+import re
+import tomllib
+
+# pip constraints retain version bounds but cannot contain installation extras.
+dependencies = [
+    re.sub(r"\[[^\]]+\]", "", requirement)
+    for requirement in tomllib.loads(Path("pyproject.toml").read_text())["project"]["dependencies"]
+]
+Path("/tmp/constraints.txt").write_text(
+    "\n".join([*dependencies, "torch==2.7.1+cpu", "torchvision==0.22.1+cpu"]) + "\n"
+)
+PY
+
+# Use CPU-only Torch wheels and persist RapidOCR weights in the external model cache.
 RUN pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
+        --constraint /tmp/constraints.txt \
         "torch==2.7.1+cpu" \
         "torchvision==0.22.1+cpu" \
-    && printf "torch==2.7.1+cpu\ntorchvision==0.22.1+cpu\n" > /tmp/constraints.txt \
     && pip install --no-cache-dir --constraint /tmp/constraints.txt \
-        "mcp>=2.0,<3.0" \
-        "langchain-core>=1.2,<2.0" \
-        "langchain-ollama>=1.0,<2.0" \
-        "docling>=2.125.0,<2.126" \
-        "numpy>=2.0" \
-        "opentelemetry-api>=1.44.0,<1.45" \
-        "opentelemetry-exporter-otlp-proto-grpc>=1.44.0,<1.45" \
-        "opentelemetry-instrumentation-asgi>=0.65b0,<0.66" \
-        "opentelemetry-sdk>=1.44.0,<1.45" \
-        "pydantic>=2.0" \
-        "psycopg[binary]>=3.3.5,<3.4" \
-        "rapidocr>=3.9.1,<3.10" \
-        "sentence-transformers>=5.0,<6.0" \
-        "sqlalchemy>=2.0.52,<2.1" \
-        "uvicorn>=0.52.4,<0.53" \
+        mcp langchain-core langchain-ollama docling numpy \
+        opentelemetry-api opentelemetry-exporter-otlp-proto-grpc \
+        opentelemetry-instrumentation-asgi opentelemetry-sdk \
+        pydantic "psycopg[binary]" rapidocr sentence-transformers transformers \
+        sqlalchemy uvicorn \
     && pip install --no-cache-dir --no-deps . \
-    && mkdir -p "$HF_HOME" \
-    && chown -R app:app /app /home/app /usr/local/lib/python3.12/site-packages/rapidocr/models
+    && rm -rf /usr/local/lib/python3.12/site-packages/rapidocr/models \
+    && mkdir -p "$HF_HOME/rapidocr" \
+    && ln -s "$HF_HOME/rapidocr" /usr/local/lib/python3.12/site-packages/rapidocr/models \
+    && chown -R app:app /app /home/app
 
 USER app
 
