@@ -916,8 +916,8 @@ The implemented tool-calling flow is:
 
 ```mermaid
 flowchart TD
-    Start["User request + admitted evidence-eligible MCP tools"] --> Inventory{"Exact neutral demo inventory?"}
-    Inventory -->|"yes"| First["First list_stations / list_products<br/>continue at tool admission below"]
+    Start["User request + admitted evidence-eligible MCP tools"] --> Inventory{"Exact neutral inventory or reference read?"}
+    Inventory -->|"yes"| First["Bound first read and target<br/>continue at tool admission below"]
     Inventory -->|"no"| Decide["LLM decision<br/>resolved model_id"]
     Decide --> Shape{"Response shape"}
     Shape -->|"malformed response"| Invalid["Deterministic error"]
@@ -956,6 +956,12 @@ flowchart TD
     class Admit,Budget,Validate,Dispatch,Observe,Count,Next deterministic
     class Invalid,Limit failure
 ```
+
+Canonical reference reads use existing neutral DE/EN run forms and the ordinary
+classification/authorization boundary. Their first read binds the exact identifier;
+only relevant read capabilities remain available and model target replacements are
+rejected. RLS, evidence requirements and the sequential budget remain authoritative.
+See [UI reference actions](../learning/ui-reference-actions.md).
 
 Complete allowlisted neutral demo inventory requests deterministically schedule their
 first read-only list call through the same admission/validation boundary. Their run/data

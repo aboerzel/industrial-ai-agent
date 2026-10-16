@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import {
   MissingEvidence, assertionPlan, assertionSummary, assertCurrentPlan, assertPersistedTurn,
-  assertToolEvidence, evaluatedJourneyStatus, plannedSteps, recordAssertion, requireEvidence,
+  assertToolEvidence, assertStationReferenceEvidence, evaluatedJourneyStatus, plannedSteps, recordAssertion, requireEvidence,
 } from "./journey-assertions.mjs";
 import {
   activeInvestigationId, browserIdentity, checkIdentitySwitch, checkDocument, checkNewChat, checkPdf,
@@ -681,8 +681,9 @@ async function recordAgentResult(page, result, label, step, request, investigati
   const leakFree = step.expected !== "ATTENTION" || !target || !text.includes(target);
   if (step.expected === "SUCCESS") {
     if (turn.status !== "success") throw harnessSignal("AssertionError", "Expected successful persisted result.");
-    const tool = step.tool ?? (clickedIdentifier ? { station: "get_machine_status", product: "get_product_history", error_code: "search_documentation" }[step.type] : null);
-    if (tool) assertToolEvidence(turn, tool, target);
+    const tool = step.tool ?? (clickedIdentifier ? { product: "get_product_history", error_code: "search_documentation" }[step.type] : null);
+    if (clickedIdentifier && step.type === "station" && !step.tool) assertStationReferenceEvidence(turn, target);
+    else if (tool) assertToolEvidence(turn, tool, target);
   } else if (step.expected === "ATTENTION") {
     if (!["requested_data_unavailable", "diagnostic_target_unavailable"].includes(turn.error?.code)) throw harnessSignal("AssertionError", "Expected persisted unavailable-data result, not an arbitrary attention state.");
   }

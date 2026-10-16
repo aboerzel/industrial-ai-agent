@@ -663,19 +663,19 @@ function identifierActions(reference, language) {
   const german = language === "DE";
   const actionsByType = {
     error_code: [
-      [german ? "Untersuchen" : "Investigate", german ? `Untersuche ${reference.value} genauer.` : `Investigate ${reference.value} in more detail.`],
-      [german ? "Dokumentation suchen" : "Search documentation", german ? `Suche technische Dokumentation zu ${reference.value}.` : `Search technical documentation for ${reference.value}.`],
+      [german ? "Untersuchen" : "Investigate", german ? `Untersuche ${reference.value}.` : `Investigate ${reference.value}.`],
+      [german ? "Dokumentation suchen" : "Search documentation", german ? `Untersuche ${reference.value}.` : `Investigate ${reference.value}.`],
     ],
     station: [
-      [german ? "Station untersuchen" : "Investigate station", german ? `Untersuche Station ${reference.value} genauer.` : `Investigate station ${reference.value} in more detail.`],
-      [german ? "Aktuellen Status prüfen" : "Check current status", german ? `Prüfe den aktuellen Status von Station ${reference.value}.` : `Check the current status of station ${reference.value}.`],
+      [german ? "Station untersuchen" : "Investigate station", german ? `Prüfe den aktuellen Status von Station ${reference.value}.` : `What is the current status of station ${reference.value}?`],
+      [german ? "Aktuellen Status prüfen" : "Check current status", german ? `Prüfe den aktuellen Status von Station ${reference.value}.` : `What is the current status of station ${reference.value}?`],
     ],
     product: [
-      [german ? "Produkt untersuchen" : "Investigate product", german ? `Untersuche Produkt ${reference.value} genauer.` : `Investigate product ${reference.value} in more detail.`],
-      [german ? "Produkthistorie anzeigen" : "Show product history", german ? `Zeige die Produkthistorie von ${reference.value}.` : `Show the product history for ${reference.value}.`],
+      [german ? "Produkt untersuchen" : "Investigate product", german ? `Untersuche Produkt ${reference.value}.` : `Investigate product ${reference.value}.`],
+      [german ? "Produkthistorie anzeigen" : "Show product history", german ? `Zeige die Produkthistorie von ${reference.value}.` : `Show me the production history for ${reference.value}.`],
     ],
     maintenance_ticket: [
-      [german ? "Ticket prüfen" : "Inspect ticket", german ? `Prüfe Wartungsticket ${reference.value}.` : `Inspect maintenance ticket ${reference.value}.`],
+      [german ? "Ticket prüfen" : "Inspect ticket", german ? `Zeige das Wartungsticket ${reference.value}.` : `Show ticket ${reference.value}.`],
     ],
   };
   const actions = actionsByType[reference.type] ?? [];

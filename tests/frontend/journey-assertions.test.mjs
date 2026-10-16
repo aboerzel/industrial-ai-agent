@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertionPlan, assertionSummary, assertCurrentPlan, assertPersistedTurn, assertToolEvidence, assertBinaryContent, evaluatedJourneyStatus, recordAssertion } from "../../frontend/scripts/journey-assertions.mjs";
+import { assertionPlan, assertionSummary, assertCurrentPlan, assertPersistedTurn, assertToolEvidence, assertStationReferenceEvidence, assertBinaryContent, evaluatedJourneyStatus, recordAssertion } from "../../frontend/scripts/journey-assertions.mjs";
 import { JOURNEYS } from "../../frontend/scripts/run-e2e-journey.mjs";
 
 const result = (assertions) => ({
@@ -92,6 +92,25 @@ test("tool evidence requires call, target arguments and recorded finding", () =>
   }
   assert.throws(() => assertToolEvidence(turn, "get_machine_status", "S07"));
   assert.throws(() => assertToolEvidence({ ...turn, tool_calls: [{ tool: "get_machine_status", arguments: { station_id: "S07", irrelevant_note: "S04" } }] }, "get_machine_status", "S04"));
+});
+
+for (const tool of ["get_station_overview", "get_machine_status"]) {
+  test(`station reference requires a bound first ${tool} and recorded evidence`, () => {
+    assertStationReferenceEvidence({ ...turn,
+      tool_calls: [{ tool, arguments: { station_id: "S01" } }],
+      investigation_steps: [{ action: tool, finding: "S01 current state observed" }],
+    }, "S01");
+  });
+}
+
+test("station reference cannot pass with missing evidence, wrong target, unrelated or protected first tool", () => {
+  for (const bad of [
+    { ...turn, tool_calls: [] },
+    { ...turn, investigation_steps: [] },
+    { ...turn, tool_calls: [{ tool: "get_station_overview", arguments: { station_id: "S07", irrelevant: "S04" } }] },
+    { ...turn, tool_calls: [{ tool: "search_documentation", arguments: { query: "S04" } }, ...turn.tool_calls] },
+    { ...turn, tool_calls: [{ tool: "create_maintenance_ticket", arguments: { station_id: "S04" } }, ...turn.tool_calls] },
+  ]) assert.throws(() => assertStationReferenceEvidence(bad, "S04"));
 });
 
 test("missing PDF blocks a journey even if every other planned requirement passed", () => {

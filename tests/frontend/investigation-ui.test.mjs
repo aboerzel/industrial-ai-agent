@@ -3,10 +3,40 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { JSDOM } from "../../frontend/node_modules/jsdom/lib/api.js";
+import { referenceCases } from "../reference_action_contract.mjs";
 
 const INVESTIGATION_ID = "1e5d0e24-92a5-4cb5-9d5d-0f4d7d183ef4";
 const FIRST_RUN_ID = "0ca96c57-66f6-4e12-b151-6f7f6ef9c9f8";
 const SECOND_RUN_ID = "9b00bbd4-cc3f-4afd-aeee-bcee4edc9b4e";
+
+test("all review and supported reference actions submit canonical same-context requests", async (t) => {
+  for (const item of await referenceCases({ extended: true })) {
+    await t.test(`${item.index} ${item.type} ${item.language}`, async () => {
+      const stored = structuredClone(INVESTIGATION);
+      stored.turns = [stored.turns[0]];
+      stored.turns[0].response_language = item.language;
+      stored.turns[0].answer = `Authorized reference ${item.value}.`;
+      stored.turns[0].identifiers = [{ type: item.type, value: item.value }];
+      const bodies = [];
+      const clearance = item.username.split("-")[1].toUpperCase();
+      const { document, window, restoreFetch } = await loadApp((url, options = {}) => {
+        if (String(url).includes("/api/v1/runs")) {
+          bodies.push(JSON.parse(options.body));
+          return jsonResponse(runResponse());
+        }
+        return jsonResponse(stored);
+      }, { investigationId: INVESTIGATION_ID, userClearance: clearance, responseLanguage: item.language });
+      try {
+        document.querySelector(".structured-reference").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+        const action = [...document.querySelectorAll(".reference-popover button")].find(button => button.textContent === item.label);
+        assert.ok(action);
+        action.click();
+        await settle();
+        assert.deepEqual(bodies[0], { message: item.prompt, response_language: item.language, investigation_id: INVESTIGATION_ID });
+      } finally { restoreFetch(); }
+    });
+  }
+});
 
 const INVESTIGATION = {
   investigation_id: INVESTIGATION_ID,
@@ -659,7 +689,7 @@ test("renders a single-composer investigation workspace", async (t) => {
       investigate.click();
       await settle();
       assert.equal(requests.length, 1);
-      assert.equal(requests[0].message, "Untersuche QUALITY-09 genauer.");
+      assert.equal(requests[0].message, "Untersuche QUALITY-09.");
 
       const composer = document.querySelector("#composer-message");
       composer.value = "Replace this copied draft.";

@@ -138,7 +138,6 @@ class ScriptedS04LLM(LLMClient):
 
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
-        self._tool_step = 0
 
     def chat(self, model_id: ModelId, request: LLMRequest) -> LLMResponse:
         assert model_id == _ACCEPTANCE_MODEL_ID
@@ -163,13 +162,14 @@ class ScriptedS04LLM(LLMClient):
                 ),
                 finish_reason=FinishReason.STOP,
             )
-        if self._tool_step == 0:
-            self._tool_step += 1
+        observed_calls = {
+            call.name for message in request.messages for call in message.tool_calls
+        }
+        if "get_machine_status" not in observed_calls:
             return _tool_response(
                 "get_machine_status", {"station_id": "S04"}, "s04-status"
             )
-        if self._tool_step == 1:
-            self._tool_step += 1
+        if "search_documentation" not in observed_calls:
             return _tool_response(
                 "search_documentation",
                 {"query": "S04 QUALITY-09", "top_k": 3},
@@ -404,16 +404,19 @@ def test_s04_root_cause_path_is_deterministic_through_http_langgraph_mcp_and_sto
             message.tool_call_id == "quality-documentation"
             and message.content is not None
             and "QUALITY-09" in message.content
-            for message in scripted.requests[2].messages
+            for request in scripted.requests
+            if request.response_format is None
+            for message in request.messages
         )
         for scripted in factory.clients
     )
 
     assert len(factory.clients) == 10
-    assert all(len(scripted.requests) == 4 for scripted in factory.clients)
+    # Canonical station reads schedule status before the first model decision.
+    assert all(len(scripted.requests) == 3 for scripted in factory.clients)
     assert all(
         [request.response_format is not None for request in scripted.requests]
-        == [False, False, False, True]
+        == [False, False, True]
         for scripted in factory.clients
     )
     assert all(

@@ -110,10 +110,17 @@ export function assertPersistedTurn({ run, investigation, request, clearance, la
 export function assertToolEvidence(turn, tool, target) {
   const calls = turn?.tool_calls?.filter((call) => call.tool === tool) ?? [];
   requireEvidence(calls.length, "Required tool call missing.");
-  const argument = { get_machine_status: "station_id", get_product_history: "product_id", search_documentation: "query" }[tool];
+  const argument = { get_machine_status: "station_id", get_station_overview: "station_id", get_product_history: "product_id", search_documentation: "query" }[tool];
   assert.ok(calls.some((call) => !target || (typeof call.arguments?.[argument] === "string"
     && (argument === "query" ? call.arguments[argument].includes(target) : call.arguments[argument] === target))), "Tool arguments are not bound to the required target.");
   requireEvidence(turn.investigation_steps?.some((step) => step.action === tool && step.finding?.trim()), "Required recorded tool finding missing.");
+}
+
+export function assertStationReferenceEvidence(turn, target) {
+  const first = requireEvidence(turn?.tool_calls?.[0], "Required first station read missing.");
+  assert.ok(["get_machine_status", "get_station_overview"].includes(first.tool), "First station reference capability is unsupported.");
+  assert.equal(first.arguments?.station_id, target, "First station read must retain the clicked target.");
+  assertToolEvidence(turn, first.tool, target);
 }
 
 export function assertBinaryContent({ content, contentType, filename, expectedFormat, expectedId, expectedText = [], forbiddenText = [] }) {

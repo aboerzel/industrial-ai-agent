@@ -10,6 +10,7 @@ import pytest
 from mcp.client.stdio import StdioServerParameters
 from mcp.types import CallToolResult
 
+from industrial_ai_agent.agent.reference_requests import resolve_reference_read
 from industrial_ai_agent.infrastructure.factory_mcp_client import (
     StreamableHttpServerParameters,
     open_mcp_session,
@@ -18,6 +19,9 @@ from industrial_ai_agent.infrastructure.knowledge_mcp_server import (
     KNOWLEDGE_MCP_SERVER_NAME,
     KNOWLEDGE_MCP_SERVER_VERSION,
     create_knowledge_mcp_server,
+)
+from industrial_ai_agent.infrastructure.mcp_langchain_tool_provider import (
+    _create_arguments_schema,
 )
 from industrial_ai_agent.tools.documentation_search import (
     DocumentationSearchResult,
@@ -65,6 +69,28 @@ def test_knowledge_mcp_server_advertises_the_expected_schema() -> None:
     assert schema["properties"]["top_k"]["default"] == 3
     assert schema["additionalProperties"] is False
     assert schema["properties"]["top_k"]["maximum"] == 5
+
+
+def test_reference_read_reaches_real_mcp_handler_with_valid_default_result_limit() -> (
+    None
+):
+    capability = _RecordingDocumentationSearchCapability()
+    server = create_knowledge_mcp_server(documentation_search=capability)
+    intent = resolve_reference_read("Investigate QUALITY-09.")
+    assert intent is not None
+
+    async def read():
+        tool = (await server.list_tools())[0]
+        arguments = (
+            _create_arguments_schema(tool)
+            .model_validate(intent.first_arguments())
+            .model_dump()
+        )
+        return await server.call_tool("search_documentation", arguments)
+
+    response = asyncio.run(read())
+    assert not response.is_error
+    assert capability.requests == [("QUALITY-09", 3)]
 
 
 def test_knowledge_mcp_handler_delegates_and_preserves_structured_provenance() -> None:

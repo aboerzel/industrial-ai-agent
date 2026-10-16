@@ -36,6 +36,24 @@ the typed authorized observation, independently of model prose and the twelve-re
 budget. Optional missing status stays unknown; duplicates and invented model IDs cannot
 alter the list. The existing answer-size bound marks larger inventories explicitly partial.
 
+Canonical read-only reference requests use the same bounded first-read exception.
+The UI sends existing complete neutral DE/EN forms through the ordinary run endpoint,
+session, classification and persisted investigation checks. An exact parser binds
+station, product, fault-code or ticket targets before model invocation. The first read
+passes the existing authorized tool/argument guard and consumes the normal budget.
+Station reads select machine status when admitted, otherwise safe station overview;
+product overview/history, fault documentation and ticket reads retain their target.
+Only relevant read capabilities remain available; model target replacements and writes
+are rejected. The model owns explanation and evidence-led station troubleshooting;
+ADR-020 remains in force. No UI-origin authority, API or classifier relaxation is added.
+Arbitrary prose and first-decision model evaluations keep their existing behavior.
+See [UI reference actions](../learning/ui-reference-actions.md).
+These self-contained reads retain persisted investigation ownership and the server's
+monotonic context classification, while their model projection uses the explicit
+request and fresh observations rather than replaying prior conversational prose.
+Station reference navigation requests current status. Its evidence type is proportional
+to that read, while full typed station troubleshooting retains ADR-020's RCA requirements.
+
 The `TroubleshootingAgent` uses an explicit, bounded, sequential single-agent tool loop
 implemented in Python.
 
@@ -53,8 +71,8 @@ bypass validation, increase the limit, or control termination policy.
 
 ```mermaid
 flowchart TD
-    Start["User request + available tools"] --> Inventory{"Exact neutral demo inventory?"}
-    Inventory -->|"yes: first list call"| Limit
+    Start["User request + available tools"] --> Inventory{"Exact neutral inventory or reference read?"}
+    Inventory -->|"yes: bound first read"| Limit
     Inventory -->|"no"| LLM["LLM decision<br/>via LLMClient and Model Profile"]
     LLM --> Decision{"Response shape"}
     Decision -->|"final text, no tool call"| Present["For explicit inventory: render typed authorized list"]

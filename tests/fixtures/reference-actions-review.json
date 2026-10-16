@@ -1,0 +1,130 @@
+[
+  {
+    "username": "demo-public",
+    "type": "station",
+    "value": "S01",
+    "language": "DE",
+    "label": "Station untersuchen",
+    "prompt": "Untersuche Station S01 genauer."
+  },
+  {
+    "username": "demo-public",
+    "type": "station",
+    "value": "S01",
+    "language": "DE",
+    "label": "Aktuellen Status prüfen",
+    "prompt": "Prüfe den aktuellen Status von Station S01."
+  },
+  {
+    "username": "demo-public",
+    "type": "station",
+    "value": "S01",
+    "language": "EN",
+    "label": "Investigate station",
+    "prompt": "Investigate station S01 in more detail."
+  },
+  {
+    "username": "demo-public",
+    "type": "station",
+    "value": "S01",
+    "language": "EN",
+    "label": "Check current status",
+    "prompt": "Check the current status of station S01."
+  },
+  {
+    "username": "demo-confidential",
+    "type": "station",
+    "value": "S04",
+    "language": "DE",
+    "label": "Station untersuchen",
+    "prompt": "Untersuche Station S04 genauer."
+  },
+  {
+    "username": "demo-confidential",
+    "type": "station",
+    "value": "S04",
+    "language": "DE",
+    "label": "Aktuellen Status prüfen",
+    "prompt": "Prüfe den aktuellen Status von Station S04."
+  },
+  {
+    "username": "demo-confidential",
+    "type": "station",
+    "value": "S04",
+    "language": "EN",
+    "label": "Investigate station",
+    "prompt": "Investigate station S04 in more detail."
+  },
+  {
+    "username": "demo-confidential",
+    "type": "station",
+    "value": "S04",
+    "language": "EN",
+    "label": "Check current status",
+    "prompt": "Check the current status of station S04."
+  },
+  {
+    "username": "demo-internal",
+    "type": "product",
+    "value": "P4901",
+    "language": "DE",
+    "label": "Produkt untersuchen",
+    "prompt": "Untersuche Produkt P4901 genauer."
+  },
+  {
+    "username": "demo-internal",
+    "type": "product",
+    "value": "P4901",
+    "language": "DE",
+    "label": "Produkthistorie anzeigen",
+    "prompt": "Zeige die Produkthistorie von P4901."
+  },
+  {
+    "username": "demo-internal",
+    "type": "product",
+    "value": "P4901",
+    "language": "EN",
+    "label": "Investigate product",
+    "prompt": "Investigate product P4901 in more detail."
+  },
+  {
+    "username": "demo-internal",
+    "type": "product",
+    "value": "P4901",
+    "language": "EN",
+    "label": "Show product history",
+    "prompt": "Show the product history for P4901."
+  },
+  {
+    "username": "demo-confidential",
+    "type": "error_code",
+    "value": "QUALITY-09",
+    "language": "DE",
+    "label": "Untersuchen",
+    "prompt": "Untersuche QUALITY-09 genauer."
+  },
+  {
+    "username": "demo-confidential",
+    "type": "error_code",
+    "value": "QUALITY-09",
+    "language": "DE",
+    "label": "Dokumentation suchen",
+    "prompt": "Suche technische Dokumentation zu QUALITY-09."
+  },
+  {
+    "username": "demo-confidential",
+    "type": "error_code",
+    "value": "QUALITY-09",
+    "language": "EN",
+    "label": "Investigate",
+    "prompt": "Investigate QUALITY-09 in more detail."
+  },
+  {
+    "username": "demo-confidential",
+    "type": "error_code",
+    "value": "QUALITY-09",
+    "language": "EN",
+    "label": "Search documentation",
+    "prompt": "Search technical documentation for QUALITY-09."
+  }
+]

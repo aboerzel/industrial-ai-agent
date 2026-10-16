@@ -50,6 +50,7 @@ from industrial_ai_agent.agent.model_egress import (
     DataClassification,
     DataClassificationBoundaryError,
 )
+from industrial_ai_agent.agent.reference_requests import resolve_reference_read
 from industrial_ai_agent.agent.response_language import (
     ResponseLanguage,
     ResponseLanguageDetector,
@@ -649,13 +650,48 @@ class LangGraphTroubleshootingAgent:
             visible_tools = tuple(
                 tool for tool in model_tools if tool.name in eligible_names
             )
-        # Exact neutral inventory intents enter the normal validated tool node.
+        request = next(
+            (
+                str(item.content)
+                for item in reversed(state["messages"])
+                if isinstance(item, HumanMessage)
+            ),
+            "",
+        )
+        reference_read = resolve_reference_read(request)
+        if reference_read is not None:
+            visible_tools = tuple(
+                tool
+                for tool in visible_tools
+                if tool.name in reference_read.allowed_tools
+            )
+        first_reference_tool = (
+            next(
+                (
+                    name
+                    for name in reference_read.first_tools
+                    if any(tool.name == name for tool in visible_tools)
+                ),
+                reference_read.first_tools[0],
+            )
+            if reference_read is not None and state["executed_tool_count"] == 0
+            else None
+        )
+        # Exact neutral read intents enter the normal validated tool node.
         message = (
             AIMessage(
                 content="",
-                tool_calls=[{"name": discovery_tool, "args": {}, "id": str(uuid4())}],
+                tool_calls=[
+                    {
+                        "name": first_reference_tool or discovery_tool,
+                        "args": reference_read.first_arguments()
+                        if first_reference_tool
+                        else {},
+                        "id": str(uuid4()),
+                    }
+                ],
             )
-            if discovery_tool is not None
+            if discovery_tool is not None or first_reference_tool is not None
             else chat_model.bind_tools(visible_tools).invoke(state["messages"])
         )
         response = to_llm_response(message)
@@ -669,6 +705,12 @@ class LangGraphTroubleshootingAgent:
                 response_metadata=message.response_metadata,
             )
             response = to_llm_response(message)
+        if reference_read is not None and message.tool_calls:
+            call = message.tool_calls[0]
+            if not reference_read.permits(call["name"], call["args"]):
+                raise InvalidToolArgumentsError(
+                    "Reference reads must retain their target and read-only capability"
+                )
         if not response.tool_calls:
             if factory_discovery_required:
                 return {
@@ -1417,7 +1459,7 @@ class LangGraphTroubleshootingAgent:
                 content=f"{system_content}\n\n{response_language_instruction(response_language)}"
             )
         ]
-        if conversation_context:
+        if conversation_context and resolve_reference_read(normalized_request) is None:
             messages.append(
                 SystemMessage(
                     content=(
@@ -1574,11 +1616,21 @@ class LangGraphTroubleshootingAgent:
         """Initialize only a trusted, proportional station-investigation contract."""
         if self._investigation_type is None or self._run_classification is None:
             return None
+        reference_read = resolve_reference_read(user_request)
+        if reference_read is not None and reference_read.argument != "station_id":
+            return None
         station_id = _trusted_station_id_from_request(user_request)
         if station_id is None:
             return None
+        investigation_type = self._investigation_type
+        if (
+            reference_read is not None
+            and reference_read.station_status_only
+            and investigation_type is not InvestigationType.STATION_LIST
+        ):
+            investigation_type = InvestigationType.STATION_STATUS
         return EvidenceLedger.for_investigation(
-            self._investigation_type,
+            investigation_type,
             station_id=station_id,
             effective_data_classification=self._run_classification,
         )
