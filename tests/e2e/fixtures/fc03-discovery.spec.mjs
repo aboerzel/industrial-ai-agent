@@ -4,9 +4,11 @@ import { fileURLToPath } from "node:url";
 import { test, expect } from "../../../frontend/node_modules/@playwright/test/index.mjs";
 import { switchDemoUser, setResponseLanguage } from "../../../frontend/scripts/demo-account-controls.mjs";
 
-const levels = [["P4101", "P4102"], ["P4900", "P4901"], ["P4711", "P4801", "P4802", "P4805", "P4811"], ["P9001", "P9002"]];
+const inventories = [
+  { kind: "product", label: "FC03", levels: [["P4101", "P4102"], ["P4900", "P4901"], ["P4711", "P4801", "P4802", "P4805", "P4811"], ["P9001", "P9002"]], pattern: /\bP\d{4}\b/g, prompts: { DE: "Welche Produkte kennst du?", EN: "Which products do you know?" } },
+  { kind: "station", label: "SD", levels: [["S01", "S05"], ["S02", "S03"], ["S04", "S06"], ["S07", "S08"]], pattern: /\bS\d{2}\b/g, prompts: { DE: "welche stationen kennst du", EN: "Which stations do you know?" } },
+];
 const users = ["demo-public", "demo-internal", "demo-confidential", "demo-restricted", "demo-admin"];
-const ids = text => [...new Set(text.match(/\bP\d{4}\b/g) ?? [])].sort();
 let server, origin;
 
 test.beforeAll(async () => {
@@ -32,9 +34,11 @@ test.afterAll(async () => {
   }
 });
 
+for (const { kind, label, levels, pattern, prompts } of inventories) {
+const ids = text => [...new Set(text.match(pattern) ?? [])].sort();
 for (const language of ["DE", "EN"]) {
   for (const [index, username] of users.entries()) {
-    test(`FC03 complete authorized product inventory ${username} ${language}`, async ({ page }, testInfo) => {
+    test(`${label} complete authorized ${kind} inventory ${username} ${language}`, async ({ page }, testInfo) => {
       test.skip(!process.env.FACTORY_DATABASE_URL, "Requires a disposable seeded PostgreSQL database; no model provider.");
       await page.route("**/*", route => route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort());
       const expected = levels.slice(0, (index === 4 ? 0 : index) + 1).flat().sort();
@@ -42,7 +46,7 @@ for (const language of ["DE", "EN"]) {
       await expect(page.locator("#current-user")).toHaveText("demo-public");
       await switchDemoUser(page, username);
       await setResponseLanguage(page, language);
-      const prompt = language === "DE" ? "Welche Produkte kennst du?" : "Which products do you know?";
+      const prompt = prompts[language];
       await page.locator("#composer-message").fill(prompt);
       const response = page.waitForResponse(r => r.url() === `${origin}/api/v1/runs` && r.request().method() === "POST");
       await page.locator("#composer-form").evaluate(form => form.requestSubmit());
@@ -53,11 +57,11 @@ for (const language of ["DE", "EN"]) {
       const all = await (await page.request.get(`${origin}/fixture-evidence`)).json();
       const trace = all.at(-1);
       const detail = await (await page.request.get(`${origin}/api/v1/runs/${api.run_id}`)).json();
-      await testInfo.attach("FC03 pipeline", { body: JSON.stringify({ username, language, expected, trace, api, persisted: detail, browser_ids: ids(dom), browser_answer_ids: ids(await answer.innerText()) }), contentType: "application/json" });
+      await testInfo.attach(`${label} pipeline`, { body: JSON.stringify({ username, language, expected, trace, api, persisted: detail, browser_ids: ids(dom), browser_answer_ids: ids(await answer.innerText()) }), contentType: "application/json" });
       expect(api.status).toBe("success");
       expect(trace.factory_mcp_ids).toEqual(expected);
       expect(trace.model_input_ids).toEqual(expected);
-      const presented = [...new Set([...ids(api.answer), ...api.identifiers.filter(r => r.type === "product").map(r => r.value)])].sort();
+      const presented = [...new Set([...ids(api.answer), ...api.identifiers.filter(r => r.type === kind).map(r => r.value)])].sort();
       expect(presented).toEqual(expected);
       expect(ids(dom)).toEqual(expected);
       expect(ids(await answer.innerText())).toEqual(expected);
@@ -65,4 +69,5 @@ for (const language of ["DE", "EN"]) {
       expect(api.identifiers.length).toBeLessThanOrEqual(12);
     });
   }
+}
 }

@@ -1,4 +1,6 @@
 import { switchDemoUser, setResponseLanguage } from "./demo-account-controls.mjs";
+import { classifyJourneyFailure, evaluateJourneyStep, journeyResultCategory } from "./journey-execution.mjs";
+import { createJourneyHttpTrace } from "./journey-http-trace.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
@@ -14,11 +16,11 @@ import {
 } from "./journey-assertions.mjs";
 import {
   activeInvestigationId, browserIdentity, checkIdentitySwitch, checkDocument, checkNewChat, checkPdf,
-  checkReload, readInvestigation, rememberInvestigation,
+  checkReload, readInvestigation, rememberDenial, rememberInvestigation,
 } from "./browser-journey-checks.mjs";
 import {
   assertHttpStatus, checkDemoSession, createApiStatusGuard, executionStatus,
-  exitCodeForStatuses, fetchExpected, modelAdminHeaders, readExpectedJson, requiredEnvironmentValue,
+  establishBrowserDemoSession, exitCodeForStatuses, fetchExpected, modelAdminHeaders, readExpectedJson, requiredEnvironmentValue,
 } from "./e2e-http.mjs";
 import {
   assignmentSnapshot,
@@ -48,10 +50,10 @@ const JOURNEYS = {
     language: "DE",
     clearance: "CONFIDENTIAL",
     steps: [
-      { kind: "typed", prompt: "Untersuche Station S04 genauer.", expected: "SUCCESS", target: "S04", tool: "get_machine_status" },
+      { kind: "typed", prompt: "Untersuche Station S04.", expected: "SUCCESS", target: "S04", tool: "get_machine_status" },
       { kind: "reference", type: "error_code", action: "search", expected: "SUCCESS" },
       { kind: "document", expected: "SUCCESS" },
-      { kind: "typed", prompt: "Zeige die Produkthistorie des zuletzt genannten Produkts.", expected: "SUCCESS" },
+      { kind: "typed", prompt: "Zeige die Produkthistorie von P4711.", expected: "SUCCESS" },
     ],
   },
   "station-discovery": {
@@ -60,9 +62,9 @@ const JOURNEYS = {
     language: "EN",
     clearance: "INTERNAL",
     steps: [
-      { kind: "typed", prompt: "Which stations are available to me?", expected: "SUCCESS", tool: "list_stations" },
+      { kind: "typed", prompt: "Which stations are available?", expected: "SUCCESS", tool: "list_stations" },
       { kind: "reference", type: "station", action: "status", expected: "SUCCESS" },
-      { kind: "typed", prompt: "Which products are visible for that station?", expected: "SUCCESS" },
+      { kind: "typed", prompt: "What is its current operating status?", expected: "SUCCESS" },
       { kind: "reference", type: "product", action: "history", expected: "SUCCESS", optional: true },
     ],
   },
@@ -74,7 +76,7 @@ const JOURNEYS = {
     steps: [
       { kind: "typed", prompt: "Zeige die Produkthistorie von P4101.", expected: "SUCCESS", target: "P4101", tool: "get_product_history" },
       { kind: "reference", type: "station", action: "status", expected: "SUCCESS" },
-      { kind: "typed", prompt: "Welche Produkte sind an dieser Station sichtbar?", expected: "SUCCESS" },
+      { kind: "typed", prompt: "Wie ist sein aktueller Betriebsstatus?", expected: "SUCCESS" },
     ],
   },
   documentation: {
@@ -83,12 +85,12 @@ const JOURNEYS = {
     language: "EN",
     clearance: "CONFIDENTIAL",
     steps: [
-      { kind: "typed", prompt: "Search technical documentation for QUALITY-09.", expected: "SUCCESS", target: "QUALITY-09", tool: "search_documentation" },
+      { kind: "typed", prompt: "Investigate QUALITY-09.", expected: "SUCCESS", target: "QUALITY-09", tool: "search_documentation" },
       { kind: "document", expected: "SUCCESS" },
       { kind: "switch-user", username: "demo-public" },
-      { kind: "typed", prompt: "Investigate QUALITY-09 in more detail.", expected: "ATTENTION", target: "QUALITY-09" },
+      { kind: "typed", prompt: "Investigate QUALITY-09.", expected: "ATTENTION", target: "QUALITY-09" },
       { kind: "switch-user", username: "demo-confidential" },
-      { kind: "typed", prompt: "Which station is affected by QUALITY-09?", expected: "SUCCESS", target: "S04" },
+      { kind: "typed", prompt: "Investigate station S04.", expected: "SUCCESS", target: "S04" },
     ],
   },
   "clearance-boundary": {
@@ -97,11 +99,11 @@ const JOURNEYS = {
     language: "DE",
     clearance: "CONFIDENTIAL",
     steps: [
-      { kind: "typed", prompt: "Untersuche die Produkthistorie von P4711.", expected: "SUCCESS", target: "P4711", tool: "get_product_history" },
+      { kind: "typed", prompt: "Zeige die Produkthistorie von P4711.", expected: "SUCCESS", target: "P4711", tool: "get_product_history" },
       { kind: "switch-user", username: "demo-internal" },
-      { kind: "typed", prompt: "Show the product history for P4711.", expected: "ATTENTION", target: "P4711" },
+      { kind: "typed", prompt: "Show me the production history for P4711.", expected: "ATTENTION", target: "P4711" },
       { kind: "switch-user", username: "demo-confidential" },
-      { kind: "typed", prompt: "Untersuche Station S04 genauer.", expected: "SUCCESS", target: "S04" },
+      { kind: "typed", prompt: "Untersuche Station S04.", expected: "SUCCESS", target: "S04" },
       { kind: "new-chat" },
       { kind: "typed", prompt: "Welche Stationen kennst du?", expected: "SUCCESS" },
     ],
@@ -110,13 +112,13 @@ const JOURNEYS = {
     name: "Station discovery DE",
     tags: { clearance: "RESTRICTED", language: "de", domain: ["station", "navigation"], station_state: "healthy", interaction: ["typed", "station-click", "typed-follow-up"], expected_user_severity: ["SUCCESS"], security_boundary: "no", multi_turn: "yes", pdf_export: "no", new_chat: "no" },
     language: "DE", clearance: "RESTRICTED",
-    steps: [{ kind: "typed", prompt: "Welche Stationen kennst du?", expected: "SUCCESS" }, { kind: "reference", type: "station", action: "status", expected: "SUCCESS" }, { kind: "typed", prompt: "Welche Produkte sind an dieser Station sichtbar?", expected: "SUCCESS" }],
+    steps: [{ kind: "typed", prompt: "Welche Stationen kennst du?", expected: "SUCCESS" }, { kind: "reference", type: "station", action: "status", expected: "SUCCESS" }, { kind: "typed", prompt: "Wie ist sein aktueller Betriebsstatus?", expected: "SUCCESS" }],
   },
   "healthy-station-de": {
     name: "Healthy station investigation DE",
     tags: { clearance: "PUBLIC", language: "de", domain: ["station", "product"], station_state: "healthy", interaction: ["typed", "station-click", "product-click"], expected_user_severity: ["SUCCESS"], security_boundary: "no", multi_turn: "yes", pdf_export: "no", new_chat: "no" },
     language: "DE", clearance: "PUBLIC",
-    steps: [{ kind: "typed", prompt: "Untersuche Station S01 genauer.", expected: "SUCCESS" }, { kind: "reference", type: "station", action: "status", expected: "SUCCESS" }, { kind: "reference", type: "product", action: "history", expected: "SUCCESS", optional: true }],
+    steps: [{ kind: "typed", prompt: "Untersuche Station S01.", expected: "SUCCESS" }, { kind: "reference", type: "station", action: "status", expected: "SUCCESS" }, { kind: "reference", type: "product", action: "history", expected: "SUCCESS", optional: true }],
   },
   "healthy-station-en": {
     name: "Healthy station investigation EN",
@@ -128,25 +130,25 @@ const JOURNEYS = {
     name: "S04 fault investigation EN",
     tags: { clearance: "CONFIDENTIAL", language: "en", domain: ["station", "documentation", "rca"], station_state: "faulted", interaction: ["typed", "typed-follow-up", "fault-click"], expected_user_severity: ["SUCCESS"], security_boundary: "no", multi_turn: "yes", pdf_export: "no", new_chat: "no" },
     language: "EN", clearance: "CONFIDENTIAL",
-    steps: [{ kind: "typed", prompt: "Investigate station S04 in detail.", expected: "SUCCESS" }, { kind: "typed", prompt: "What does the active fault mean?", expected: "SUCCESS" }, { kind: "reference", type: "error_code", action: "search", expected: "SUCCESS" }],
+    steps: [{ kind: "typed", prompt: "Investigate station S04.", expected: "SUCCESS" }, { kind: "typed", prompt: "What does the active fault mean?", expected: "SUCCESS" }, { kind: "reference", type: "error_code", action: "search", expected: "SUCCESS" }],
   },
   "product-centric-en": {
     name: "Product-centric EN",
     tags: { clearance: "INTERNAL", language: "en", domain: ["product", "station"], station_state: "healthy", interaction: ["typed", "product-click", "station-click"], expected_user_severity: ["SUCCESS"], security_boundary: "no", multi_turn: "yes", pdf_export: "no", new_chat: "no" },
     language: "EN", clearance: "INTERNAL",
-    steps: [{ kind: "typed", prompt: "Show the product history for P4901.", expected: "SUCCESS" }, { kind: "reference", type: "product", action: "history", expected: "SUCCESS" }, { kind: "reference", type: "station", action: "status", expected: "SUCCESS", optional: true }],
+    steps: [{ kind: "typed", prompt: "Show me the production history for P4901.", expected: "SUCCESS" }, { kind: "reference", type: "product", action: "history", expected: "SUCCESS" }, { kind: "reference", type: "station", action: "status", expected: "SUCCESS", optional: true }],
   },
   "clearance-boundary-en": {
     name: "Clearance boundary EN",
     tags: { clearance: "INTERNAL", language: "en", domain: ["documentation", "navigation"], station_state: "n/a", interaction: ["typed", "fault-click", "typed-follow-up"], expected_user_severity: ["SUCCESS", "ATTENTION"], security_boundary: "yes", multi_turn: "yes", pdf_export: "yes", new_chat: "yes" },
     language: "EN", clearance: "INTERNAL",
-    steps: [{ kind: "typed", prompt: "Which stations are available to me?", expected: "SUCCESS" }, { kind: "typed", prompt: "Search technical documentation for QUALITY-09.", expected: "ATTENTION" }, { kind: "new-chat" }, { kind: "typed", prompt: "Show the current status of station S02.", expected: "SUCCESS" }],
+    steps: [{ kind: "typed", prompt: "Which stations are available?", expected: "SUCCESS" }, { kind: "typed", prompt: "Investigate QUALITY-09.", expected: "ATTENTION" }, { kind: "new-chat" }, { kind: "typed", prompt: "What is the current status of station S02?", expected: "SUCCESS" }],
   },
   "restricted-boundary": {
     name: "Restricted information path",
     tags: { clearance: "RESTRICTED", language: "en", domain: ["station", "documentation"], station_state: "faulted", interaction: ["typed", "station-click", "typed-follow-up"], expected_user_severity: ["SUCCESS"], security_boundary: "no", multi_turn: "yes", pdf_export: "no", new_chat: "no", attention_reason: "NOT_APPLICABLE: no fixture above RESTRICTED clearance" },
     language: "EN", clearance: "RESTRICTED",
-    steps: [{ kind: "typed", prompt: "Show the current status of station S07.", expected: "SUCCESS" }, { kind: "reference", type: "station", action: "status", expected: "SUCCESS" }, { kind: "typed", prompt: "What documentation is available for this station?", expected: "SUCCESS" }],
+    steps: [{ kind: "typed", prompt: "What is the current status of station S07?", expected: "SUCCESS" }, { kind: "reference", type: "station", action: "status", expected: "SUCCESS" }, { kind: "typed", prompt: "What does the active fault mean?", expected: "SUCCESS" }],
   },
 };
 
@@ -255,6 +257,8 @@ async function effectiveHarnessFingerprint() {
     "frontend/scripts/manual-e2e-runner-core.mjs",
     "frontend/scripts/e2e-http.mjs",
     "frontend/scripts/journey-assertions.mjs",
+    "frontend/scripts/journey-execution.mjs",
+    "frontend/scripts/journey-http-trace.mjs",
     "frontend/scripts/browser-journey-checks.mjs",
     "frontend/scripts/run-e2e-journey.mjs",
     "frontend/scripts/run-manual-e2e.mjs",
@@ -380,6 +384,7 @@ async function runJourney(id) {
   let configurationGuard;
   let configurationSnapshot;
   let httpGuard;
+  let httpTrace;
   let operation = "startup";
   try {
     await checkDemoSession(FRONTEND_URL, "demo-public");
@@ -392,6 +397,8 @@ async function runJourney(id) {
     result.metadata = currentRunMetadata();
     browser = await chromium.launch({ headless: true });
     context = await browser.newContext({ acceptDownloads: true });
+    httpTrace = createJourneyHttpTrace(context);
+    result.session_setup = await establishBrowserDemoSession(context, FRONTEND_URL);
     configurationGuard = createReadOnlyConfigurationGuard(context);
     httpGuard = createApiStatusGuard(context);
     page = await context.newPage();
@@ -405,17 +412,17 @@ async function runJourney(id) {
     await preparePage(page, definition);
     configurationGuard.assertUnchanged(operation);
     for (const [index, step] of plannedSteps(definition).entries()) {
-      result.current_assertion_id = `step-${index + 1}:${step.kind}`;
       operation = step.kind;
       await assertConfigurationSnapshot(configurationSnapshot, `before ${operation}`);
-      await executeStep(page, context, result, step, clientErrors, failedFetches, httpGuard);
+      await evaluateJourneyStep(result, step, index,
+        () => executeStep(page, context, result, step, clientErrors, failedFetches, httpGuard), httpGuard);
       configurationGuard.assertUnchanged(operation);
-      httpGuard.assertSuccessful();
     }
     operation = "smoke controls";
     await smokeControls(page, result, browser);
     configurationGuard.assertUnchanged(operation);
   } catch (error) {
+    result.fatal_category = classifyJourneyFailure(error, result.last_terminal ?? {});
     if (error instanceof MissingEvidence || error.name === "AssertionError") {
       if (result.current_assertion_id && result.assertions.find((item) => item.id === result.current_assertion_id)?.status === "NOT_RUN") {
         recordAssertion(result, result.current_assertion_id, error instanceof MissingEvidence ? "BLOCKED" : "FAIL", error.message, !(error instanceof MissingEvidence));
@@ -430,6 +437,9 @@ async function runJourney(id) {
       result.status = "HARNESS_ERROR";
     }
   } finally {
+    await httpTrace?.flush();
+    result.http_trajectory = httpTrace?.rows ?? [];
+    httpTrace?.close();
     try {
       configurationGuard?.assertUnchanged(operation);
       httpGuard?.assertSuccessful();
@@ -447,7 +457,8 @@ async function runJourney(id) {
     delete result.current_assertion_id;
     result.assertion_summary = assertionSummary(result.assertions);
     result.status = evaluatedJourneyStatus(result);
-    if (result.runner_result === "RUNNING") result.runner_result = result.status === "FAIL" ? "PRODUCT_FAIL" : result.status;
+    result.result_category = journeyResultCategory(result);
+    if (result.runner_result === "RUNNING") result.runner_result = result.result_category;
     await writeAtomically(journeyResultPath(id), result);
     await context?.close();
     await browser?.close();
@@ -509,8 +520,23 @@ export async function selectDemoIdentity(page, clearance, username = null) {
 }
 
 async function executeStep(page, context, result, step, clientErrors, failedFetches, httpGuard) {
+  if (step.kind === "typed" && step.expected === "ATTENTION") {
+    httpGuard.expectResponse({ method: "POST", pathname: "/api/v1/runs", allowedStatuses: [200, 404] });
+  }
   if (step.kind === "switch-user") {
-    await checkIdentitySwitch(page, result, step.username, httpGuard);
+    try {
+      await checkIdentitySwitch(page, result, step.username, httpGuard);
+    } catch (error) {
+      if (error instanceof MissingEvidence || error.name === "AssertionError") {
+        // Preserve the missing security precondition while setting the real session
+        // required by subsequent independent assertions. Never fabricate evidence.
+        await selectDemoIdentity(page, null, step.username);
+        result.context_recovery ??= [];
+        result.context_recovery.push({ assertion_id: result.current_assertion_id,
+          username: step.username, reason: "Failed identity transition precondition" });
+      }
+      throw error;
+    }
     record(result, { label: `switch user ${step.username}`, ...await pageContext(page), test_result: "PASS", note: "Context transition, purge and server visibility asserted." });
     return;
   }
@@ -608,9 +634,40 @@ async function openDocument(page, context, result, step, clientErrors, failedFet
 async function recordAgentResult(page, result, label, step, request, investigationResponse, clientErrors, failedFetches, clickedIdentifier = null, observedRequestContext = null, previousId = null) {
   const context = await pageContext(page);
   const body = request.postDataJSON();
-  const run = await readExpectedJson(requireEvidence(await request.response(), "Required run response missing."));
+  const response = requireEvidence(await request.response(), "Required run response missing.");
+  if (response.status() !== 200) {
+    const body = await response.json().catch(() => null);
+    if (step.expected === "ATTENTION" && response.status() === 404) {
+      assert.ok(["requested_data_unavailable", "diagnostic_target_unavailable"].includes(body?.code), "Expected exact neutral denial code.");
+      assert.equal(body.run_id, undefined);
+      assert.equal(body.investigation_id, undefined);
+      assert.equal(request.postDataJSON().user_clearance, undefined);
+      assert.equal(request.postDataJSON().response_language, context.language);
+      const visible = await page.locator(".agent-turn").last().innerText();
+      assert.equal(await userSeverity(page.locator(".agent-turn").last(), visible), "ATTENTION");
+      assert.ok(!step.target || (!JSON.stringify(body).includes(step.target) && !visible.includes(step.target)), "Protected identifier leaked in access denial.");
+      assert.ok(hasLanguageSignal(visible, context.language, "ATTENTION"));
+      rememberDenial(result, body.code);
+      record(result, { label, ...context, expected_severity: "ATTENTION", actual_severity: "ATTENTION", test_result: "PASS",
+        error_code: body.code, http_status: 404, http_classification: "EXPECTED_NON_DISCLOSURE", run_status: "denied_before_allocation",
+        context_preserved: true, language_preserved: true, note: "Neutral authorization denial before run allocation; no persisted run fabricated." });
+      return;
+    }
+    const error = new Error(`Unexpected HTTP status ${response.status()}; expected 200.`);
+    error.status = response.status();
+    error.code = body?.code ?? null;
+    error.http_classification = response.status() === 401 ? "AUTHENTICATION_FAILURE"
+      : response.status() === 404 && body?.code === "requested_data_unavailable" ? "AUTHORIZATION_NEUTRAL_DENIAL" : "HARNESS_CONTRACT_MISMATCH";
+    error.result_category = response.status() === 404 && step.kind === "reference" ? "PRODUCT_DEFECT"
+      : response.status() >= 500 ? "INFRASTRUCTURE_ERROR" : "HARNESS_ERROR";
+    throw error;
+  }
+  const run = await readExpectedJson(response);
   const investigation = await readInvestigation(page, requireEvidence(run.investigation_id, "Required investigation ID missing."), context.clearance);
   const turn = assertPersistedTurn({ run, investigation, request: body, ...context, previousId });
+  result.last_terminal = { status: turn.status, error_code: turn.error?.code ?? null, data_classification: turn.data_classification };
+  result.tool_trajectory ??= [];
+  result.tool_trajectory.push({ run_id: run.run_id, data_classification: turn.data_classification, tool_calls: turn.tool_calls ?? [] });
   if (await activeInvestigationId(page) !== run.investigation_id) throw harnessSignal("AssertionError", "UI investigation reference does not match the persisted run.");
   rememberInvestigation(result, investigation, turn);
   const agentTurn = page.locator(".agent-turn").last();
@@ -636,6 +693,7 @@ async function recordAgentResult(page, result, label, step, request, investigati
 
 async function smokeControls(page, result, browser) {
   const adminContext = await browser.newContext();
+  await establishBrowserDemoSession(adminContext, FRONTEND_URL);
   const httpGuard = createApiStatusGuard(adminContext);
   const configurationGuard = createReadOnlyConfigurationGuard(adminContext);
   let dialogOpen = false;
@@ -653,6 +711,50 @@ async function smokeControls(page, result, browser) {
   await monitoring.locator("summary").click();
   const dashboard = monitoring.locator("a").first();
   result.smoke = { model_configuration: dialogOpen ? "PASS" : "FAIL", monitoring: await dashboard.getAttribute("href") ? "PASS" : "FAIL" };
+  if (result.id === "station-discovery") {
+    result.smoke.discovery_inventory = await checkDiscoveryInventories(page, result);
+  }
+}
+
+async function checkDiscoveryInventories(page, result) {
+  const stationLevels = [["S01", "S05"], ["S02", "S03"], ["S04", "S06"], ["S07", "S08"]];
+  const productLevels = [["P4101", "P4102"], ["P4900", "P4901"], ["P4711", "P4801", "P4802", "P4805", "P4811"], ["P9001", "P9002"]];
+  result.inventory_smoke = [];
+  for (const [index, username] of ["demo-public", "demo-internal", "demo-confidential", "demo-restricted", "demo-admin"].entries()) {
+    for (const [kind, levels, prompt, pattern] of [
+      ["station", stationLevels, "welche stationen kennst du", /\bS\d{2}\b/g],
+      ["product", productLevels, "Welche Produkte kennst du?", /\bP\d{4}\b/g],
+    ]) {
+      const row = { username, kind, expected: levels.slice(0, (index === 4 ? 0 : index) + 1).flat().sort() };
+      try {
+        await assertConfigurationSnapshot(latestAssignmentSnapshot, "before inventory smoke");
+        await switchDemoUser(page, username);
+        await setResponseLanguage(page, "DE");
+        await page.locator("#new-investigation-button").click();
+        const response = page.waitForResponse(r => isRunPost(r.request()));
+        await page.locator("#composer-message").fill(prompt);
+        await page.locator("#composer-button").click();
+        const api = await readExpectedJson(await response);
+        assert.equal(api.status, "success");
+        await page.locator(".agent-answer").last().waitFor();
+        const persisted = await readExpectedJson(await page.request.get(new URL(`/api/v1/runs/${api.run_id}`, page.url()).href));
+        const ids = text => [...new Set((text ?? "").match(pattern) ?? [])].sort();
+        Object.assign(row, { run_id: api.run_id, classification: api.data_classification, answer_ids: ids(api.answer), persisted_ids: ids(persisted.answer), browser_ids: ids(await page.locator(".agent-answer").last().innerText()), reference_ids: api.identifiers.filter(item => item.type === kind).map(item => item.value), tool_calls: api.tool_calls });
+        for (const field of ["answer_ids", "persisted_ids", "browser_ids"]) assert.deepEqual(row[field], row.expected);
+        assert.ok(row.reference_ids.every(id => row.expected.includes(id)));
+        assert.ok(api.identifiers.length <= 12);
+        assert.ok(api.tool_calls.some(call => call.tool === (kind === "station" ? "list_stations" : "list_products")));
+        row.result = "PASS";
+      } catch (error) {
+        row.result = "FAIL";
+        row.result_category = error.name === "AssertionError" ? "PRODUCT_DEFECT" : "HARNESS_ERROR";
+        row.message = error.message.slice(0, 500);
+      }
+      result.inventory_smoke.push(row);
+    }
+  }
+  await assertConfigurationSnapshot(latestAssignmentSnapshot, "after inventory smoke");
+  return result.inventory_smoke.every(row => row.result === "PASS") ? "PASS" : "FAIL";
 }
 
 async function findReference(page, type, language) {
@@ -756,7 +858,7 @@ function hasLanguageSignal(text, language, severity) {
 }
 function technicalFaults(text) { return /invalid run response|internal_error|model_output_invalid|mcp.*(failed|unavailable)/i.test(text) ? ["user-facing technical failure"] : []; }
 function failedStep(label, expected, context, note, optional) { return { label, ...context, expected_severity: expected, actual_severity: optional ? null : "FAILURE", test_result: optional ? "NOT_RUN" : "BLOCKED", note, clicked_reference_type: null }; }
-function startResult(id, definition, metadata) { return { id, journey: definition.name, tags: definition.tags, metadata, assertions: assertionPlan(definition), planned_language: definition.language, planned_clearance: definition.clearance, started_at: new Date().toISOString(), real_model: "Local Qwen 3.5 9B", model_id: LOCAL_MODEL_ID, reasoning_effort: "none", external_provider_calls: 0, status: "RUNNING", runner_result: "RUNNING", steps: [], visited: [], click_depth: 0 }; }
+function startResult(id, definition, metadata) { return { id, journey: definition.name, tags: definition.tags, metadata, assertions: assertionPlan(definition), required_smoke: ["model_configuration", "monitoring", ...(id === "station-discovery" ? ["discovery_inventory"] : [])], planned_language: definition.language, planned_clearance: definition.clearance, started_at: new Date().toISOString(), real_model: "Local Qwen 3.5 9B", model_id: LOCAL_MODEL_ID, execution_zone: "LOCAL", reasoning_effort: "none", external_provider_calls: 0, status: "RUNNING", runner_result: "RUNNING", steps: [], visited: [], click_depth: 0 }; }
 function record(result, step) {
   const assertion = result.assertions.find((item) => item.id === result.current_assertion_id);
   recordAssertion(result, assertion.id, step.test_result, step.note, !["NOT_RUN", "BLOCKED"].includes(step.test_result));
@@ -832,7 +934,7 @@ async function aggregateResults() {
   const steps = journeys.flatMap((journey) => journey.steps.map((step) => ({ journey: journey.id, ...step })));
   const count = (predicate) => steps.filter(predicate).length;
   const finishedAt = new Date().toISOString();
-  const journeySummary = journeys.map((journey) => ({ journey: journey.journey, steps: journey.steps.length, success: journey.steps.filter((step) => step.actual_severity === "SUCCESS").length, attention: journey.steps.filter((step) => step.actual_severity === "ATTENTION").length, failure: journey.steps.filter((step) => step.actual_severity === "FAILURE").length, result: journey.status, ...assertionSummary(journey.assertions) }));
+  const journeySummary = journeys.map((journey) => ({ journey: journey.journey, steps: journey.steps.length, success: journey.steps.filter((step) => step.actual_severity === "SUCCESS").length, attention: journey.steps.filter((step) => step.actual_severity === "ATTENTION").length, failure: journey.steps.filter((step) => step.actual_severity === "FAILURE").length, result: journey.status, result_category: journey.result_category ?? null, ...assertionSummary(journey.assertions) }));
   const overallStatus = executionStatus([...journeys.map((journey) => journey.status), ...(configurationError ? ["HARNESS_ERROR"] : []), ...(preflightStatus ? [preflightStatus] : [])]);
   const summary = {
     metadata: currentRunMetadata(finishedAt),

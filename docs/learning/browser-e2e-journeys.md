@@ -76,7 +76,7 @@ npm run test:e2e:fixtures -- --list
 | R03 multi-tab stale approve/reject, fresh-decision refresh, old BFCache controls and preserved requests after identity switch | `r03-approval.spec.mjs` |
 | Journey assertion controls, context transitions, document bytes/filename, PDF and denied documents | `journey-evidence.spec.mjs` |
 | Active document MIME sanitization before Blob publication | `document-mime.spec.mjs` |
-| FC03 exact product inventory for all five identities in DE/EN, narrative fallback and bounded references; disposable PostgreSQL required | `fc03-discovery.spec.mjs` |
+| FC03/SD exact product and station inventories for all five identities in DE/EN, narrative fallback and bounded references; disposable PostgreSQL required | `fc03-discovery.spec.mjs` |
 | FC04 actual retained transcript-PDF URL reads across switch/logout, failed identity refresh, pagehide/BFCache and publication races; normal export, server PDF and document controls | `fc04-transcript-blob.spec.mjs` |
 
 The configured users are `demo-public`, `demo-internal`, `demo-confidential`,
@@ -238,3 +238,44 @@ change. The implemented FAST / INTEGRATION / MANUAL_REAL_MODEL ladder and its co
 are defined in [Quality Gates](../quality/quality-gates.md). Authenticated calls, explicit
 expected statuses, fail-closed aggregation/exit codes, and complete REQUIRED assertions
 govern the current runner; OPTIONAL and MANUAL_ONLY claims remain separate.
+
+## Current harness session and outcome contract
+
+Each new journey browser context calls the supported same-origin
+`POST /api/v1/auth/bootstrap` through Playwright's shared request/cookie context,
+verifies `demo-public`, then selects its declared identity in the visible account menu.
+No browser bearer credential or caller-selected clearance is supplied. The cookie-free
+initial `/auth/me` 401 is normal frontend discovery; the harness establishes the session
+first and still rejects unexpected 401 responses after setup.
+
+Typed prompts use the server's existing complete neutral request forms; unknown prose
+remains conservative. The registry keeps twelve journeys and 59 required assertions.
+Unsupported product-at-station prose becomes a supported contextual status follow-up;
+product inventories are tested independently by complete discovery fixtures. Genuine UI
+reference-action failures remain product findings and do not relax classification.
+
+Expected pre-allocation denial is HTTP 404 with an exact neutral code, no protected ID
+and no fabricated run/investigation. The harness asserts the rendered denial directly.
+A later upgrade rechecks the saved earlier investigation without restoring it into the
+browser. Arbitrary 404 responses never pass this check.
+
+Journeys attempt every planned assertion and retain per-step errors. Reports separate
+`required_evaluated` (checks attempted, including missing prerequisites) from
+`required_executed` and passed/failed/blocked counts. A checked missing prerequisite does
+not mean its dependent evidence executed or passed.
+If an identity-transition prerequisite is missing, the harness still selects the requested
+real demo session for subsequent independent checks and records that recovery separately;
+the deficient transition assertion remains failed or blocked, never passed.
+Categories: PASS, PRODUCT_DEFECT, SECURITY_DEFECT, MODEL_VARIANCE, BLOCKED_BY_PROVIDER,
+HARNESS_ERROR, INFRASTRUCTURE_ERROR.
+Model omissions/missing documents are not runner errors. Each journey retains session
+metadata, sanitized HTTP trajectory (method/path, cookie/header presence only, status,
+neutral error code and redirects), tool trajectory, classification and verified LOCAL
+model identity; no cookies, credentials or full HTTP bodies. No protected action is approved.
+
+The existing `station-discovery` journey additionally owns a critical live inventory
+smoke: all five identities submit exact station/product discovery through the UI and
+compare authorized answer IDs with persisted and browser answer IDs. These ten controls
+are reported separately from the unchanged 59 required journey assertions. Their absence
+or failure prevents that journey from passing. They use the same LOCAL-only preflight
+and assignment checks, with no protected actions or additional model runner.

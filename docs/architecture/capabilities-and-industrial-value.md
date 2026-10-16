@@ -40,12 +40,15 @@ within an approved local model environment. The other levels may go to an extern
 only when that configured model is explicitly approved for the relevant protection level.
 Unknown free-form demo requests are conservatively `RESTRICTED`; unknown sensitivity
 never authorizes external model processing.
-Nginx authenticates the browser's demo username/password before translating it to a
-server-held API bearer token. Anonymous clients receive no authority. The server-owned
-principal defines the maximum clearance; the UI selector can only narrow it. Each
-request-specific context is applied to PostgreSQL RLS before records are returned.
-The four investigation users have no `model-admin`; Model Configuration requires its
-separate login/token. This shared-secret local demo has no production identity or TLS.
+In Demo Auth Mode, the browser uses server-managed `DemoSessions` through an `HttpOnly`,
+`SameSite=Strict` cookie. Nginx proxies cookies and strips `Authorization`; the API derives
+each `SecurityContext`, clearance and roles from the session. The account menu intentionally
+allows quick switching among all five configured identities. `demo-admin` has PUBLIC
+clearance and MODEL_ADMIN; `demo-restricted` has RESTRICTED clearance without MODEL_ADMIN.
+No browser-selected clearance grants authority. Each request-specific context is applied
+to PostgreSQL RLS before records are returned. Configuration requires MODEL_ADMIN. Direct
+API/MCP bearer credentials remain separate. This process-local demo has no production
+identity or TLS.
 
 ### Cost and efficiency
 

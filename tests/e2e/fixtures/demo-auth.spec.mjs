@@ -1,4 +1,5 @@
 import { openAccount, switchDemoUser, setResponseLanguage } from "../../../frontend/scripts/demo-account-controls.mjs";
+import { createApiStatusGuard, establishBrowserDemoSession } from "../../../frontend/scripts/e2e-http.mjs";
 // DEMO-ONLY CREDENTIALS — NOT FOR PRODUCTION OR SERVICE AUTHENTICATION
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
@@ -43,6 +44,22 @@ async function select(page, username) {
   await switchDemoUser(page, username);
   await expect(page.locator("#current-user")).toContainText(username);
 }
+
+test("real-model harness bootstrap shares the server session cookie before page startup", async ({ browser }) => {
+  const context = await browser.newContext();
+  try {
+    await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+    const user = await establishBrowserDemoSession(context, origin);
+    expect(user.username).toBe("demo-public");
+    const cookie = (await context.cookies(origin + "/api/v1/auth/me")).find(item => item.name === "industrial_demo_session");
+    expect(cookie).toMatchObject({ httpOnly: true, sameSite: "Strict", path: "/api/" });
+    const guard = createApiStatusGuard(context);
+    const page = await context.newPage();
+    await page.goto(origin);
+    await expect(page.locator("#current-user")).toHaveText("demo-public");
+    guard.assertSuccessful();
+  } finally { await context.close(); }
+});
 
 test("header account menu shows authoritative permissions, active user and keyboard dismissal", async ({ page }) => {
   await openAccount(page);
@@ -133,7 +150,7 @@ for (const user of demoUsers) {
     expect(run.status).toBe("success");
     expect(run.tool_calls.map(call => call.tool)).toEqual(["list_stations"]);
     expect(run.identifiers.filter(item => item.type === "station").map(item => item.value).sort()).toEqual(expected);
-    await expect(page.locator("#conversation-history")).toContainText(expected.join(", "));
+    expect([...new Set((await page.locator(".agent-answer").last().innerText()).match(/\bS\d{2}\b/g) ?? [])].sort()).toEqual(expected);
     for (const hidden of levels.flat().filter(id => !expected.includes(id))) await expect(page.locator("#conversation-history")).not.toContainText(hidden);
     await expect(page.locator("#conversation-history")).not.toContainText("Die angeforderten Daten sind nicht verfügbar.");
   });

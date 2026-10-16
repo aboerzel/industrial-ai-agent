@@ -926,7 +926,8 @@ flowchart TD
     Decide --> Shape{"Response shape"}
     Shape -->|"candidate final text"| Complete{"Trusted required evidence complete?"}
     Complete -->|"yes"| Normalize["Bounded final-output and language validation"]
-    Normalize -->|"valid"| Success["AgentRunResult<br/>SUCCESS + final answer"]
+    Normalize -->|"valid"| Present["Explicit inventory: deterministic authorized station/product list"]
+    Present --> Success["AgentRunResult<br/>SUCCESS + final answer"]
     Complete -->|"no"| Missing["Bounded missing-evidence retry<br/>or terminal evidence error"]
     Missing -->|"retry budget remains"| Decide
     Shape -->|"malformed response"| Invalid["Deterministic error"]
@@ -945,7 +946,7 @@ flowchart TD
     classDef success fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class Decide,Shape llm
-    class Start,Inventory,Admit,Budget,Validate,Dispatch,Observe,Count,Complete,Normalize,Missing deterministic
+    class Start,Inventory,Admit,Budget,Validate,Dispatch,Observe,Count,Complete,Normalize,Present,Missing deterministic
     class Success success
     class Invalid,Limit failure
 ```
@@ -961,6 +962,12 @@ dispatches through the opened MCP session, serializes each structured result, an
 the complete current-run message context. During evidence acquisition, ADR-020 intersects
 admitted tools with prerequisite-ready evidence sources; normal authorized tool
 visibility resumes only after the ledger is complete. Discovery alone never grants admission.
+
+Explicit generic station/product discovery renders the complete authorized inventory
+deterministically from its typed tool observation after narrative validation. The model
+cannot omit or invent primary inventory entries. Stations retain authorized names and
+available status, with null status rendered unknown. Bounded references remain separate;
+the unchanged answer-size limit explicitly marks oversized inventories partial.
 
 `MAX_TOOL_CALLS = 4` counts successfully executed tools rather than LLM requests. After
 the fourth observation, exactly one final LLM decision is allowed. Final text returns

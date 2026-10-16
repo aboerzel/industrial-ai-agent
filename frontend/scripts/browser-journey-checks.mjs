@@ -16,8 +16,14 @@ export function rememberInvestigation(result, investigation, turn) {
   evidence.set(result, { investigation, turn });
 }
 
+export function rememberDenial(result, code) {
+  const previous = evidence.get(result);
+  evidence.set(result, { investigation: previous?.saved_investigation ?? previous?.investigation, denied_before_allocation: code });
+}
+
 export function currentEvidence(result) {
-  return requireEvidence(evidence.get(result), "Required investigation evidence missing.");
+  const current = evidence.get(result);
+  return requireEvidence(current?.investigation && current, "Required investigation evidence missing.");
 }
 
 function renderedMarker(turn) {
@@ -110,13 +116,25 @@ export async function browserIdentity(page) {
 }
 
 export async function checkIdentitySwitch(page, result, username, httpGuard) {
-  const { investigation } = currentEvidence(result);
-  const id = requireEvidence(await activeInvestigationId(page), "Required pre-transition investigation ID missing.");
+  const { investigation, denied_before_allocation: denied } = currentEvidence(result);
+  const active = await activeInvestigationId(page);
+  const id = denied ? requireEvidence(investigation?.investigation_id, "Required saved pre-denial investigation missing.")
+    : requireEvidence(active, "Required pre-transition investigation ID missing.");
   assert.equal(id, investigation.investigation_id);
   const before = await browserIdentity(page);
   assert.notEqual(username, before.username);
-  const protectedText = requireEvidence(investigation.turns.find((turn) => turn.answer)?.answer, "Required pre-transition content missing.");
-  assert.ok((await page.locator("#conversation-history").innerText()).includes(protectedText.replace(/[#*`]/g, "").trim()));
+  const protectedTurn = investigation.turns.find((turn) => turn.answer);
+  requireEvidence(protectedTurn?.answer, "Required pre-transition content missing.");
+  // Compare an evidence-bound rendered marker, not raw Markdown with DOM text.
+  const protectedText = renderedMarker(protectedTurn);
+  if (denied) {
+    assert.equal(active, null);
+    assert.ok(["requested_data_unavailable", "diagnostic_target_unavailable"].includes(denied));
+    assert.equal(await page.locator(".agent-turn .turn-attention").count(), 1);
+    assert.equal(await page.locator(".structured-reference").count(), 0);
+  } else {
+    assert.ok((await page.locator("#conversation-history").innerText()).includes(protectedText.replace(/[#*`]/g, "").trim()));
+  }
   await switchDemoUser(page, username);
   await page.waitForFunction((user) => document.querySelector("#current-user")?.textContent.startsWith(user), username);
   const after = await browserIdentity(page);
@@ -145,7 +163,7 @@ export async function checkIdentitySwitch(page, result, username, httpGuard) {
       assert.ok(response.headers()["content-type"].startsWith("application/pdf"));
     }
   }
-  evidence.delete(result);
+  evidence.set(result, { saved_investigation: investigation });
 }
 export async function checkDeniedDocument(page, reference, clearance) {
   requireEvidence(reference?.document_id, "Required protected document reference missing.");

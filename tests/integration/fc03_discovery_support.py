@@ -15,6 +15,9 @@ from industrial_ai_agent.agent.langgraph_troubleshooting_agent import (
 )
 from industrial_ai_agent.agent.llm import FinishReason, LLMResponse, ModelProfile
 from industrial_ai_agent.agent.mcp_tool_provider import McpToolSession
+from industrial_ai_agent.agent.run_classification_policy import (
+    resolve_demo_discovery_tool,
+)
 from industrial_ai_agent.agent.tool_policy import ToolOperation, ToolPolicy
 from industrial_ai_agent.domain.security import SecurityContext
 from industrial_ai_agent.infrastructure.api.app import create_app
@@ -46,10 +49,15 @@ PRODUCT_LEVELS = (
     ("P4711", "P4801", "P4802", "P4805", "P4811"),
     ("P9001", "P9002"),
 )
+STATION_LEVELS = (("S01", "S05"), ("S02", "S03"), ("S04", "S06"), ("S07", "S08"))
 
 
 def product_ids(value):
     return sorted(set(re.findall(r"\bP\d{4}\b", value or "")))
+
+
+def station_ids(value):
+    return sorted(set(re.findall(r"\bS\d{2}\b", value or "")))
 
 
 def expected_ids(clearance):
@@ -67,6 +75,11 @@ class DiscoveryService:
     async def run_with_policy(
         self, message, *, run_policy, response_language, **kwargs
     ):
+        station_discovery = resolve_demo_discovery_tool(message) == "list_stations"
+        tool_name = "list_stations" if station_discovery else "list_products"
+        collection = "stations" if station_discovery else "products"
+        identifier = "station_id" if station_discovery else "product_id"
+        extract_ids = station_ids if station_discovery else product_ids
         context = SecurityContext(
             run_policy.mcp_client_identity,
             ("reader",),
@@ -79,7 +92,9 @@ class DiscoveryService:
         with self.factory.connection(context) as connection:
             trace["database_ids"] = list(
                 connection.scalars(
-                    text("SELECT product_code FROM product ORDER BY product_code")
+                    text("SELECT code FROM station ORDER BY code")
+                    if station_discovery
+                    else text("SELECT product_code FROM product ORDER BY product_code")
                 )
             )
             trace["bypass_rls"] = connection.scalar(
@@ -88,7 +103,7 @@ class DiscoveryService:
                 )
             )
         trace["repository_ids"] = [
-            product.product_id.value for product in repository.list_products()
+            getattr(row, identifier).value for row in getattr(repository, tool_name)()
         ]
         server = create_factory_mcp_server(
             product_history=ProductHistoryCapability(
@@ -104,12 +119,12 @@ class DiscoveryService:
             @asynccontextmanager
             async def open_session(self):
                 async def inventory():
-                    result = await server.call_tool("list_products", {})
+                    result = await server.call_tool(tool_name, {})
                     assert not result.is_error
                     payload = result.structured_content
                     trace["factory_mcp"] = payload
                     trace["factory_mcp_ids"] = [
-                        row["product_id"] for row in payload["products"]
+                        row[identifier] for row in payload[collection]
                     ]
                     trace["agent_raw_ids"] = trace["factory_mcp_ids"]
                     return json.dumps(payload)
@@ -118,15 +133,15 @@ class DiscoveryService:
                     tools=(
                         StructuredTool.from_function(
                             coroutine=inventory,
-                            name="list_products",
-                            description="Read the complete authorized product inventory.",
+                            name=tool_name,
+                            description="Read the complete authorized inventory.",
                         ),
                     ),
-                    discovered_tool_names=("list_products",),
+                    discovered_tool_names=(tool_name,),
                     server_name="real-factory-fixture",
                     server_version="test",
                     protocol_version="test",
-                    tool_policies=(ToolPolicy("list_products", ToolOperation.READ),),
+                    tool_policies=(ToolPolicy(tool_name, ToolOperation.READ),),
                 )
 
         mode = self.model_mode
@@ -139,13 +154,14 @@ class DiscoveryService:
                     if item.role.value == "tool"
                 ]
                 assert observations, "The guarded inventory must precede the model"
-                trace["model_input_ids"] = product_ids("\n".join(observations))
-                answer = "P4101."
+                trace["model_input_ids"] = extract_ids("\n".join(observations))
+                answer = "S01." if station_discovery else "P4101."
                 if mode == "fallback":
                     answer += "\n\n## Next steps\n\nReview product history."
                 elif mode == "invented":
-                    answer += " P9999."
-                trace["model_output_ids"] = product_ids(answer)
+                    answer += " S99." if station_discovery else " P9999."
+                trace["model_output_ids"] = extract_ids(answer)
+                trace["model_output"] = answer
                 return LLMResponse(
                     text=json.dumps({"answer": answer, "next_steps": []}),
                     finish_reason=FinishReason.STOP,
@@ -154,7 +170,7 @@ class DiscoveryService:
         class RecordingAgent(LangGraphTroubleshootingAgent):
             @staticmethod
             def _restore_public_state(state):
-                trace["tool_message_ids"] = product_ids(
+                trace["tool_message_ids"] = extract_ids(
                     "\n".join(
                         str(item.content)
                         for item in state["messages"]
@@ -178,10 +194,10 @@ class DiscoveryService:
         trace["reference_ids"] = [
             reference.value
             for reference in result.identifiers
-            if reference.type.value == "product"
+            if reference.type.value == ("station" if station_discovery else "product")
         ]
         trace["public_projection_ids"] = sorted(
-            set(product_ids(result.final_answer)) | set(trace["reference_ids"])
+            set(extract_ids(result.final_answer)) | set(trace["reference_ids"])
         )
         return result
 

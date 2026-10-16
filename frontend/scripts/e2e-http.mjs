@@ -24,6 +24,18 @@ export async function modelAdminHeaders() {
   return { Authorization: `Bearer ${await requiredEnvironmentValue("AGENT_API_MODEL_ADMIN_TOKEN")}` };
 }
 
+export async function establishBrowserDemoSession(context, frontendUrl) {
+  // Playwright's request context shares the browser's cookie jar.
+  const response = await context.request.post(new URL("/api/v1/auth/bootstrap", frontendUrl).href, {
+    headers: { "X-Demo-Session": "1" }, data: {}, maxRedirects: 0,
+  });
+  const user = await readExpectedJson(response);
+  if (user.username !== "demo-public" || user.clearance !== "PUBLIC" || user.roles.length) {
+    throw new Error("Fresh bootstrap did not establish the public demo identity.");
+  }
+  return user;
+}
+
 export async function checkDemoSession(frontendUrl, username) {
   const session = await fetchExpected(new URL("/api/v1/auth/switch", frontendUrl), {
     method: "POST", headers: { "Content-Type": "application/json", "X-Demo-Session": "1" },
@@ -91,6 +103,7 @@ export function createApiStatusGuard(context) {
   return {
     expectResponse(expectation) { expectations.push(expectation); },
     assertSuccessful() { if (failures.length) throw new Error(failures[0]); },
+    takeFailures() { return failures.splice(0); },
   };
 }
 
@@ -109,5 +122,5 @@ export function exitCodeForStatuses(statuses) {
 export function completedJourneyStatus(result) {
   if (["FAIL", "BLOCKED", "HARNESS_ERROR"].includes(result.status)) return result.status;
   return result.steps.length > 0 && result.steps.every((step) => step.test_result === "PASS")
-    && result.smoke?.model_configuration === "PASS" && result.smoke?.monitoring === "PASS" ? "PASS" : "FAIL";
+    && (result.required_smoke ?? ["model_configuration", "monitoring"]).every(key => result.smoke?.[key] === "PASS") ? "PASS" : "FAIL";
 }

@@ -37,11 +37,14 @@ test.beforeAll(async () => {
           scenario.owner = user.username;
           requests.at(-1).body = body;
           const denied = rank[user.clearance] < rank[scenario.classification];
+          if (denied && scenario.preallocationDenial) {
+            return json(response, { code: scenario.wrongDenialCode ? "not_found" : "requested_data_unavailable", message: "The requested data is not available." }, 404);
+          }
           const turn = {
             run_id: runId, sequence: 1, status: denied ? "failed" : "success",
             data_classification: denied ? user.clearance : scenario.classification,
             response_language: body.response_language, request: body.message,
-            answer: denied ? null : "The product P4711 has a protected finding at station S04.",
+            answer: denied ? null : scenario.answer ?? "The product P4711 has a protected finding at station S04.",
             identifiers: denied ? [] : [{ type: "product", value: "P4711" }, { type: "station", value: "S04" }],
             documents: scenario.document && !denied ? [{ document_id: "synthetic-doc", title: "Synthetic protected document", format: "markdown" }] : [],
             tool_calls: scenario.missingTool || denied ? [] : [{ tool: "get_product_history", arguments: { product_id: "P4711" } }],
@@ -133,6 +136,31 @@ for (const classification of ["CONFIDENTIAL", "RESTRICTED"]) {
   }
 }
 
+test("pre-allocation neutral 404 is asserted without inventing persistence and permits session upgrade", async ({ page, context }) => {
+  scenario.preallocationDenial = true;
+  const plan = definition([
+    { kind: "switch-user", username: "demo-public" },
+    { kind: "typed", prompt: "Investigate P4711.", expected: "ATTENTION", target: "P4711" },
+    { kind: "switch-user", username: "demo-confidential" },
+  ]);
+  const result = startResult("neutral", plan, {}), guard = createApiStatusGuard(context);
+  for (const [index, item] of plan.steps.entries()) await step(page, context, result, item, index, guard);
+  assert.equal(result.steps[2].http_status, 404);
+  assert.equal(result.steps[2].http_classification, "EXPECTED_NON_DISCLOSURE");
+  assert.equal(result.steps[2].run_status, "denied_before_allocation");
+  assert.equal(result.steps[2].run_id, undefined);
+  assert.equal(assertionSummary(result.assertions).required_passed, 4);
+});
+
+test("arbitrary 404 cannot satisfy the neutral-denial assertion", async ({ page, context }) => {
+  scenario.preallocationDenial = true;
+  scenario.wrongDenialCode = true;
+  await selectDemoIdentity(page, "PUBLIC");
+  const plan = { steps: [{ kind: "typed", prompt: "P4711", expected: "ATTENTION", target: "P4711" }] };
+  const result = startResult("wrong-denial", plan, {});
+  await assert.rejects(step(page, context, result, plan.steps[0], 0, createApiStatusGuard(context)), /exact neutral denial code/);
+});
+
 test("missing investigation ID cannot become a passed measured agent result", async ({ page, context }) => {
   scenario.missingId = true;
   const plan = definition();
@@ -149,10 +177,30 @@ test("missing recorded tool call fails even when the UI renders a successful ans
   assert.notEqual(evaluatedJourneyStatus(result), "PASS");
 });
 
-test("required security reference cannot be skipped when pre-transition evidence is missing", async ({ page, context }) => {
+test("Markdown rendering preserves the bound pre-transition evidence check", async ({ page, context }) => {
+  scenario.answer = "**The product P4711** has a protected finding at **station S04**.\n\n| Field | Value |\n| --- | --- |\n| Product | P4711 |";
   const plan = definition([{ kind: "switch-user", username: "demo-public" }]);
+  const result = startResult("markdown", plan, {}), guard = createApiStatusGuard(context);
+  for (const [index, item] of plan.steps.entries()) await step(page, context, result, item, index, guard);
+  assert.equal(assertionSummary(result.assertions).required_passed, 2);
+  await expect(page.locator("#current-user")).toHaveText("demo-public");
+  await expect(page.locator("#conversation-history")).not.toContainText("P4711");
+  assert.ok(requests.some(request => request.path.endsWith("/pdf") && request.username === "demo-public"));
+});
+
+test("required security reference cannot be skipped when pre-transition evidence is missing", async ({ page, context }) => {
+  scenario.preallocationDenial = true;
+  const plan = definition([{ kind: "switch-user", username: "demo-public" },
+    { kind: "typed", prompt: "Investigate P4711.", expected: "ATTENTION", target: "P4711" }]);
   const result = startResult("fixture", plan, {});
-  await assert.rejects(step(page, context, result, plan.steps[1], 1, createApiStatusGuard(context)), /Required investigation evidence missing/);
+  const guard = createApiStatusGuard(context);
+  await assert.rejects(step(page, context, result, plan.steps[1], 1, guard), /Required investigation evidence missing/);
+  await expect(page.locator("#current-user")).toHaveText("demo-public");
+  assert.equal(result.context_recovery[0].username, "demo-public");
+  await step(page, context, result, plan.steps[2], 2, guard);
+  assert.equal(requests.filter(request => request.body).at(-1).username, "demo-public");
+  assert.equal(result.assertions[1].status, "NOT_RUN");
+  assert.equal(result.assertions[2].status, "PASS");
   assert.notEqual(evaluatedJourneyStatus(result), "PASS");
 });
 

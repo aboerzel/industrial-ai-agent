@@ -76,7 +76,9 @@ applies ADR-009 again, with a repeated check at the provider adapter. A confiden
 factory result denies a model capped below CONFIDENTIAL even if the initial request was
 public. It does not automatically forbid every approved CONFIDENTIAL-capable cloud model.
 
-HTTP API and MCP already authenticate environment-only opaque bearer credentials at
-their outer boundaries; the browser gateway first verifies HTTP Basic demo credentials
-and maps them to a server-held API token (ADR-013/015). The agent does not own identity
-handling. Production JWT/OIDC remains future work.
+Direct HTTP API and MCP clients authenticate environment-only opaque bearer credentials
+at their outer boundaries. In Demo Auth Mode, the browser instead uses server-managed
+`DemoSessions` and an `HttpOnly`, `SameSite=Strict` cookie. Nginx proxies that cookie and
+strips `Authorization`; FastAPI derives the `SecurityContext`, clearance and roles from
+the session (ADR-013/015). The agent does not own identity handling. Production JWT/OIDC
+remains future work.

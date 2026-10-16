@@ -5,6 +5,8 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from industrial_ai_agent.agent.agent_run import MAX_TOOL_CALLS
 from industrial_ai_agent.agent.model_selection import (
     ModelSelectionMode,
@@ -12,6 +14,54 @@ from industrial_ai_agent.agent.model_selection import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "docs/demo/use-cases-and-scenarios.md",
+        "docs/learning/persistent-factory-data.md",
+        "docs/architecture/capabilities-and-industrial-value.md",
+    ),
+)
+def test_current_auth_guides_use_session_boundary(relative_path: str) -> None:
+    documentation = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+    for contract in (
+        "DemoSessions",
+        "SecurityContext",
+        "HttpOnly",
+        "SameSite=Strict",
+        "Authorization",
+    ):
+        assert contract in documentation
+    assert not re.search(
+        r"HTTP Basic|UI selector|clearance selector|server-held API (?:bearer )?token",
+        documentation,
+        re.IGNORECASE,
+    )
+
+
+def test_scenario_catalog_identity_matrix_matches_server_configuration() -> None:
+    documentation = (PROJECT_ROOT / "docs/demo/use-cases-and-scenarios.md").read_text(
+        encoding="utf-8"
+    )
+    users = tomllib.loads(
+        (PROJECT_ROOT / "config/demo-users.toml").read_text(encoding="utf-8")
+    )["users"]
+    rows = {
+        columns[0].strip(): (
+            columns[1].strip(),
+            re.findall(r"MODEL_ADMIN", columns[2]),
+        )
+        for line in documentation.splitlines()
+        if line.startswith("| demo-")
+        and len(columns := line.strip("|").split("|")) == 3
+    }
+    assert rows == {
+        user["username"]: (user["clearance"], user["roles"]) for user in users
+    }
+    assert "industrial_demo_session" in documentation
+    assert "`/api/`" in documentation
 
 
 def test_readme_marks_the_removed_clearance_selector_as_historical() -> None:

@@ -87,7 +87,10 @@ from industrial_ai_agent.domain.maintenance_ticket import (
 from industrial_ai_agent.domain.product_history import ProductionStepStatus
 from industrial_ai_agent.domain.security import effective_data_classification
 from industrial_ai_agent.tools.documentation_search import DocumentationSearchResult
-from industrial_ai_agent.tools.factory_discovery import ProductListResult
+from industrial_ai_agent.tools.factory_discovery import (
+    ProductListResult,
+    StationListResult,
+)
 from industrial_ai_agent.tools.machine_status import MachineStatusResult
 from industrial_ai_agent.tools.tool_contracts import (
     CreateMaintenanceTicketProposalArguments,
@@ -779,6 +782,7 @@ class LangGraphTroubleshootingAgent:
                 self._response_language_detector,
             )
             final_output = _with_product_inventory(final_output, state)
+            final_output = _with_station_inventory(final_output, state)
             final_output.require_no_action_sections()
             final_output.require_no_investigation_summary_sections()
             investigation_steps = _resolve_investigation_steps(
@@ -3052,6 +3056,75 @@ def _with_safe_narrative(
         answer=answer,
         investigation_steps=output.investigation_steps,
         next_steps=() if has_language_mismatch else output.next_steps,
+    )
+
+
+def _with_station_inventory(
+    output: FinalAgentOutput, state: CheckpointedTroubleshootingGraphState
+) -> FinalAgentOutput:
+    """Render the authorized station inventory without relying on model prose."""
+    request = next(
+        (
+            str(message.content)
+            for message in reversed(state["messages"])
+            if isinstance(message, HumanMessage)
+        ),
+        "",
+    )
+    if resolve_demo_discovery_tool(request) != "list_stations":
+        return output
+    observation = next(
+        (
+            item["observation"]
+            for item in reversed(_authorized_tool_observations(state))
+            if item["action"] == "list_stations"
+        ),
+        None,
+    )
+    if not isinstance(observation, str):
+        return output
+    try:
+        inventory = StationListResult.model_validate_json(observation)
+    except ValidationError as error:
+        raise FinalAgentOutputContractError(
+            "Invalid authorized station inventory"
+        ) from error
+    german = ResponseLanguage(state["response_language"]) is ResponseLanguage.DE
+    heading = "Autorisierte Stationen:" if german else "Authorized stations:"
+    partial = (
+        "Ausgabe begrenzt; nicht alle autorisierten Stationen sind dargestellt."
+        if german
+        else "Output limited; not all authorized stations are shown."
+    )
+    lines = [heading, ""]
+    seen: set[str] = set()
+    length = len(heading) + 2
+    for station in inventory.stations:
+        if station.station_id in seen:
+            continue
+        if _STATION_IDENTIFIER_PATTERN.fullmatch(station.station_id) is None:
+            raise FinalAgentOutputContractError("Invalid authorized station identifier")
+        seen.add(station.station_id)
+        # Optional status never removes an otherwise authorized station.
+        status = (
+            MachineState(station.state).value
+            if station.state is not None
+            else "unbekannt"
+            if german
+            else "unknown"
+        )
+        line = f"- {station.station_id}: {station.name} ({status})"
+        if length + len(line) + len(partial) + 2 > MAX_FINAL_ANSWER_LENGTH:
+            lines.append(partial)
+            break
+        lines.append(line)
+        length += len(line) + 1
+    if not inventory.stations:
+        lines.append(
+            "Keine autorisierten Stationen." if german else "No authorized stations."
+        )
+    return FinalAgentOutput.model_validate(
+        {**output.model_dump(), "answer": "\n".join(lines)}
     )
 
 

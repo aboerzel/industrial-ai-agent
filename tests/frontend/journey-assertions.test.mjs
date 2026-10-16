@@ -40,7 +40,7 @@ test("manual-only claim is never counted as an executed automatic assertion", ()
   ];
   assert.equal(evaluatedJourneyStatus(result(assertions)), "PASS");
   assert.deepEqual(assertionSummary(assertions), {
-    required_total: 1, required_executed: 1, required_passed: 1, required_failed: 0, required_blocked_not_run: 0,
+    required_total: 1, required_evaluated: 1, required_executed: 1, required_passed: 1, required_failed: 0, required_blocked_not_run: 0,
     optional: [], manual_only: [assertions[1]],
   });
 });

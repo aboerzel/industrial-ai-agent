@@ -36,6 +36,11 @@ reference presentation remains separately bounded to 12 identifiers; that budget
 not an inventory limit. The existing 8,000-character answer bound remains in force:
 larger inventories explicitly say that the displayed result is partial.
 
+Explicit generic station discovery follows the same presentation contract using the
+typed `list_stations` observation: every authorized station appears once, with its name
+and available state (unknown if null), even if the model omits stations or invents IDs.
+No station is reconstructed from prose or from the separately bounded references.
+
 ## Seed inventory
 
 | Classification | Stations | Products | Example document |

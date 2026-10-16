@@ -20,7 +20,9 @@ export function assertionPlan(definition) {
     expectations: { language: definition.language ?? null, initial_clearance: definition.clearance ?? null,
       username: step.username ?? null, target: step.target ?? null, tool: step.tool ?? null, severity: step.expected ?? null },
     checks: {
-      typed: ["run/investigation IDs", "persisted terminal run and nonempty result", "request context and continuation", "rendered severity and target", ...(step.tool ? ["executed tool, arguments and recorded finding"] : [])],
+      typed: step.expected === "ATTENTION"
+        ? ["exact neutral denial code and HTTP status", "no protected target in response/UI", "no fabricated run for pre-allocation denial", "request language and server identity"]
+        : ["run/investigation IDs", "persisted terminal run and nonempty result", "request context and continuation", "rendered severity and target", ...(step.tool ? ["executed tool, arguments and recorded finding"] : [])],
       reference: ["rendered reference and target action triggered", "run/investigation binding", "persisted tool, arguments and finding", "authorized rendered result"],
       document: ["persisted document reference", "open blob content", "download artifact and response", "matching content, type and filename"],
       "switch-user": ["visible pre-transition evidence", "authoritative identity changed", "saved-ID clearance authorization", "UI and export purge", "classified PDF authorization"],
@@ -41,6 +43,7 @@ export function assertionSummary(assertions = []) {
   const required = assertions.filter((item) => item.requirement === "REQUIRED");
   return {
     required_total: required.length,
+    required_evaluated: required.filter(item => item.evaluated === true || item.executed === true).length,
     required_executed: required.filter((item) => item.executed === true).length,
     required_passed: required.filter((item) => item.executed === true && item.status === "PASS").length,
     required_failed: required.filter((item) => item.status === "FAIL").length,

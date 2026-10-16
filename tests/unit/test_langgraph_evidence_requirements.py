@@ -60,10 +60,14 @@ class EvidenceMcpToolProvider:
             self.calls.append("stations")
             return json.dumps(
                 {
-                    "classification": "CONFIDENTIAL",
+                    "classification": 2,
                     "stations": [
                         {
                             "station_id": "S04",
+                            "name": "Quality Inspection",
+                            "state": "FAULTED",
+                            "active_error_code": "QUALITY-09",
+                            "classification": 2,
                         }
                     ],
                 }

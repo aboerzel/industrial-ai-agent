@@ -211,13 +211,18 @@ may be inherited monotonically for an identifierless follow-up; inaccessible con
 cannot be inherited, an explicit higher target escalates, and unknown context remains
 conservative. Direct run retrieval, investigation retrieval, PDF/document visibility,
 and resume authorization all enforce a server-authenticated maximum clearance. A client
-may request only an equal or lower working clearance. Each run-store adapter receives
+using direct bearer authentication may request only an equal or lower working clearance;
+browser sessions derive it exclusively from the server identity. Each run-store adapter receives
 that request-specific context so PostgreSQL RLS filters records before Python sees them.
 Resume checks authorization before `claim_resume`, then continues the same checkpointed
-thread with the persisted model and classification binding. The local demo uses opaque
-bearer tokens; production-grade federated identity remains future work.
+thread with the persisted model and classification binding. Direct clients use opaque
+bearer tokens, while browsers use the current Demo Sessions refinement below;
+production-grade federated identity remains future work.
 
-### Authenticated browser demo gateway
+### Historical authenticated browser demo gateway — superseded
+
+The following records the former Basic-auth design. The **Browser Demo Sessions — Current
+Authentication Refinement** below supersedes its browser authentication and gateway mapping.
 
 The browser gateway must authenticate a client before translating its identity to an
 API bearer token. Nginx HTTP Basic authentication checks an externally mounted password

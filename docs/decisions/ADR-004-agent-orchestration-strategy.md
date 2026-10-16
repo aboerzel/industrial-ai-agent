@@ -31,6 +31,10 @@ call through the same validated sequential tool boundary. This bounded discovery
 exception does not admit arbitrary prose or mixed target requests. Repository/RLS
 authorization filters evidence before the model receives it; the model still owns
 the subsequent explanation. Tool budgets, classification and egress remain enforced.
+For these explicit inventory requests, the final station/product list is rendered from
+the typed authorized observation, independently of model prose and the twelve-reference
+budget. Optional missing status stays unknown; duplicates and invented model IDs cannot
+alter the list. The existing answer-size bound marks larger inventories explicitly partial.
 
 The `TroubleshootingAgent` uses an explicit, bounded, sequential single-agent tool loop
 implemented in Python.
@@ -53,7 +57,8 @@ flowchart TD
     Inventory -->|"yes: first list call"| Limit
     Inventory -->|"no"| LLM["LLM decision<br/>via LLMClient and Model Profile"]
     LLM --> Decision{"Response shape"}
-    Decision -->|"final text, no tool call"| Final["SUCCESS<br/>return final answer"]
+    Decision -->|"final text, no tool call"| Present["For explicit inventory: render typed authorized list"]
+    Present --> Final["SUCCESS<br/>return final answer"]
     Decision -->|"one or more tool calls"| Limit{"Fewer than 4 tools executed?"}
     Decision -->|"malformed response"| Invalid["Terminate with deterministic error"]
     Limit -->|"no"| Exhausted["LIMIT_REACHED<br/>do not execute the requested call"]
@@ -68,7 +73,7 @@ flowchart TD
     classDef terminal fill:#ecfdf5,stroke:#059669,color:#022c22
     classDef failure fill:#fff1f2,stroke:#e11d48,color:#4c0519
     class LLM,Decision llm
-    class Start,Inventory,Validate,Limit,Dispatch,Observation deterministic
+    class Start,Inventory,Validate,Limit,Dispatch,Observation,Present deterministic
     class Final terminal
     class Invalid,Exhausted failure
 ```

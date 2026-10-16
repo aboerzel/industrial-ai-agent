@@ -4,19 +4,29 @@ This catalog describes illustrative domain scenarios for synthetic `FACTORY-DEMO
 not the current executable acceptance plan or proof that every sample prompt is admitted.
 Current measured acceptance belongs to the [Quality Gates](../quality/quality-gates.md).
 Submit authorized requests in the Web UI or to `POST /api/v1/runs`; use authenticated MCP for
-direct tool and RCA checks. Sign in through the browser's native HTTP Basic prompt with
-an explicitly provisioned demo username/password. Nginx maps only an authenticated user
-to a server-held API token; no UI access-token field exists. The server resolves that
-token to a principal with a maximum clearance. The UI
-selector may request `PUBLIC`, `INTERNAL`, `CONFIDENTIAL`, or `RESTRICTED`, but only at or
-below that authenticated maximum; attempted elevation fails before any data access.
-Use the `public`, `internal`, `confidential`, or `restricted` browser login for the
-corresponding ceiling. These identities have no `model-admin`. Model Configuration
-requires a separate `model-admin` browser session backed by
-`AGENT_API_MODEL_ADMIN_TOKEN` at PUBLIC clearance. Direct API callers use the
-corresponding bearer tokens; never copy tokens into UI code, source, or URLs.
-See [browser setup](../learning/browser-frontend.md#local-development). This is a
-loopback-only shared-secret demo, not production identity.
+direct tool and RCA checks. With `DEMO_AUTH_MODE=true`, a fresh browser starts as
+`demo-public`. The account menu intentionally permits password-free quick switching
+to every configured demo identity, including admin. Demo Auth session endpoints create
+a server-managed `DemoSessions` entry and an `industrial_demo_session` cookie with
+`HttpOnly`, `SameSite=Strict` and path `/api/`. Nginx proxies the cookie and strips
+`Authorization`; the API resolves the session to a server-derived `SecurityContext`.
+Clearance and roles come from that identity, never a browser-selected clearance.
+
+| User | Clearance | Roles |
+| --- | --- | --- |
+| demo-public | PUBLIC | — |
+| demo-internal | INTERNAL | — |
+| demo-confidential | CONFIDENTIAL | — |
+| demo-restricted | RESTRICTED | — |
+| demo-admin | PUBLIC | MODEL_ADMIN |
+
+Only `demo-admin` can open Configuration; admin does not grant higher data clearance.
+Switch/logout revoke the old session and purge protected UI state and Blob URLs.
+Logout remains logged out after refresh. Direct API/MCP clients use their separate
+bearer authentication; service credentials never enter the browser or gateway mapping.
+See [Demo Authentication](../learning/demo-authentication.md) and
+[browser setup](../learning/browser-frontend.md#local-development). This loopback-only
+demo has process-local sessions and no production identity or TLS.
 
 Visibility follows `user clearance >= data classification`. Factory and knowledge lists
 are RLS-filtered before names, relationships, or classifications are returned. They
@@ -41,7 +51,7 @@ but cannot confirm a cause. All records and documents are synthetic.
 |---|---|---|---|
 | Public station discovery | List the production stations available to me in this demo. | PUBLIC | Returns only S01 and S05 and no hidden count or other station name. |
 | Internal station discovery | Provide a complete overview of the production stations available to me. | INTERNAL | Returns S01, S02, S03, and S05; does not disclose S04 or S07. |
-| Restricted station discovery | List all production stations available to me, including their station IDs. | RESTRICTED | Returns all six stations, including S07. |
+| Restricted station discovery | List all production stations available to me, including their station IDs. | RESTRICTED | Returns S01, S02, S03, S04, S05, S06, S07, and S08. |
 | Public product discovery | List the products available to me and summarize their final status. | PUBLIC | Returns only P4101 and P4102, both with final status COMPLETED. |
 | Internal product discovery | Provide an overview of the products available to me and their final status. | INTERNAL | Adds P4900 and P4901 but not confidential/restricted products. |
 | Station orientation | Provide an overview of station S02, including its current status and role in production. | INTERNAL | Returns its visible Positioning overview and current RUNNING state. |
@@ -133,8 +143,8 @@ For UI/API acceptance inspect only run classification, selected tool names, and 
 answer. For the small live verification inspect Tempo/Langfuse metadata only:
 classification, model profile/provider/execution zone, tool names, token/cost provenance,
 and privacy boundaries. Do not print prompts, responses, tool payloads, retrieved
-content, or credentials. Use native browser authentication, the existing message field,
-and clearance selector.
+content, or credentials. Select a demo identity in the account menu and use the existing
+message field; the server determines its clearance and roles.
 
 An explicitly selected response language is authoritative regardless of the language of
 the original free-text request and remains stable across all tool loops and an approval
