@@ -142,10 +142,14 @@ class TempoAdapter:
             self._client,
             f"{self._base_url}/api/search",
             params={
-                "q": f'{{ span.run.id = "{normalized_run_id}" }}',
+                "q": (
+                    '{ resource.service.name = "industrial-ai-agent" '
+                    '&& name = "agent.run" '
+                    f'&& span.run.id = "{normalized_run_id}" }}'
+                ),
                 "start": str(int((now - MAX_LOOKBACK).timestamp())),
                 "end": str(int(now.timestamp())),
-                "limit": "1",
+                "limit": "2",
                 "spss": "1",
             },
             not_found_is_empty=True,
@@ -153,12 +157,26 @@ class TempoAdapter:
         traces = response.get("traces") if isinstance(response, Mapping) else None
         if not isinstance(traces, list):
             raise ObservabilityMalformedResponse("Tempo search response is malformed")
-        if not traces or not isinstance(traces[0], Mapping):
+        if not traces:
             raise ObservabilityNotFoundError("Run trace was not found")
-        trace_id = traces[0].get("traceID")
-        if not isinstance(trace_id, str):
-            raise ObservabilityMalformedResponse("Tempo search result has no trace ID")
-        trace = self.get_trace(trace_id)
+        trace_ids: set[str] = set()
+        for result in traces:
+            trace_id = result.get("traceID") if isinstance(result, Mapping) else None
+            if not isinstance(trace_id, str):
+                raise ObservabilityMalformedResponse(
+                    "Tempo search result has no trace ID"
+                )
+            trace_ids.add(_validate_trace_id(trace_id))
+        if len(trace_ids) != 1:
+            raise ObservabilityMalformedResponse("Run execution trace is ambiguous")
+        trace = self.get_trace(trace_ids.pop())
+        if not any(
+            span.operation_name == "agent.run"
+            and span.service_name == "industrial-ai-agent"
+            and span.attributes.get("run.id") == normalized_run_id
+            for span in trace.spans
+        ):
+            raise ObservabilityNotFoundError("Run execution trace was not found")
         return trace.model_copy(update={"run_id": normalized_run_id})
 
     def get_trace(self, trace_id: str) -> RunTrace:

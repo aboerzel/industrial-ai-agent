@@ -379,6 +379,13 @@ inaccessible run fails closed; a runtime-store outage is a safe service failure.
 Loki, and Prometheus failures are independent, explicit source states and produce a
 partial or insufficient report while retaining usable evidence.
 
+Run-to-trace lookup binds the initial execution through the existing `agent.run` span,
+exact `run.id`, and `industrial-ai-agent` resource service on that same span. Reads
+remain traceable but cannot replace execution evidence. The bounded lookup rejects
+ambiguous execution identities and never falls back to History traces. Follow-up runs
+have independent UUIDs; separate `approval.resume` traces are not aggregated by this
+singular lookup. See ADR-016's execution trace identity refinement.
+
 `RcaEvidenceBundle`, `RcaFinding`, and `RcaAnalysisReport` contain only safe bounded
 projections and report-local evidence references. The analyzer emits `OBSERVED` and
 `DERIVED` findings only: terminal run failure, error spans, bounded MCP/retrieval

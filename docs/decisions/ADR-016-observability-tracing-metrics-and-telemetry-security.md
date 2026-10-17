@@ -231,6 +231,29 @@ capture, and `run_id` remains excluded from metric labels.
 
 ## RCA MCP Telemetry Refinement
 
+### Execution trace identity (CERT-01)
+
+`get_run_trace(run_id)` identifies the initial execution of that persisted run by an
+`agent.run` span with the exact `run.id` on resource service `industrial-ai-agent`.
+All three predicates must match the same span. History, status, PDF, Runtime,
+Observability, and RCA reads may reference the run but are not execution owners.
+Existing metadata is sufficient; no additional payload or instrumentation is required,
+and the run store currently has no persisted execution trace ID.
+
+Lookup retains the 48-hour window and requests at most two matching traces to detect
+ambiguity. Duplicate rows for the same trace ID identify one trace. Multiple distinct
+execution trace IDs fail closed as malformed evidence; an absent execution trace remains
+not found. The fetched trace must independently contain the same execution marker.
+There is no duration, span-count, time-order, or backend-order selection rule and no
+fallback to a read trace. RCA preserves its existing partial/insufficient source semantics.
+
+Investigation follow-ups have separate run UUIDs and are resolved independently.
+HITL resume retains its run UUID but is instrumented as `approval.resume`, not a second
+`agent.run`; this singular lookup does not aggregate that separate resume trace or claim
+complete cross-phase telemetry. Runtime approval facts remain independently available.
+An aggregate or execution-generation selector would require a separate contract.
+Authorization still precedes telemetry lookup; execution identity grants no access.
+
 `rca_mcp` is independently instrumented at the owned `rca.mcp.tool` and `rca.analysis`
 boundaries. `run.id` is a trace correlation attribute for the target run only and is
 never a metric label. Metrics use only the existing bounded MCP operation/status

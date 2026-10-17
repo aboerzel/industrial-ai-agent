@@ -41,8 +41,11 @@ def test_run_id_lookup_uses_fixed_traceql_and_returns_safe_trace() -> None:
         "agent.run",
         "mcp.discovery",
     ]
-    assert requests[0].url.params["q"] == f'{{ span.run.id = "{RUN_ID}" }}'
-    assert requests[0].url.params["limit"] == "1"
+    assert requests[0].url.params["q"] == (
+        '{ resource.service.name = "industrial-ai-agent" '
+        f'&& name = "agent.run" && span.run.id = "{RUN_ID}" }}'
+    )
+    assert requests[0].url.params["limit"] == "2"
 
 
 def test_trace_parsing_orders_parent_before_child_and_removes_sensitive_attributes() -> (
