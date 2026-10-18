@@ -379,6 +379,8 @@ For service ports, MCP access, smoke checks, and detailed local setup, use the e
 
 ## Documentation
 
+- [Quality Gates](docs/quality/quality-gates.md): `SOFTWARE`, `LOCAL_RUNTIME` and `FULL` publish independent software correctness and real local-runtime qualification results; a skipped/unqualified runtime is never full deployment qualification.
+
 - [Architecture Overview](docs/architecture/overview.md): implemented boundaries, orchestration, persistence, MCP, retrieval, and evolution.
 - [Capabilities and Industrial Value](docs/architecture/capabilities-and-industrial-value.md): industrial benefit, limits, and security posture.
 - [Observability](docs/architecture/observability.md): dashboards, telemetry security, bounded observability MCP, and RCA evidence sources.

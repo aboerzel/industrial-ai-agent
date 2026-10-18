@@ -1,5 +1,36 @@
 # Browser E2E Journeys
 
+## Release execution environments
+
+The preferred release commands are `scripts/run-quality-gate.ps1 SOFTWARE`,
+`LOCAL_RUNTIME`, and `FULL`; see [Quality Gates](../quality/quality-gates.md) and
+[ADR-021](../decisions/ADR-021-release-software-verification-and-local-runtime-qualification.md).
+They preserve the registry of twelve journeys and all 59 REQUIRED assertions.
+SOFTWARE runs those same browser assertions and the five legacy journeys against
+`tests/e2e/software-server.py`: the production composition with scripted provider HTTP
+transport, real SDK/authorization, graph, MCP, PostgreSQL RLS, checkpoints/run persistence,
+sessions, document serving and shipped UI. It does not mock final API responses.
+Deterministic retrieval replaces model inference only in that isolated test process.
+The original sixteen and extended thirty reference actions execute against this same
+application using test-only `REFERENCE_SOFTWARE_URL`; all authorization, unknown-ID,
+reload, language, document and cross-tab controls remain required. Existing safe fixtures
+remain available independently and are all executed by SOFTWARE with disposable DB.
+
+LOCAL_RUNTIME keeps real Ollama/qwen3.5 and embeddings and first requires the strict
+native-throughput preflight. Two warm calls must each finish in <20 s and >=20 tok/s.
+Only positive provider-boundary evidence without application/auth/RLS/security defects
+permits `SKIPPED_EXTERNAL_RUNTIME_UNHEALTHY`, reason
+`EXTERNAL_LOCAL_PROVIDER_UNHEALTHY`. A later uniquely correlated SDK timeout and Ollama
+execution/cancellation yields `BLOCKED_BY_LOCAL_PROVIDER` / NOT_QUALIFIED. Independent
+product or security assertions still fail. Unknown errors never authorize a skip.
+
+No release command uses `--resume` or retries a failed journey. Raw historic/manual
+commands below remain useful for explicit investigation; their artifacts alone do not
+qualify a release or replace the strict runtime preflight. Reports retain original raw
+outcomes, current required denominators, provider evidence and separate software/runtime
+results. A deterministic software PASS does not certify natural-language model quality
+or full deployment qualification.
+
 The manual runner registers 12 multi-turn journeys against the local Compose runtime.
 The older `npm run test:e2e` specification contains five German journeys. Neither command
 is part of FAST, and a green historical report is not proof of the current assertions.

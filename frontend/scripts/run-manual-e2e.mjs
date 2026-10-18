@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { withReservation, LocalRuntimeBusy, BUSY_EXIT } from "./local-runtime-lock.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const RESULTS_ROOT = path.join(ROOT, "evals", "results", "browser-e2e");
@@ -11,20 +12,29 @@ const resume = arguments_.includes("--resume");
 const requested = valuesAfter(arguments_, "--journey");
 const runId = valueAfter(arguments_, "--run-id") ?? (resume ? await latestRunId() : createRunId());
 
-await mkdir(RESULTS_ROOT, { recursive: true });
-await writeFile(path.join(RESULTS_ROOT, "latest-run.txt"), `${runId}\n`, "utf8");
-const preflightResult = await runChild(["scripts/run-e2e-journey.mjs", "--preflight", "--run-id", runId]);
-const journeys = requested.length ? requested : [];
-const common = ["scripts/run-e2e-journey.mjs", "--run-id", runId];
-if (preflightResult !== 0) {
-  await runChild([...common, "--aggregate"]);
-  process.exitCode = preflightResult;
-} else {
-  const runArguments = journeys.length ? journeys.flatMap((journey) => ["--journey", journey]) : ["--all"];
-  if (resume) runArguments.push("--resume");
-  const result = await runChild([...common, ...runArguments]);
-  const aggregateResult = await runChild([...common, "--aggregate"]);
-  process.exitCode = result || aggregateResult;
+let runtimeEnvironment = process.env;
+try {
+  await withReservation(async env => {
+    runtimeEnvironment = env;
+    await mkdir(RESULTS_ROOT, { recursive: true });
+    await writeFile(path.join(RESULTS_ROOT, "latest-run.txt"), `${runId}\n`, "utf8");
+    const preflightResult = await runChild(["scripts/run-e2e-journey.mjs", "--preflight", "--run-id", runId]);
+    const journeys = requested.length ? requested : [];
+    const common = ["scripts/run-e2e-journey.mjs", "--run-id", runId];
+    if (preflightResult !== 0) {
+      await runChild([...common, "--aggregate"]);
+      process.exitCode = preflightResult;
+    } else {
+      const runArguments = journeys.length ? journeys.flatMap((journey) => ["--journey", journey]) : ["--all"];
+      if (resume) runArguments.push("--resume");
+      const result = await runChild([...common, ...runArguments]);
+      const aggregateResult = await runChild([...common, "--aggregate"]);
+      process.exitCode = result || aggregateResult;
+    }
+  });
+} catch (error) {
+  if (!(error instanceof LocalRuntimeBusy)) throw error;
+  console.error(error.message); process.exitCode = BUSY_EXIT;
 }
 
 function createRunId() {
@@ -47,7 +57,7 @@ function valuesAfter(values, flag) {
 
 function runChild(args) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, args, { cwd: path.join(ROOT, "frontend"), stdio: "inherit" });
+    const child = spawn(process.execPath, args, { cwd: path.join(ROOT, "frontend"), stdio: "inherit", env: runtimeEnvironment });
     child.on("error", () => resolve(1));
     child.on("exit", (code) => resolve(code ?? 1));
   });

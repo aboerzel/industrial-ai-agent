@@ -163,6 +163,7 @@ export function createRunMetadata({
   harnessFingerprint,
   productFingerprint = null,
   assignmentSnapshot: assignments,
+  executionMode,
 }) {
   const workingTreeDirty = dirtyPaths.length > 0;
   return {
@@ -180,6 +181,7 @@ export function createRunMetadata({
     real_model_display_name: "Local Qwen 3.5 9B",
     external_provider_calls_expected: 0,
     assignment_snapshot: assignments,
+    ...(executionMode ? { execution_mode: executionMode } : {}),
   };
 }
 

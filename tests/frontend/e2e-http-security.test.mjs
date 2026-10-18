@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
+import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -139,13 +140,23 @@ test("blocked preflight cannot be overwritten by previously passing journey arti
 });
 
 test("manual wrapper propagates aggregation failure after successful child steps", async (t) => {
+  const fixture = createServer((request, response) => {
+    assert.equal(request.url, "/__release_fixture__");
+    assert.equal(request.headers["x-release-fixture"], "fixture-attestation");
+    response.end(JSON.stringify({ mode: "SOFTWARE_DETERMINISTIC" }));
+  });
+  await new Promise(resolve => fixture.listen(0, "127.0.0.1", resolve));
+  t.after(() => { fixture.closeAllConnections(); fixture.close(); });
   const latestFile = path.join(root, "evals/results/browser-e2e/latest-run.txt");
   const saved = await readFile(latestFile).catch(() => null);
   t.after(() => saved ? writeFile(latestFile, saved) : rm(latestFile, { force: true }));
   const code = await execute(process.execPath, [
     "--import", "../tests/frontend/fixtures/e2e-child-exit-fake.mjs",
     "scripts/run-manual-e2e.mjs", "--run-id", `finding9-${randomUUID()}`,
-  ], { cwd: path.join(root, "frontend") }).then(() => 0, (error) => error.code);
+  ], { cwd: path.join(root, "frontend"), env: {
+    ...process.env, E2E_EXECUTION_MODE: "SOFTWARE_DETERMINISTIC",
+    E2E_FRONTEND_URL: `http://127.0.0.1:${fixture.address().port}`, RELEASE_SOFTWARE_TOKEN: "fixture-attestation",
+  } }).then(() => 0, (error) => error.code);
   assert.equal(code, 1);
 });
 

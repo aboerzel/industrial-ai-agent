@@ -1,5 +1,16 @@
 # Architecture Overview
 
+## Release verification boundary
+
+[ADR-021](../decisions/ADR-021-release-software-verification-and-local-runtime-qualification.md)
+separates mandatory deterministic SOFTWARE_VERIFICATION from real
+LOCAL_RUNTIME_QUALIFICATION. Test-only scripted provider transport exercises the same
+API, graph, MCP, authorization/RLS, persistence and frontend assertions. Production
+model behavior is unchanged. A strict provider preflight may exclude an unhealthy
+local runtime only with positive provider-boundary evidence and no application or
+security error. Software PASS alone never qualifies the complete deployment.
+See [Quality Gates](../quality/quality-gates.md) for commands, outcomes and skip rules.
+
 ## Current Contracts and Source Authority
 
 Active ADR decisions, including explicitly later refinements, define the architecture.

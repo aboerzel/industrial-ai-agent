@@ -8,15 +8,17 @@ import { switchDemoUser, setResponseLanguage } from "../../../frontend/scripts/d
 import { referenceCases } from "../../reference_action_contract.mjs";
 
 const live = process.env.REFERENCE_LIVE_URL;
+const software = process.env.REFERENCE_SOFTWARE_URL;
+if (live && software) throw new Error("Choose one reference execution backend.");
 const cases = await referenceCases({ extended: true });
 const histories = new Map();
 const records = [];
 let child;
-let origin = live;
+let origin = live || software;
 
 test.setTimeout(live ? 240_000 : 25_000);
 test.beforeAll(async () => {
-  if (live) {
+  if (live || software) {
     // Optional real prior results exercise authorized persisted-reference navigation.
     if (process.env.REFERENCE_PRIOR_RESULTS) {
       for (const item of JSON.parse(await readFile(process.env.REFERENCE_PRIOR_RESULTS, "utf8"))) {
@@ -98,7 +100,7 @@ for (const item of cases) {
     const payload = response.request().postDataJSON();
     const result = await response.json();
     records.push({ ...item, endpoint: "/api/v1/runs", payload, http_status: response.status(), outcome: result,
-      rendered_type: item.type, rendered_id: item.value, live: Boolean(live) });
+      rendered_type: item.type, rendered_id: item.value, live: Boolean(live), software_backend: Boolean(software) });
     expect(response.status()).toBe(200);
     expect(payload).toEqual({ message: item.prompt, response_language: item.language, investigation_id: id });
     expect(result.status).toBe("success");

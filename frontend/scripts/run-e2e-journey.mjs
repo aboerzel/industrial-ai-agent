@@ -10,6 +10,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "@playwright/test";
+import { withRuntimeWorker, LocalRuntimeBusy, BUSY_EXIT } from "./local-runtime-lock.mjs";
 import {
   MissingEvidence, assertionPlan, assertionSummary, assertCurrentPlan, assertPersistedTurn,
   assertToolEvidence, assertStationReferenceEvidence, evaluatedJourneyStatus, plannedSteps, recordAssertion, requireEvidence,
@@ -160,31 +161,42 @@ const RUN_STARTED_AT = new Date().toISOString();
 const RUN_METADATA_BASE = isMain ? await collectRunMetadata() : null;
 let latestAssignmentSnapshot = [];
 if (isMain) {
-  if (command.preflight) {
-    await runPreflight();
-  } else if (command.comparePath) {
-    await compareReports(command.comparePath);
-  } else if (command.aggregate) {
-    await aggregateResults();
-  } else {
-    if (command.resume) {
-      latestAssignmentSnapshot = assignmentSnapshot(await fetchJson(`${API_URL}/api/v1/model-assignments`));
-      const preflight = JSON.parse(await readFile(path.join(RESULTS_DIRECTORY, "preflight.json"), "utf8"));
-      assertArtifactProvenance(preflight.metadata, currentRunMetadata());
-      if (preflight.status !== "PASS") throw new Error("Resume requires a passing current preflight.");
-    }
-    const requested = command.all ? Object.keys(JOURNEYS) : command.journeys;
-    const identifiers = command.resume ? await incompleteJourneys(requested) : requested;
-    const outcomes = [];
-    for (const id of identifiers) outcomes.push(await runJourney(id));
-    if (command.resume) {
-      const candidates = requested.length ? requested : Object.keys(JOURNEYS);
-      for (const id of candidates.filter((candidate) => !identifiers.includes(candidate))) {
-        try { outcomes.push((await loadJourneyResult(id)).status); }
-        catch { outcomes.push("MISSING"); }
+  try {
+    if (command.preflight) {
+      // This legacy preflight only reads configuration; runtime health inference is
+      // separately reserved by the release controller before run_preflight().
+      await runPreflight();
+    } else if (command.comparePath) {
+      await compareReports(command.comparePath);
+    } else if (command.aggregate) {
+      await aggregateResults();
+    } else {
+      if (command.resume) {
+        latestAssignmentSnapshot = assignmentSnapshot(await fetchJson(`${API_URL}/api/v1/model-assignments`));
+        const preflight = JSON.parse(await readFile(path.join(RESULTS_DIRECTORY, "preflight.json"), "utf8"));
+        assertArtifactProvenance(preflight.metadata, currentRunMetadata());
+        if (preflight.status !== "PASS") throw new Error("Resume requires a passing current preflight.");
       }
+      const requested = command.all ? Object.keys(JOURNEYS) : command.journeys;
+      const identifiers = command.resume ? await incompleteJourneys(requested) : requested;
+      const execute = async () => {
+        const outcomes = [];
+        for (const id of identifiers) outcomes.push(await runJourney(id));
+        if (command.resume) {
+          const candidates = requested.length ? requested : Object.keys(JOURNEYS);
+          for (const id of candidates.filter((candidate) => !identifiers.includes(candidate))) {
+            try { outcomes.push((await loadJourneyResult(id)).status); }
+            catch { outcomes.push("MISSING"); }
+          }
+        }
+        process.exitCode = exitCodeForStatuses(outcomes);
+      };
+      if (identifiers.length) await withRuntimeWorker(execute);
+      else await execute();
     }
-    process.exitCode = exitCodeForStatuses(outcomes);
+  } catch (error) {
+    if (!(error instanceof LocalRuntimeBusy)) throw error;
+    console.error(error.message); process.exitCode = BUSY_EXIT;
   }
 }
 
@@ -282,6 +294,7 @@ function currentRunMetadata(finishedAt = null) {
     harnessFingerprint: RUN_METADATA_BASE.harness_fingerprint,
     productFingerprint: RUN_METADATA_BASE.product_fingerprint,
     assignmentSnapshot: latestAssignmentSnapshot,
+    executionMode: process.env.E2E_EXECUTION_MODE ?? "LOCAL_PROVIDER_DEPENDENT",
   });
 }
 
@@ -592,10 +605,16 @@ async function clickReference(page, context, result, step, clientErrors, failedF
   const previousId = await activeInvestigationId(page);
   const reference = await findReference(page, step.type, await value(page, "#response-language"));
   if (!reference) {
+    const predecessor = result.tool_trajectory?.at(-1);
+    const blockedBy = predecessor?.investigation_id === previousId
+      && predecessor?.error_code === "llm_provider_unavailable"
+      && !(result.successful_reference_types?.[previousId] ?? []).includes(step.type)
+      ? predecessor.run_id : null;
     record(result, {
       ...failedStep(`click ${step.type}`, step.expected, await pageContext(page), "No matching rendered reference was available.", step.optional),
       error_code: "REFERENCE_MISSING",
       failure_origin: "PRODUCT_UI",
+      blocked_by_run_id: blockedBy,
     });
     return;
   }
@@ -665,9 +684,21 @@ async function recordAgentResult(page, result, label, step, request, investigati
   const run = await readExpectedJson(response);
   const investigation = await readInvestigation(page, requireEvidence(run.investigation_id, "Required investigation ID missing."), context.clearance);
   const turn = assertPersistedTurn({ run, investigation, request: body, ...context, previousId });
-  result.last_terminal = { status: turn.status, error_code: turn.error?.code ?? null, data_classification: turn.data_classification };
+  result.last_terminal = { run_id: run.run_id, status: turn.status, error_code: turn.error?.code ?? null,
+    data_classification: turn.data_classification, tool_calls: turn.tool_calls ?? [],
+    expected_target: clickedIdentifier ?? step.target ?? null,
+    expected_tool: step.tool ?? (clickedIdentifier ? { product: "get_product_history", error_code: "search_documentation" }[step.type] ?? null : null) };
   result.tool_trajectory ??= [];
-  result.tool_trajectory.push({ run_id: run.run_id, data_classification: turn.data_classification, tool_calls: turn.tool_calls ?? [] });
+  result.tool_trajectory.push({ run_id: run.run_id, investigation_id: run.investigation_id,
+    status: turn.status, error_code: turn.error?.code ?? null,
+    data_classification: turn.data_classification, tool_calls: turn.tool_calls ?? [] });
+  if (turn.status === "success") {
+    result.successful_reference_types ??= {};
+    result.successful_reference_types[run.investigation_id] = [...new Set([
+      ...(result.successful_reference_types[run.investigation_id] ?? []),
+      ...(turn.identifiers ?? []).map(item => item.type),
+    ])];
+  }
   if (await activeInvestigationId(page) !== run.investigation_id) throw harnessSignal("AssertionError", "UI investigation reference does not match the persisted run.");
   rememberInvestigation(result, investigation, turn);
   const agentTurn = page.locator(".agent-turn").last();
@@ -736,7 +767,10 @@ async function checkDiscoveryInventories(page, result) {
         await page.locator("#composer-message").fill(prompt);
         await page.locator("#composer-button").click();
         const api = await readExpectedJson(await response);
+        Object.assign(row, { run_id: api.run_id, run_status: api.status,
+          error_code: api.error?.code ?? null, failure_stage: "provider_result" });
         assert.equal(api.status, "success");
+        row.failure_stage = "inventory_contract";
         await page.locator(".agent-answer").last().waitFor();
         const persisted = await readExpectedJson(await page.request.get(new URL(`/api/v1/runs/${api.run_id}`, page.url()).href));
         const ids = text => [...new Set((text ?? "").match(pattern) ?? [])].sort();

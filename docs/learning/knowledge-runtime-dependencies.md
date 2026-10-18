@@ -43,6 +43,16 @@ test must use an internal network with no internet route.
 
 ## Built-Image Regression Gate
 
+The SOFTWARE release command executes this deployment contract separately using the
+production image, real cached OCR/layout/reranker, a disposable non-bypass database,
+and test-only deterministic embedding HTTP on an internal network. The production
+embedding adapter, retrieval/provenance/clearance checks, readiness and offline restart
+remain real; the embedding server response is the substituted external boundary.
+This proves application deployment independently of Ollama speed and does not qualify
+the real embedding model. LOCAL_RUNTIME separately checks real CPU embeddings and
+real retrieval/chat in the unchanged browser journeys. The explicit opt-in native
+deployment command below remains available with real local Ollama, without mocks.
+
 After `docker compose build --no-cache knowledge-mcp`, start a disposable container
 from that immutable image using its unmodified production command and healthcheck.
 Attach only an internal Docker network with disposable migrated PostgreSQL and local

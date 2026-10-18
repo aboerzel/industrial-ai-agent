@@ -10,6 +10,7 @@ await mkdir(path.dirname(runDirectory), { recursive: true });
 await mkdir(runDirectory, { recursive: false });
 
 export default defineConfig({
+  globalSetup: "./scripts/runtime-global-setup.mjs",
   testDir: "../tests/e2e",
   testIgnore: "**/fixtures/**",
   fullyParallel: false,

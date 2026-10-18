@@ -1,7 +1,103 @@
 # Quality Gates
 
-This repository uses three deliberately separate quality tiers. They protect different
-risks without turning ordinary development into a real-model release exercise.
+Development tiers remain FAST, INTEGRATION and MANUAL_REAL_MODEL. Release verification
+has two independent outcomes under [ADR-021](../decisions/ADR-021-release-software-verification-and-local-runtime-qualification.md).
+
+## Release commands and outcomes
+
+```powershell
+.\scripts\run-quality-gate.ps1 SOFTWARE
+.\scripts\run-quality-gate.ps1 LOCAL_RUNTIME
+.\scripts\run-quality-gate.ps1 FULL
+```
+
+`SOFTWARE` produces mandatory `SOFTWARE_VERIFICATION: PASS/FAIL`. It rebuilds every
+Compose application image without cache, preserves volumes, and restores the supported
+stack. Real-model-dependent startup health is recorded separately; the isolated
+deployment proof verifies the built application independently of real chat speed.
+It provisions labelled disposable PostgreSQL with a non-superuser/non-BYPASSRLS role,
+runs the complete backend and integration suites, FAST, frontend, all safe browser
+fixtures, the five legacy journeys and the same twelve release journeys / 59 REQUIRED
+assertions. All 16 original and 30 extended reference actions use actual browser,
+application, MCP, RLS and durable persistence paths. Historical regressions remain
+mandatory. Missing test infrastructure fails this gate.
+
+The test-only composition uses the production API/service, graph, catalog assignments,
+egress/authorization guards, OpenAI-compatible SDK and real MCP/SQL boundaries. Only
+provider HTTP responses are scripted; final API responses are never mocked. Knowledge
+retrieval uses a deterministic lexical test implementation over the RLS-visible catalog.
+The separate SOFTWARE KDEP deployment proof runs the production image and cached
+OCR/layout/reranking pipeline offline with a deterministic embedding HTTP transport on
+an internal network. It does not qualify real embedding inference. Production providers,
+models, assignments, prompts, deadlines and configuration are unchanged.
+
+`LOCAL_RUNTIME` produces separate `LOCAL_RUNTIME_QUALIFICATION`. Its read-only
+configuration/auth/readiness and model-placement preflight uses the real production
+Ollama / qwen3.5:9b / Q4_K_M / context 4096 and CPU embeddings. One warmup is permitted
+only if needed, followed by two measured warm calls. HEALTHY requires **both** calls
+to finish in <20 s **and** generate >=20 native tokens/s. A provider-unhealthy skip
+requires valid LOCAL configuration, successful application/auth checks, verified
+GPU-chat / CPU-embedding placement, actual local provider-boundary evidence and failed
+health criteria, without an application/security error. The exact reason code is
+`EXTERNAL_LOCAL_PROVIDER_UNHEALTHY`, outcome `SKIPPED_EXTERNAL_RUNTIME_UNHEALTHY`.
+Missing metrics, invalid configuration, authorization/RLS failures and generic exceptions
+cannot produce this skip. A correlated SDK timeout requires matching unique Ollama
+execution/cancellation evidence; a timeout string or unrelated HTTP 500 is insufficient.
+
+Healthy preflight permits the unchanged real twelve-journey browser gate: real Agent,
+real Factory/Knowledge MCP, real Ollama and real embeddings, no mocks. A later proven
+provider deadline is `BLOCKED_BY_LOCAL_PROVIDER`, producing `NOT_QUALIFIED`.
+Wrong tools/targets, missing required evidence without provider proof, persistence,
+response-contract, lifecycle, authorization or security defects remain `FAIL_PRODUCT`.
+Independent defects take precedence even when a provider timeout also occurred.
+Neither blocked assertions nor environmental skips become PASS. No release command
+uses resume or automatic retry; first evidence and later independent outcomes remain.
+
+`FULL` runs SOFTWARE then LOCAL_RUNTIME and writes independent sections to
+`evals/results/release-verification/<unique-run>/release.json` and `release.md`.
+Software correctness is YES only after every deterministic gate passes. Runtime is
+YES only for QUALIFIED, NO for NOT_QUALIFIED, or NOT_TESTED for the strict preflight
+skip. A software PASS with runtime skipped/unqualified is **not** a fully qualified
+deployment. Process exits distinguish software failure (1), runtime product/harness
+failure (2), unqualified provider runtime (3), and explicit runtime skip (4).
+
+### Machine-wide local-chat exclusivity
+
+`FULL` waits for SOFTWARE, including KDEP teardown, deterministic journeys, legacy and
+safe browser completion and fixture-process/database cleanup, before LOCAL_RUNTIME.
+Only the real local-chat phase reserves the machine's loopback TCP port `46233`.
+The OS reservation is shared across checkouts, Python release controllers, direct/manual
+real-model Node commands, legacy Playwright and live reference fixtures. A controller
+holds it from before inference preflight through qualification evidence collection;
+an inherited lease permits exactly one active chat worker, never parallel children.
+Real-model Playwright requires `workers=1` and `retries=0`, including CLI overrides.
+
+A competing start returns `LOCAL_RUNTIME_BUSY` immediately. Release/manual CLI exit is
+5; Playwright reports the same explicit setup error with its nonzero exit. Preflight
+is NOT_TESTED, runtime is not qualified, and the software result is unchanged. This
+is neither a provider-unhealthy skip nor PASS. Read-only legacy configuration checks,
+aggregation/comparison and already-complete resume evaluations need no reservation.
+
+OS sockets avoid stale PID files and unsafe lock-file deletion. Normal completion
+releases the reservation after workers finish. Controller cancellation cannot free a
+still-connected worker's slot. Abrupt worker loss or exceptional worker exit retains
+a bounded 90 s drain for possible API work under the existing Agent deadline, then
+releases automatically; competing starts remain BUSY during that drain. No production
+deadline changes. An idle dead controller leaves no stale reservation.
+
+SOFTWARE, CPU-only KDEP and synthetic fixtures do not reserve the GPU. The test-only
+API composition proves deterministic-provider provenance through a loopback fixture
+endpoint and per-run token before bypassing the real-chat guard; an environment mode
+flag alone cannot unlock real qualification. Lock regression tests use isolated ports
+and never require the machine's GPU slot. This coordinates repository qualification
+entry points; ordinary user chat, unrelated GPU applications and raw ad hoc Ollama
+clients are outside this harness reservation.
+
+Software requires zero unexplained skips. Windows symlink capability may be explicitly
+excluded. The five opt-in KDEP skips in backend/integration are discharged only by the
+separate successful deployment gate. Protected MANUAL_ONLY actions remain NOT_RUN and
+are never counted as automatic successes. Existing deterministic HITL, approvals,
+replay/idempotency and action-bound authorization tests still run.
 
 ## Commands
 
@@ -29,7 +125,8 @@ HEAD, fresh-install assignment bootstrap, real MCP HTTP boundaries, and persiste
 integration tests. Without that variable it prints `SKIPPED / INFRASTRUCTURE_UNAVAILABLE`;
 that is not a passing integration validation. It never calls a real or external LLM.
 
-`MANUAL_REAL_MODEL` is an explicit human milestone or release gate. `npm run e2e:manual`
+`MANUAL_REAL_MODEL` remains an explicit human-triggered raw measurement. Release
+qualification wraps it through LOCAL_RUNTIME's strict preflight. `npm run e2e:manual`
 first performs its read-only assignment/configuration preflight, is resumable and
 fingerprinted, then exercises the existing 12 browser DOM journeys with Local Qwen 3.5
 9B and MCP. It makes no external provider calls and remains outside FAST and ordinary CI.
@@ -74,7 +171,7 @@ artifacts.
 | MCP server/tool schema | FAST contract and INTEGRATION readiness; MANUAL when agent-visible behavior changes |
 | LangGraph/evidence/orchestration | FAST and INTEGRATION; MANUAL after substantial behavior change |
 | Model/provider/catalog | FAST and INTEGRATION; MANUAL after meaningful execution-policy change |
-| Major release/milestone | FAST, INTEGRATION, and MANUAL_REAL_MODEL |
+| Major release/milestone | SOFTWARE and separate LOCAL_RUNTIME (or FULL); retain both outcomes |
 
 ## Result Interpretation
 

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("FAST", "INTEGRATION")]
+    [ValidateSet("FAST", "INTEGRATION", "SOFTWARE", "LOCAL_RUNTIME", "FULL")]
     [string]$Tier
 )
 
@@ -14,6 +14,10 @@ if (-not (Test-Path $Python)) {
 
 Push-Location $ProjectRoot
 try {
+    if ($Tier -in @("SOFTWARE", "LOCAL_RUNTIME", "FULL")) {
+        & $Python scripts/run_release_gate.py $Tier
+        exit $LASTEXITCODE
+    }
     if ($Tier -eq "FAST") {
         & $Python -m pytest tests/unit
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

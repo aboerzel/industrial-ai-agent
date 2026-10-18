@@ -407,6 +407,15 @@ Every genuine acceptance defect must receive regression coverage at the lowest r
 deterministic tier. Manual Real-Model E2E is a milestone/release gate, not a per-change
 gate. FAST and INTEGRATION quality gates must not invoke real or external LLMs.
 
+Release commands follow ADR-021: mandatory SOFTWARE_VERIFICATION and separate
+LOCAL_RUNTIME_QUALIFICATION must never be collapsed into one ambiguous result.
+Scripted provider transport belongs only in isolated test compositions; keep real API,
+graph, MCP, authorization/RLS and persistence assertions. Preserve the shared required
+journey/reference plans. Provider skips require positive local-boundary and failed-health
+evidence without application/security errors; generic exceptions never qualify.
+No release retry-to-pass or automatic resume. Software PASS alone does not qualify a
+deployment when the actual local runtime is skipped or not qualified.
+
 Possible metrics include:
 
 * task success
@@ -789,6 +798,7 @@ ADR-017  Automated root-cause analysis evidence and reasoning boundaries
 ADR-018  Physical device integration and Closed-Loop Recovery
 ADR-019  Model Catalog, assignments, and execution policy
 ADR-020  Deterministic Investigation Evidence Requirements
+ADR-021  Release Software Verification and Local Runtime Qualification
 ```
 
 See [ADR-020](docs/decisions/ADR-020-deterministic-investigation-evidence-requirements.md)
